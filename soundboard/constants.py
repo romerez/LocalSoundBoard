@@ -29,6 +29,30 @@ UI = {
     "total_slots": 12,
 }
 
+# Editor settings
+EDITOR = {
+    "max_duration_warning": 5.0,  # Warn if sound is longer than 5 seconds
+    "default_zoom": 1.0,
+    "max_zoom": 50.0,
+    "min_zoom": 1.0,
+}
+
 # File settings
 CONFIG_FILE = "soundboard_config.json"
-SUPPORTED_FORMATS = ("*.mp3", "*.wav", "*.ogg", "*.flac")
+SOUNDS_DIR = "sounds"  # Local folder for storing sound files
+SUPPORTED_FORMATS = (
+    "*.mp3",  # MP3 audio
+    "*.wav",  # WAV audio
+    "*.ogg",  # OGG Vorbis
+    "*.flac",  # FLAC lossless
+    "*.m4a",  # AAC/MPEG-4 audio
+    "*.aac",  # AAC audio
+    "*.wma",  # Windows Media Audio
+    "*.aiff",  # Apple audio
+    "*.aif",  # Apple audio (alt extension)
+    "*.opus",  # Opus codec
+    "*.webm",  # WebM audio
+    "*.mp4",  # MPEG-4 (audio track)
+    "*.wv",  # WavPack
+    "*.ape",  # Monkey's Audio
+)

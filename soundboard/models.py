@@ -3,7 +3,7 @@ Data models for the Discord Soundboard.
 """
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Dict, Optional
 
 
 @dataclass
@@ -15,7 +15,7 @@ class SoundSlot:
     hotkey: Optional[str] = None
     volume: float = 1.0
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
             "name": self.name,
@@ -25,7 +25,7 @@ class SoundSlot:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "SoundSlot":
+    def from_dict(cls, data: Dict[str, Any]) -> "SoundSlot":
         """Create a SoundSlot from a dictionary."""
         return cls(
             name=data["name"],

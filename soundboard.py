@@ -123,7 +123,7 @@ class AudioMixer:
 
     def play_sound(self, file_path: str, volume: float = 1.0):
         try:
-            data, sr = sf.read(file_path, dtype=np.float32)
+            data, sr = sf.read(file_path, dtype="float32")
             if sr != self.sample_rate:
                 ratio = self.sample_rate / sr
                 new_length = int(len(data) * ratio)

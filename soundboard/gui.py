@@ -7,12 +7,13 @@ import os
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
-from typing import Dict
+from typing import Dict, Optional
 
 import sounddevice as sd
 
-from .audio import AudioMixer
-from .constants import COLORS, CONFIG_FILE, SUPPORTED_FORMATS, UI
+from .audio import AudioMixer, SoundCache
+from .constants import COLORS, CONFIG_FILE, SOUNDS_DIR, SUPPORTED_FORMATS, UI
+from .editor import SoundEditor
 from .models import SoundSlot
 
 # Try to import keyboard for global hotkeys
@@ -33,7 +34,8 @@ class SoundboardApp:
         self.root.geometry(UI["window_size"])
         self.root.configure(bg=COLORS["bg_dark"])
 
-        self.mixer: AudioMixer = None
+        self.mixer: Optional[AudioMixer] = None
+        self.sound_cache = SoundCache()  # Local sound storage with caching
         self.sound_slots: Dict[int, SoundSlot] = {}
         self.slot_buttons: Dict[int, tk.Button] = {}
         self.registered_hotkeys: list = []
@@ -41,6 +43,7 @@ class SoundboardApp:
         self._setup_styles()
         self._create_ui()
         self._load_config()
+        self._preload_sounds()  # Preload all sounds into memory
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -208,7 +211,7 @@ class SoundboardApp:
             try:
                 input_idx = int(self.input_var.get().split(":")[0])
                 output_idx = int(self.output_var.get().split(":")[0])
-                self.mixer = AudioMixer(input_idx, output_idx)
+                self.mixer = AudioMixer(input_idx, output_idx, sound_cache=self.sound_cache)
                 self.mixer.start()
                 self.toggle_btn.configure(text="⏹ Stop", bg=COLORS["red"])
                 self.status_var.set("Running - Mic → Virtual Cable")
@@ -246,7 +249,7 @@ class SoundboardApp:
         """Open configuration dialog for a slot."""
         dialog = tk.Toplevel(self.root)
         dialog.title(f"Configure Slot {slot_idx + 1}")
-        dialog.geometry("400x250")
+        dialog.geometry("450x300")
         dialog.configure(bg=COLORS["bg_dark"])
         dialog.transient(self.root)
         dialog.grab_set()
@@ -256,6 +259,9 @@ class SoundboardApp:
 
         existing = self.sound_slots.get(slot_idx)
 
+        # State for edited audio
+        edited_audio_data = {"data": None, "sample_rate": None, "original_name": None}
+
         # Name field
         ttk.Label(frame, text="Name:").grid(row=0, column=0, sticky="w", pady=5)
         name_var = tk.StringVar(value=existing.name if existing else "")
@@ -264,7 +270,19 @@ class SoundboardApp:
         # File path field
         ttk.Label(frame, text="Sound File:").grid(row=1, column=0, sticky="w", pady=5)
         path_var = tk.StringVar(value=existing.file_path if existing else "")
-        ttk.Entry(frame, textvariable=path_var, width=35).grid(row=1, column=1, pady=5)
+        path_entry = ttk.Entry(frame, textvariable=path_var, width=35)
+        path_entry.grid(row=1, column=1, pady=5)
+
+        # Edit status label
+        edit_status_var = tk.StringVar(value="")
+        edit_status_label = tk.Label(
+            frame,
+            textvariable=edit_status_var,
+            bg=COLORS["bg_dark"],
+            fg=COLORS["green"],
+            font=("Segoe UI", 8),
+        )
+        edit_status_label.grid(row=2, column=1, sticky="w")
 
         def browse():
             filetypes = [("Audio", " ".join(SUPPORTED_FORMATS))]
@@ -273,28 +291,64 @@ class SoundboardApp:
                 path_var.set(fp)
                 if not name_var.get():
                     name_var.set(Path(fp).stem)
+                # Open the sound editor
+                self._open_sound_editor(fp, edited_audio_data, edit_status_var, dialog)
 
-        ttk.Button(frame, text="Browse", command=browse).grid(row=1, column=2, padx=5)
+        def edit_current():
+            """Edit the currently selected sound file."""
+            current_path = path_var.get()
+            if current_path and os.path.exists(current_path):
+                self._open_sound_editor(current_path, edited_audio_data, edit_status_var, dialog)
+            else:
+                messagebox.showwarning("No File", "Please select a sound file first.")
+
+        btn_frame_browse = ttk.Frame(frame)
+        btn_frame_browse.grid(row=1, column=2, padx=5)
+
+        ttk.Button(btn_frame_browse, text="Browse", command=browse, width=8).pack(pady=1)
+        ttk.Button(btn_frame_browse, text="Edit", command=edit_current, width=8).pack(pady=1)
 
         # Volume slider
-        ttk.Label(frame, text="Volume:").grid(row=2, column=0, sticky="w", pady=5)
+        ttk.Label(frame, text="Volume:").grid(row=3, column=0, sticky="w", pady=5)
         volume_var = tk.DoubleVar(value=(existing.volume * 100) if existing else 100)
         ttk.Scale(frame, from_=0, to=150, variable=volume_var, length=200).grid(
-            row=2, column=1, sticky="w"
+            row=3, column=1, sticky="w"
         )
 
         # Hotkey field
-        ttk.Label(frame, text="Hotkey:").grid(row=3, column=0, sticky="w", pady=5)
+        ttk.Label(frame, text="Hotkey:").grid(row=4, column=0, sticky="w", pady=5)
         hotkey_var = tk.StringVar(value=existing.hotkey if existing and existing.hotkey else "")
-        ttk.Entry(frame, textvariable=hotkey_var, width=20).grid(row=3, column=1, sticky="w")
+        ttk.Entry(frame, textvariable=hotkey_var, width=20).grid(row=4, column=1, sticky="w")
 
         def save():
-            if not path_var.get():
+            if not path_var.get() and edited_audio_data["data"] is None:
                 dialog.destroy()
                 return
+
+            source_path = path_var.get()
+            local_path = source_path
+
+            try:
+                # If we have edited audio data, save it as a new file
+                if (
+                    edited_audio_data["data"] is not None
+                    and edited_audio_data["sample_rate"] is not None
+                ):
+                    local_path = self.sound_cache.add_sound_data(
+                        edited_audio_data["data"],
+                        edited_audio_data["sample_rate"],
+                        edited_audio_data["original_name"] or Path(source_path).name,
+                    )
+                # Otherwise copy original sound to local storage if not already there
+                elif not source_path.startswith(str(Path(SOUNDS_DIR).absolute())):
+                    local_path = self.sound_cache.add_sound(source_path)
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to add sound:\n{e}")
+                return
+
             self.sound_slots[slot_idx] = SoundSlot(
-                name=name_var.get() or Path(path_var.get()).stem,
-                file_path=path_var.get(),
+                name=name_var.get() or Path(source_path).stem,
+                file_path=local_path,
                 hotkey=hotkey_var.get() or None,
                 volume=volume_var.get() / 100.0,
             )
@@ -305,6 +359,15 @@ class SoundboardApp:
 
         def clear():
             if slot_idx in self.sound_slots:
+                slot = self.sound_slots[slot_idx]
+                # Check if any other slot uses this sound before removing from cache
+                other_uses = any(
+                    s.file_path == slot.file_path
+                    for idx, s in self.sound_slots.items()
+                    if idx != slot_idx
+                )
+                if not other_uses:
+                    self.sound_cache.remove_sound(slot.file_path, delete_file=True)
                 del self.sound_slots[slot_idx]
             self._update_slot_button(slot_idx)
             self._save_config()
@@ -312,7 +375,7 @@ class SoundboardApp:
 
         # Button row
         btn_frame = ttk.Frame(frame)
-        btn_frame.grid(row=4, column=0, columnspan=3, pady=20)
+        btn_frame.grid(row=5, column=0, columnspan=3, pady=20)
 
         tk.Button(
             btn_frame, text="Save", command=save, bg=COLORS["green"], fg="white", width=10
@@ -328,6 +391,43 @@ class SoundboardApp:
             fg="white",
             width=10,
         ).pack(side=tk.LEFT, padx=5)
+
+    def _open_sound_editor(
+        self,
+        file_path: str,
+        edited_audio_data: dict,
+        status_var: tk.StringVar,
+        parent_dialog: tk.Toplevel,
+    ):
+        """Open the sound editor dialog for a file."""
+        try:
+            # Use default system output device for preview (speakers/headphones)
+            # NOT the virtual cable which routes to Discord
+            output_device = None  # None = default system output
+
+            # Create and show editor
+            editor = SoundEditor(
+                self.root,
+                file_path,
+                output_device=output_device,
+            )
+            result = editor.show()
+
+            if result is not None:
+                audio_data, sample_rate = result
+                edited_audio_data["data"] = audio_data
+                edited_audio_data["sample_rate"] = sample_rate
+                edited_audio_data["original_name"] = Path(file_path).name
+
+                # Calculate duration
+                duration = len(audio_data) / sample_rate
+                status_var.set(f"✓ Edited ({duration:.2f}s)")
+            else:
+                # User cancelled - clear edited data if any
+                status_var.set("")
+
+        except Exception as e:
+            messagebox.showerror("Editor Error", f"Failed to open sound editor:\n{e}")
 
     def _update_slot_button(self, slot_idx: int):
         """Update the appearance of a slot button."""
@@ -351,8 +451,8 @@ class SoundboardApp:
         # Unregister existing hotkeys
         for hk in self.registered_hotkeys:
             try:
-                keyboard.remove_hotkey(hk)
-            except:
+                keyboard.remove_hotkey(hk)  # type: ignore
+            except Exception:
                 pass
         self.registered_hotkeys.clear()
 
@@ -360,9 +460,9 @@ class SoundboardApp:
         for slot_idx, slot in self.sound_slots.items():
             if slot.hotkey:
                 try:
-                    keyboard.add_hotkey(slot.hotkey, lambda idx=slot_idx: self._play_slot(idx))
+                    keyboard.add_hotkey(slot.hotkey, lambda idx=slot_idx: self._play_slot(idx))  # type: ignore
                     self.registered_hotkeys.append(slot.hotkey)
-                except:
+                except Exception:
                     pass
 
     def _save_config(self):
@@ -387,6 +487,13 @@ class SoundboardApp:
             self._register_hotkeys()
         except Exception as e:
             print(f"Error loading config: {e}")
+
+    def _preload_sounds(self):
+        """Preload all configured sounds into memory cache for fast playback."""
+        sound_paths = [slot.file_path for slot in self.sound_slots.values() if slot.file_path]
+        if sound_paths:
+            self.sound_cache.preload_sounds(sound_paths)
+            self.status_var.set(f"Ready - {len(sound_paths)} sounds cached")
 
     def _on_close(self):
         """Handle application close."""

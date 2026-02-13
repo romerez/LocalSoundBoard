@@ -55,7 +55,16 @@ keyboard>=0.13.5
 
 ```
 LocalSoundBoardProject/
-├── soundboard.py           # Main application entry point
+├── main.py                 # Application entry point
+├── soundboard/             # Main package
+│   ├── __init__.py         # Package exports (SoundboardApp, AudioMixer, SoundCache, SoundSlot, SoundEditor)
+│   ├── constants.py        # Colors, audio settings, UI config
+│   ├── models.py           # SoundSlot dataclass
+│   ├── audio.py            # AudioMixer and SoundCache classes
+│   ├── editor.py           # SoundEditor class (waveform, trimming, preview)
+│   └── gui.py              # SoundboardApp GUI class
+├── sounds/                 # Local sound storage folder (auto-created)
+├── soundboard.py           # Legacy entry point (deprecated)
 ├── soundboard_config.json  # Auto-generated user config (sounds, hotkeys, volumes)
 ├── copilot-instructions.md # This file - project specification
 └── requirements.txt        # Python dependencies
@@ -76,21 +85,26 @@ LocalSoundBoardProject/
 - [x] Auto-save/load configuration
 - [x] Discord-style dark theme UI
 - [x] Device selection dropdowns (input/output)
-- [x] Support for MP3, WAV, OGG, FLAC formats
+- [x] Support for MP3, WAV, OGG, FLAC, M4A, AAC, WMA, AIFF, Opus, WebM, MP4, WavPack, APE formats
+- [x] Local sound storage (`sounds/` folder)
+- [x] In-memory sound caching for instant playback
+- [x] Pre-loaded audio data at startup
+- [x] Sound editing with waveform visualization
+- [x] Sound trimming (cut from start/end points)
+- [x] Zoom in/out for precise editing
+- [x] Preview playback of selected portion
+- [x] Warning for sounds longer than 5 seconds
 
 ---
 
 ## Planned Features / Backlog
 
 - [ ] Drag-and-drop sound file import
-- [ ] Sound preview before adding to slot
 - [ ] Adjustable grid size (more/fewer slots)
 - [ ] Sound categories/tabs
 - [ ] Search/filter sounds
-- [ ] Waveform visualization
 - [ ] Looping sounds option
 - [ ] Fade in/out effects
-- [ ] Sound trimming/editing
 - [ ] Import/export config profiles
 - [ ] System tray minimization
 - [ ] Auto-start with Windows
@@ -120,13 +134,26 @@ Handles real-time audio processing.
 - Queues and mixes sound effects
 - Outputs to virtual audio device
 - Manages playback state
+- Uses SoundCache for fast cached playback
 
 **Key Methods:**
 - `start()` - Begin audio stream
 - `stop()` - End audio stream
-- `play_sound(file_path, volume)` - Queue a sound
+- `play_sound(file_path, volume)` - Queue a sound (uses cache if available)
 - `stop_all_sounds()` - Clear playback queue
 - `_audio_callback()` - Real-time mixing (called by sounddevice)
+
+#### `SoundCache`
+Manages local sound storage and in-memory caching.
+- Copies sounds to `sounds/` folder for persistence
+- Pre-loads audio data at target sample rate (48kHz)
+- Provides O(1) lookup for cached audio
+
+**Key Methods:**
+- `add_sound(source_path)` - Copy sound to local storage, cache it, return local path
+- `get_sound_data(file_path)` - Get pre-loaded audio data (fast)
+- `preload_sounds(paths)` - Pre-load multiple sounds at startup
+- `remove_sound(file_path)` - Remove from cache and optionally delete file
 
 #### `SoundboardApp`
 Main GUI application.
@@ -134,6 +161,21 @@ Main GUI application.
 - Device selection
 - Sound slot grid management
 - Configuration persistence
+- Integrates with SoundCache for local storage
+
+#### `SoundEditor`
+Sound editing dialog with waveform visualization.
+- Visual waveform display showing audio amplitude
+- Draggable start/end markers for trimming
+- Zoom in/out for precise editing
+- Preview playback of selected portion
+- Warning for sounds > 5 seconds
+
+**Key Methods:**
+- `show()` - Display the editor dialog and return trimmed audio or None
+- `_draw_waveform()` - Render waveform visualization
+- `_start_playback()` - Preview the selected portion
+- `_on_save()` - Save trimmed audio and close
 
 ---
 
@@ -145,13 +187,13 @@ Main GUI application.
   "slots": {
     "0": {
       "name": "Air Horn",
-      "file_path": "C:/sounds/airhorn.mp3",
+      "file_path": "sounds/airhorn_8f3a2b1c.mp3",
       "hotkey": "ctrl+1",
       "volume": 1.0
     },
     "1": {
       "name": "Sad Trombone",
-      "file_path": "C:/sounds/sadtrombone.wav",
+      "file_path": "sounds/sadtrombone_4e5f6a7b.wav",
       "hotkey": "ctrl+2",
       "volume": 0.8
     }
