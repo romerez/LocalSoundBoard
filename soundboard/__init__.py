@@ -9,14 +9,15 @@ through a virtual audio cable.
 from .audio import AudioMixer, SoundCache
 from .editor import SoundEditor, edit_sound_file
 from .gui import SoundboardApp
-from .models import SoundSlot
+from .models import SoundSlot, SoundTab
 
 __all__ = [
     "AudioMixer",
     "SoundCache",
     "SoundboardApp",
     "SoundSlot",
+    "SoundTab",
     "SoundEditor",
     "edit_sound_file",
 ]
-__version__ = "1.0.0"
+__version__ = "1.1.0"

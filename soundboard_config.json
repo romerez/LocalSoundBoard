@@ -1,10 +1,43 @@
 {
-  "slots": {
-    "1": {
-      "name": "aint-nobody-got-time-for-that_1",
-      "file_path": "sounds\\aint-nobody-got-time-for-that_1_98957508.wav",
-      "hotkey": null,
-      "volume": 1.0
+  "tabs": [
+    {
+      "name": "Main",
+      "emoji": "🎵",
+      "slots": {
+        "1": {
+          "name": "aint-nobody-got-time-for-that_1",
+          "file_path": "sounds\\aint-nobody-got-time-for-that_1_98957508.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null
+        },
+        "2": {
+          "name": "gotcha-bitch_1",
+          "file_path": "sounds\\gotcha-bitch_1_99498771.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null
+        }
+      }
+    },
+    {
+      "name": "Tab 2",
+      "emoji": "🔥",
+      "slots": {
+        "0": {
+          "name": "(שיחת טלפון עם המשטרה) אתם על הזין שלי (רמיקס) [ ezmp3.cc ]",
+          "file_path": "sounds\\(שיחת טלפון עם המשטרה) אתם על הזין שלי (רמיקס) [ ezmp3.cc ]_00584692.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": "images\\First-time-james-franco-hanging-meme_6287e7cc.jpg"
+        }
+      }
     }
-  }
+  ],
+  "current_tab": 0,
+  "ptt_enabled": true,
+  "ptt_key": "w"
 }

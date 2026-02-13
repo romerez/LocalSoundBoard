@@ -65,9 +65,11 @@ class SoundEditor:
 
         # Playback state
         self.is_playing: bool = False
+        self.is_paused: bool = False
         self.play_stream: Optional[sd.OutputStream] = None
         self.play_position: int = 0
         self.play_lock = threading.Lock()
+        self.selected_audio: Optional[np.ndarray] = None  # Prepared audio for playback
 
         # Canvas state
         self.canvas_width: int = 700
@@ -689,35 +691,63 @@ class SoundEditor:
     def _toggle_playback(self):
         """Toggle playback of selected portion."""
         if self.is_playing:
-            self._stop_playback()
+            self._pause_playback()
         else:
             self._start_playback()
 
-    def _start_playback(self):
-        """Start playing the selected portion."""
+    def _pause_playback(self):
+        """Pause playback (keep position for resume)."""
+        self.is_playing = False
+        self.is_paused = True
+        if self.play_stream:
+            try:
+                self.play_stream.stop()
+                self.play_stream.close()
+            except Exception:
+                pass
+            self.play_stream = None
+        self.play_btn.config(text="▶ Resume", bg=COLORS["green"])
+
+    def _prepare_audio_for_playback(self):
+        """Prepare the selected audio data for playback."""
         if self.audio_data is None:
             return
-
-        self.is_playing = True
-        self.play_position = 0
-        self.play_btn.config(text="⏸ Pause", bg=COLORS["blurple"])
-
-        # Get the selected audio data and ensure stereo float32
+            
         audio_slice = self.audio_data[self.trim_start : self.trim_end]
 
         if audio_slice.ndim == 1:
             # Convert mono to stereo
-            selected_audio = np.column_stack([audio_slice, audio_slice]).astype(np.float32)
+            self.selected_audio = np.column_stack([audio_slice, audio_slice]).astype(np.float32)
         elif audio_slice.ndim > 1 and audio_slice.shape[1] == 1:
             # Single-channel 2D array
-            selected_audio = np.column_stack([audio_slice[:, 0], audio_slice[:, 0]]).astype(
+            self.selected_audio = np.column_stack([audio_slice[:, 0], audio_slice[:, 0]]).astype(
                 np.float32
             )
         elif audio_slice.ndim > 1 and audio_slice.shape[1] >= 2:
             # Already stereo (or more), take first 2 channels
-            selected_audio = np.ascontiguousarray(audio_slice[:, :2], dtype=np.float32)
+            self.selected_audio = np.ascontiguousarray(audio_slice[:, :2], dtype=np.float32)
         else:
-            selected_audio = np.column_stack([audio_slice, audio_slice]).astype(np.float32)
+            self.selected_audio = np.column_stack([audio_slice, audio_slice]).astype(np.float32)
+
+    def _start_playback(self):
+        """Start or resume playing the selected portion."""
+        if self.audio_data is None:
+            return
+
+        # If not paused, prepare new audio and reset position
+        if not self.is_paused:
+            self._prepare_audio_for_playback()
+            self.play_position = 0
+
+        self.is_playing = True
+        self.is_paused = False
+        self.play_btn.config(text="⏸ Pause", bg=COLORS["blurple"])
+
+        # Use instance variable for callback closure
+        selected_audio = self.selected_audio
+        if selected_audio is None:
+            self.is_playing = False
+            return
 
         def audio_callback(outdata, frames, time, status):
             with self.play_lock:
@@ -742,6 +772,8 @@ class SoundEditor:
 
         def on_finished():
             self.is_playing = False
+            self.is_paused = False
+            self.play_position = 0
             self.dialog.after(
                 0, lambda: self.play_btn.config(text="▶ Play Selection", bg=COLORS["green"])
             )
@@ -762,6 +794,7 @@ class SoundEditor:
 
         except Exception as e:
             self.is_playing = False
+            self.is_paused = False
             self.play_btn.config(text="▶ Play Selection", bg=COLORS["green"])
             messagebox.showerror("Playback Error", f"Failed to start playback:\n{e}")
 
@@ -772,11 +805,16 @@ class SoundEditor:
             self.dialog.after(50, self._update_playhead)
 
     def _stop_playback(self):
-        """Stop playback."""
+        """Stop playback and reset position."""
         self.is_playing = False
+        self.is_paused = False
+        self.play_position = 0
         if self.play_stream:
-            self.play_stream.stop()
-            self.play_stream.close()
+            try:
+                self.play_stream.stop()
+                self.play_stream.close()
+            except Exception:
+                pass
             self.play_stream = None
         self.play_btn.config(text="▶ Play Selection", bg=COLORS["green"])
         self._draw_waveform()

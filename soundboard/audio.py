@@ -229,6 +229,13 @@ class SoundCache:
         with self._lock:
             return file_path in self._cache
 
+    def get_sound_duration(self, file_path: str) -> float:
+        """Get the duration of a sound in seconds."""
+        data = self.get_sound_data(file_path)
+        if data is not None:
+            return len(data) / self.sample_rate
+        return 0.0
+
 
 class AudioMixer:
     """
@@ -236,6 +243,8 @@ class AudioMixer:
 
     Captures microphone input, mixes it with sound effects,
     and outputs to a virtual audio device.
+
+    Uses separate input/output streams for better device compatibility.
     """
 
     def __init__(
@@ -254,51 +263,96 @@ class AudioMixer:
         self.sound_cache = sound_cache
 
         self.running = False
-        self.stream = None
+        self.input_stream = None
+        self.output_stream = None
         self.sound_queue: queue.Queue = queue.Queue()
         self.currently_playing: List[Dict] = []
         self.lock = threading.Lock()
+
+        # Buffer for mic input (separate streams need a shared buffer)
+        self._mic_buffer = np.zeros((self.block_size,), dtype=np.float32)
+        self._mic_lock = threading.Lock()
 
         # Mic settings
         self.mic_volume = 1.0
         self.mic_muted = False
 
+        # PTT (Push-to-Talk) settings
+        self.ptt_key: Optional[str] = None
+        self.ptt_active: bool = False
+        self._ptt_lock = threading.Lock()
+
     def start(self):
-        """Begin audio stream."""
+        """Begin audio streams (separate input and output for compatibility)."""
         if self.running:
             return
 
         self.running = True
-        self.stream = sd.Stream(
-            device=(self.input_device, self.output_device),
+
+        # Create separate input stream for microphone
+        self.input_stream = sd.InputStream(
+            device=self.input_device,
             samplerate=self.sample_rate,
             blocksize=self.block_size,
-            channels=(1, self.channels),
-            callback=self._audio_callback,
+            channels=1,
+            callback=self._input_callback,
             dtype=np.float32,
         )
-        self.stream.start()
+
+        # Create separate output stream for virtual cable
+        self.output_stream = sd.OutputStream(
+            device=self.output_device,
+            samplerate=self.sample_rate,
+            blocksize=self.block_size,
+            channels=self.channels,
+            callback=self._output_callback,
+            dtype=np.float32,
+        )
+
+        self.input_stream.start()
+        self.output_stream.start()
 
     def stop(self):
-        """End audio stream."""
+        """End audio streams."""
         self.running = False
-        if self.stream:
-            self.stream.stop()
-            self.stream.close()
-            self.stream = None
+        if self.input_stream:
+            self.input_stream.stop()
+            self.input_stream.close()
+            self.input_stream = None
+        if self.output_stream:
+            self.output_stream.stop()
+            self.output_stream.close()
+            self.output_stream = None
 
-    def _audio_callback(self, indata, outdata, frames, time, status):
+    def _input_callback(self, indata, frames, time, status):
+        """Capture microphone input into buffer."""
+        with self._mic_lock:
+            # Store the latest mic input (mono)
+            if len(indata) == len(self._mic_buffer):
+                self._mic_buffer[:] = indata[:, 0]
+            else:
+                # Handle size mismatch
+                self._mic_buffer = indata[:, 0].copy()
+
+    def _output_callback(self, outdata, frames, time, status):
         """
-        Real-time audio mixing callback.
+        Real-time audio mixing callback for output stream.
 
         Called by sounddevice for each audio block.
         Keep this minimal - no blocking operations!
         """
+        # Get microphone input from buffer
+        with self._mic_lock:
+            mic_data = self._mic_buffer.copy()
+
         # Process microphone input
         if self.mic_muted:
             mixed = np.zeros((frames, self.channels), dtype=np.float32)
         else:
-            mic_mono = indata[:, 0] * self.mic_volume
+            # Ensure mic_data matches frames size
+            if len(mic_data) != frames:
+                mic_data = np.zeros(frames, dtype=np.float32)
+            mic_mono = mic_data * self.mic_volume
             mixed = np.column_stack([mic_mono, mic_mono])
 
         # Add newly queued sounds to currently playing
@@ -345,12 +399,22 @@ class AudioMixer:
             for i in reversed(finished):
                 self.currently_playing.pop(i)
 
+            # Check if we should release PTT (all sounds finished)
+            should_release_ptt = len(self.currently_playing) == 0
+
+        # Release PTT if no more sounds are playing
+        if should_release_ptt and self.sound_queue.empty():
+            self._release_ptt()
+
         # Clip to prevent distortion and write to output
         np.clip(mixed, -1.0, 1.0, out=outdata)
 
     def play_sound(self, file_path: str, volume: float = 1.0):
         """Queue a sound for playback. Uses cache if available for better performance."""
         try:
+            # Press PTT key if configured
+            self._press_ptt()
+
             # Use cached audio data if available (much faster - no disk I/O)
             if self.sound_cache:
                 data = self.sound_cache.get_sound_data(file_path)
@@ -383,3 +447,46 @@ class AudioMixer:
                 self.sound_queue.get_nowait()
             except queue.Empty:
                 break
+
+        # Release PTT key
+        self._release_ptt()
+
+    def set_ptt_key(self, key: Optional[str]):
+        """Set the Push-to-Talk key for Discord integration."""
+        self.ptt_key = key if key and key.strip() else None
+
+    def _press_ptt(self):
+        """Press the PTT key if configured and not already pressed."""
+        if not self.ptt_key:
+            return
+
+        with self._ptt_lock:
+            if not self.ptt_active:
+                try:
+                    import keyboard
+
+                    keyboard.press(self.ptt_key)
+                    self.ptt_active = True
+                except Exception as e:
+                    print(f"Failed to press PTT key: {e}")
+
+    def _release_ptt(self):
+        """Release the PTT key if it's currently pressed."""
+        if not self.ptt_key:
+            return
+
+        with self._ptt_lock:
+            if self.ptt_active:
+                try:
+                    import keyboard
+
+                    keyboard.release(self.ptt_key)
+                    self.ptt_active = False
+                except Exception as e:
+                    print(f"Failed to release PTT key: {e}")
+
+    def _check_ptt_release(self):
+        """Check if all sounds finished and release PTT if so."""
+        with self.lock:
+            if len(self.currently_playing) == 0 and self.sound_queue.empty():
+                self._release_ptt()

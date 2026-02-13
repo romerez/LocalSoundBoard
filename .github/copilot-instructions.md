@@ -57,13 +57,14 @@ keyboard>=0.13.5
 LocalSoundBoardProject/
 ├── main.py                 # Application entry point
 ├── soundboard/             # Main package
-│   ├── __init__.py         # Package exports (SoundboardApp, AudioMixer, SoundCache, SoundSlot, SoundEditor)
+│   ├── __init__.py         # Package exports (SoundboardApp, AudioMixer, SoundCache, SoundSlot, SoundTab, SoundEditor)
 │   ├── constants.py        # Colors, audio settings, UI config
-│   ├── models.py           # SoundSlot dataclass
+│   ├── models.py           # SoundSlot and SoundTab dataclasses
 │   ├── audio.py            # AudioMixer and SoundCache classes
 │   ├── editor.py           # SoundEditor class (waveform, trimming, preview)
 │   └── gui.py              # SoundboardApp GUI class
 ├── sounds/                 # Local sound storage folder (auto-created)
+├── images/                 # Local image storage folder (auto-created)
 ├── soundboard.py           # Legacy entry point (deprecated)
 ├── soundboard_config.json  # Auto-generated user config (sounds, hotkeys, volumes)
 ├── copilot-instructions.md # This file - project specification
@@ -94,6 +95,17 @@ LocalSoundBoardProject/
 - [x] Zoom in/out for precise editing
 - [x] Preview playback of selected portion
 - [x] Warning for sounds longer than 5 seconds
+- [x] Push-to-Talk integration (auto-press Discord PTT key when sounds play)
+- [x] Tabbed sound organization (create/rename/delete tabs)
+- [x] Tab emojis for visual identification
+- [x] Slot emojis for quick sound identification
+- [x] Custom images/pictures on sound slots
+- [x] Emoji picker dialog with categories and scrolling
+- [x] Comprehensive emoji library (500+ emojis in 13 categories)
+- [x] Backward-compatible config migration
+- [x] Visual playback progress bar on sound slots
+- [x] Playing state color indicator (orange/amber)
+- [x] Preview play/pause/resume/stop controls in sound editor
 
 ---
 
@@ -101,15 +113,14 @@ LocalSoundBoardProject/
 
 - [ ] Drag-and-drop sound file import
 - [ ] Adjustable grid size (more/fewer slots)
-- [ ] Sound categories/tabs
 - [ ] Search/filter sounds
 - [ ] Looping sounds option
 - [ ] Fade in/out effects
-- [ ] Import/export config profiles
+- [ ] Import/export config profiles (sounds, images, tabs)
 - [ ] System tray minimization
 - [ ] Auto-start with Windows
-- [ ] Push-to-talk integration
 - [ ] Discord Rich Presence
+- [ ] Emoji search by description in picker
 
 ---
 
@@ -122,10 +133,22 @@ Represents a single sound button configuration.
 ```python
 @dataclass
 class SoundSlot:
-    name: str           # Display name
-    file_path: str      # Path to audio file
-    hotkey: str | None  # Global hotkey (e.g., "ctrl+1")
-    volume: float       # 0.0 to 1.5
+    name: str                    # Display name
+    file_path: str               # Path to audio file
+    hotkey: str | None           # Global hotkey (e.g., "ctrl+1")
+    volume: float                # 0.0 to 1.5
+    emoji: str | None            # Emoji character to display
+    image_path: str | None       # Path to custom image/gif
+```
+
+#### `SoundTab` (dataclass)
+Represents a tab containing sound slots.
+```python
+@dataclass
+class SoundTab:
+    name: str                              # Tab display name
+    emoji: str | None                      # Emoji for tab
+    slots: Dict[int, SoundSlot]            # Sound slots in this tab
 ```
 
 #### `AudioMixer`

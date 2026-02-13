@@ -3,3 +3,4 @@ soundfile>=0.12.1
 numpy>=1.24.0
 keyboard>=0.13.5
 pydub>=0.25.1  # For M4A, AAC, WMA, WebM support (requires ffmpeg)
+Pillow>=10.0.0  # For image support on sound slots
