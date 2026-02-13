@@ -701,7 +701,7 @@ class SoundEditor:
         self.is_paused = True
         if self.play_stream:
             try:
-                self.play_stream.stop()
+                self.play_stream.abort()  # Use abort for immediate stop
                 self.play_stream.close()
             except Exception:
                 pass
@@ -811,7 +811,7 @@ class SoundEditor:
         self.play_position = 0
         if self.play_stream:
             try:
-                self.play_stream.stop()
+                self.play_stream.abort()  # Use abort for immediate stop
                 self.play_stream.close()
             except Exception:
                 pass

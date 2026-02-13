@@ -194,7 +194,11 @@ class SoundCache:
                 return self._cache[file_path].copy()
 
         # Not in cache, try to load
-        return self._load_into_cache(file_path).copy()
+        try:
+            return self._load_into_cache(file_path).copy()
+        except Exception as e:
+            print(f"Failed to load sound data for {file_path}: {e}")
+            return None
 
     def preload_sounds(self, file_paths: List[str]):
         """Pre-load multiple sounds into cache (call on startup)."""
@@ -282,6 +286,12 @@ class AudioMixer:
         self.ptt_active: bool = False
         self._ptt_lock = threading.Lock()
 
+        # Local monitoring (play sounds to speakers too)
+        self.monitor_enabled = False
+        self.monitor_stream = None
+        self._monitor_buffer = np.zeros((self.block_size, self.channels), dtype=np.float32)
+        self._monitor_lock = threading.Lock()
+
     def start(self):
         """Begin audio streams (separate input and output for compatibility)."""
         if self.running:
@@ -323,6 +333,41 @@ class AudioMixer:
             self.output_stream.stop()
             self.output_stream.close()
             self.output_stream = None
+        if self.monitor_stream:
+            self.monitor_stream.stop()
+            self.monitor_stream.close()
+            self.monitor_stream = None
+
+    def set_monitor_enabled(self, enabled: bool):
+        """Enable or disable local speaker monitoring."""
+        if enabled and not self.monitor_stream and self.running:
+            # Start monitor stream (outputs to default device)
+            self.monitor_stream = sd.OutputStream(
+                device=None,  # Default speakers
+                samplerate=self.sample_rate,
+                blocksize=self.block_size,
+                channels=self.channels,
+                callback=self._monitor_callback,
+                dtype=np.float32,
+            )
+            self.monitor_stream.start()
+            self.monitor_enabled = True
+        elif not enabled and self.monitor_stream:
+            # Stop monitor stream
+            self.monitor_stream.stop()
+            self.monitor_stream.close()
+            self.monitor_stream = None
+            self.monitor_enabled = False
+
+    def _monitor_callback(self, outdata, frames, time, status):
+        """Output callback for local speaker monitoring (plays mixed audio)."""
+        with self._monitor_lock:
+            # Copy from buffer, handling size differences
+            if len(self._monitor_buffer) >= frames:
+                outdata[:] = self._monitor_buffer[:frames]
+            else:
+                outdata[:len(self._monitor_buffer)] = self._monitor_buffer
+                outdata[len(self._monitor_buffer):] = 0
 
     def _input_callback(self, indata, frames, time, status):
         """Capture microphone input into buffer."""
@@ -344,6 +389,9 @@ class AudioMixer:
         # Get microphone input from buffer
         with self._mic_lock:
             mic_data = self._mic_buffer.copy()
+
+        # Initialize sounds-only buffer for monitoring
+        sounds_mix = np.zeros((frames, self.channels), dtype=np.float32)
 
         # Process microphone input
         if self.mic_muted:
@@ -392,7 +440,9 @@ class AudioMixer:
                     padded[:chunk_size] = chunk
                     chunk = padded
 
+                # Add to both main mix and sounds-only mix
                 mixed += chunk
+                sounds_mix += chunk
                 sound["position"] += chunk_size
 
             # Remove finished sounds
@@ -408,6 +458,11 @@ class AudioMixer:
 
         # Clip to prevent distortion and write to output
         np.clip(mixed, -1.0, 1.0, out=outdata)
+        
+        # Copy sounds-only to monitor buffer for local speaker playback
+        if self.monitor_enabled:
+            with self._monitor_lock:
+                np.clip(sounds_mix, -1.0, 1.0, out=self._monitor_buffer[:frames])
 
     def play_sound(self, file_path: str, volume: float = 1.0):
         """Queue a sound for playback. Uses cache if available for better performance."""
@@ -423,6 +478,9 @@ class AudioMixer:
                     return
 
             # Fallback: load from disk (slower)
+            if not os.path.exists(file_path):
+                return
+
             data, sr = sf.read(file_path, dtype="float32")
 
             # Resample if needed
@@ -432,9 +490,12 @@ class AudioMixer:
                 indices = np.linspace(0, len(data) - 1, new_length).astype(int)
                 data = data[indices]
 
+            with open("debug.log", "a") as f:
+                f.write(f"[AUDIO] Playing from disk: {len(data)} samples\n")
             self.sound_queue.put({"data": data, "position": 0, "volume": volume})
         except Exception as e:
-            print(f"Error loading sound: {e}")
+            with open("debug.log", "a") as f:
+                f.write(f"[AUDIO] Error loading sound: {e}\n")
 
     def stop_all_sounds(self):
         """Clear playback queue and stop all sounds."""
@@ -463,9 +524,24 @@ class AudioMixer:
         with self._ptt_lock:
             if not self.ptt_active:
                 try:
-                    import keyboard
+                    # Check if it's a mouse button
+                    if self.ptt_key.startswith("mouse"):
+                        import mouse
 
-                    keyboard.press(self.ptt_key)
+                        # Map mouse button names back
+                        button_map = {
+                            "mouse1": "left",
+                            "mouse2": "right",
+                            "mouse3": "middle",
+                            "mouse4": "x",
+                            "mouse5": "x2",
+                        }
+                        button = button_map.get(self.ptt_key, "x")
+                        mouse.press(button)
+                    else:
+                        import keyboard
+
+                        keyboard.press(self.ptt_key)
                     self.ptt_active = True
                 except Exception as e:
                     print(f"Failed to press PTT key: {e}")
@@ -478,9 +554,24 @@ class AudioMixer:
         with self._ptt_lock:
             if self.ptt_active:
                 try:
-                    import keyboard
+                    # Check if it's a mouse button
+                    if self.ptt_key.startswith("mouse"):
+                        import mouse
 
-                    keyboard.release(self.ptt_key)
+                        # Map mouse button names back
+                        button_map = {
+                            "mouse1": "left",
+                            "mouse2": "right",
+                            "mouse3": "middle",
+                            "mouse4": "x",
+                            "mouse5": "x2",
+                        }
+                        button = button_map.get(self.ptt_key, "x")
+                        mouse.release(button)
+                    else:
+                        import keyboard
+
+                        keyboard.release(self.ptt_key)
                     self.ptt_active = False
                 except Exception as e:
                     print(f"Failed to release PTT key: {e}")

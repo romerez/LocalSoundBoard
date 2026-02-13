@@ -106,6 +106,7 @@ LocalSoundBoardProject/
 - [x] Visual playback progress bar on sound slots
 - [x] Playing state color indicator (orange/amber)
 - [x] Preview play/pause/resume/stop controls in sound editor
+- [x] Local speaker monitoring (hear sounds through your speakers while playing to Discord)
 
 ---
 
@@ -158,13 +159,15 @@ Handles real-time audio processing.
 - Outputs to virtual audio device
 - Manages playback state
 - Uses SoundCache for fast cached playback
+- Optional local speaker monitoring (sounds only, no mic)
 
 **Key Methods:**
 - `start()` - Begin audio stream
 - `stop()` - End audio stream
 - `play_sound(file_path, volume)` - Queue a sound (uses cache if available)
 - `stop_all_sounds()` - Clear playback queue
-- `_audio_callback()` - Real-time mixing (called by sounddevice)
+- `set_monitor_enabled(enabled)` - Enable/disable local speaker monitoring
+- `_output_callback()` - Real-time mixing (called by sounddevice)
 
 #### `SoundCache`
 Manages local sound storage and in-memory caching.

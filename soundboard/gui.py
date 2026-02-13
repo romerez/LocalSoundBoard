@@ -243,6 +243,18 @@ class SoundboardApp:
             selectcolor=COLORS["red"],
         ).pack(side=tk.LEFT, padx=20)
 
+        # Local speaker monitoring checkbox
+        self.monitor_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            mic_row,
+            text="🔊 Monitor",
+            variable=self.monitor_var,
+            command=self._toggle_monitor,
+            bg=COLORS["bg_dark"],
+            fg="white",
+            selectcolor=COLORS["green"],
+        ).pack(side=tk.LEFT, padx=10)
+
         tk.Button(
             mic_row,
             text="Stop All Sounds",
@@ -718,13 +730,18 @@ class SoundboardApp:
         if self.mixer:
             self.mixer.mic_muted = self.mic_mute_var.get()
 
+    def _toggle_monitor(self):
+        """Toggle local speaker monitoring (hear sounds through speakers)."""
+        if self.mixer:
+            self.mixer.set_monitor_enabled(self.monitor_var.get())
+
     def _stop_all_sounds(self):
         """Stop all currently playing sounds."""
         if self.mixer:
             self.mixer.stop_all_sounds()
 
     def _record_ptt_key(self):
-        """Record a key press to use as PTT key."""
+        """Record a key or mouse button press to use as PTT key."""
         if not HOTKEYS_AVAILABLE:
             messagebox.showwarning(
                 "Keyboard Module Required",
@@ -734,27 +751,39 @@ class SoundboardApp:
             return
 
         self.ptt_record_btn.config(text="Press key...", bg=COLORS["red"])
-        self.ptt_status_label.config(text="Press any key (5s timeout)...", fg=COLORS["blurple"])
+        self.ptt_status_label.config(text="Press key or mouse button (5s)...", fg=COLORS["blurple"])
         self.root.update()
 
-        # Store hook reference as instance variable so we can unhook it
+        # Store hook references as instance variables so we can unhook them
         self._ptt_hook = None
+        self._ptt_mouse_hook = None
         self._ptt_recording = True
         self._ptt_timeout_id = None
+
+        def cleanup_hooks():
+            """Clean up all hooks."""
+            if self._ptt_hook:
+                try:
+                    keyboard.unhook(self._ptt_hook)
+                except Exception:
+                    pass
+            if self._ptt_mouse_hook:
+                try:
+                    import mouse
+                    mouse.unhook(self._ptt_mouse_hook)
+                except Exception:
+                    pass
 
         def cancel_recording():
             """Cancel recording after timeout."""
             if self._ptt_recording:
                 self._ptt_recording = False
-                if self._ptt_hook:
-                    try:
-                        keyboard.unhook(self._ptt_hook)
-                    except Exception:
-                        pass
+                cleanup_hooks()
                 self.ptt_record_btn.config(text="Record Key", bg=COLORS["blurple"])
                 self.ptt_status_label.config(text="Recording timed out", fg=COLORS["red"])
 
-        def on_key(event):
+        def set_ptt_key(key_name: str):
+            """Set the PTT key and update UI."""
             if not self._ptt_recording:
                 return
 
@@ -762,11 +791,10 @@ class SoundboardApp:
             if self._ptt_timeout_id:
                 self.root.after_cancel(self._ptt_timeout_id)
 
-            key_name = event.name
-
             # Schedule UI updates on main thread (Tkinter is not thread-safe)
             def update_ui():
                 self._ptt_recording = False
+                cleanup_hooks()
                 self.ptt_key_var.set(key_name)
                 self.ptt_record_btn.config(text="Record Key", bg=COLORS["blurple"])
                 self.ptt_status_label.config(text=f"PTT: {key_name}", fg=COLORS["green"])
@@ -780,16 +808,40 @@ class SoundboardApp:
 
             self.root.after(0, update_ui)
 
-            # Unhook after capture
-            if self._ptt_hook:
-                try:
-                    keyboard.unhook(self._ptt_hook)
-                except Exception:
-                    pass
+        def on_key(event):
+            set_ptt_key(event.name)
             return False  # Stop propagation
 
-        # Use suppress=True to capture F keys that might otherwise be consumed by system
+        def on_mouse(event):
+            # Only capture button down events (not up, move, etc.)
+            if hasattr(event, 'event_type') and event.event_type == 'down':
+                # Map mouse button names: x = mouse4, x2 = mouse5
+                button = event.button
+                if button == 'x':
+                    button_name = 'mouse4'
+                elif button == 'x2':
+                    button_name = 'mouse5'
+                elif button == 'left':
+                    button_name = 'mouse1'
+                elif button == 'right':
+                    button_name = 'mouse2'
+                elif button == 'middle':
+                    button_name = 'mouse3'
+                else:
+                    button_name = f'mouse_{button}'
+                set_ptt_key(button_name)
+
+        # Hook keyboard
         self._ptt_hook = keyboard.on_press(on_key, suppress=True)
+        
+        # Try to hook mouse buttons (side buttons)
+        try:
+            import mouse
+            self._ptt_mouse_hook = mouse.hook(on_mouse)
+        except ImportError:
+            pass  # Mouse module not available, keyboard only
+        except Exception:
+            pass
         
         # Set a 5 second timeout
         self._ptt_timeout_id = self.root.after(5000, cancel_recording)

@@ -1,0 +1,20 @@
+[DEBUG] _play_slot called: slot_idx=1
+[DEBUG] Slot info: name=aint-nobody-got-time-for-that_1, file=sounds\aint-nobody-got-time-for-that_1_98957508.wav, volume=1.0
+[DEBUG] Mixer: <soundboard.audio.AudioMixer object at 0x00000208B2B641A0>, running=True
+[AUDIO] play_sound called: file=sounds\aint-nobody-got-time-for-that_1_98957508.wav, volume=1.0
+[AUDIO] Playing from cache: 71026 samples
+[DEBUG] _play_slot called: slot_idx=1
+[DEBUG] Slot info: name=aint-nobody-got-time-for-that_1, file=sounds\aint-nobody-got-time-for-that_1_98957508.wav, volume=1.0
+[DEBUG] Mixer: <soundboard.audio.AudioMixer object at 0x00000208B2B641A0>, running=True
+[AUDIO] play_sound called: file=sounds\aint-nobody-got-time-for-that_1_98957508.wav, volume=1.0
+[AUDIO] Playing from cache: 71026 samples
+[DEBUG] _play_slot called: slot_idx=1
+[DEBUG] Slot info: name=aint-nobody-got-time-for-that_1, file=sounds\aint-nobody-got-time-for-that_1_98957508.wav, volume=1.0
+[DEBUG] Mixer: <soundboard.audio.AudioMixer object at 0x00000208B2B641A0>, running=True
+[AUDIO] play_sound called: file=sounds\aint-nobody-got-time-for-that_1_98957508.wav, volume=1.0
+[AUDIO] Playing from cache: 71026 samples
+[DEBUG] _play_slot called: slot_idx=2
+[DEBUG] Slot info: name=gotcha-bitch_1, file=sounds\gotcha-bitch_1_99498771.wav, volume=1.0
+[DEBUG] Mixer: <soundboard.audio.AudioMixer object at 0x00000208B2B641A0>, running=True
+[AUDIO] play_sound called: file=sounds\gotcha-bitch_1_99498771.wav, volume=1.0
+[AUDIO] Playing from cache: 56475 samples
