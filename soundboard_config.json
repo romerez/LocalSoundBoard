@@ -19,6 +19,22 @@
           "volume": 1.0,
           "emoji": null,
           "image_path": null
+        },
+        "3": {
+          "name": "Arakara",
+          "file_path": "sounds\\ALL You Need To Know On Ara-Kara Dungeon _ The War Within [ ezmp3.cc ]_14976165.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null
+        },
+        "0": {
+          "name": "bloody-fuck-you-bloody_Jzdok0G",
+          "file_path": "sounds\\bloody-fuck-you-bloody_Jzdok0G_15502481.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null
         }
       }
     },
@@ -39,5 +55,7 @@
   ],
   "current_tab": 0,
   "ptt_enabled": true,
-  "ptt_key": "mouse5"
+  "ptt_key": "mouse4",
+  "input_device": "5: Microphone (HyperX Quadcast)",
+  "output_device": "15: CABLE In 16ch (VB-Audio Virtual"
 }

@@ -2,6 +2,7 @@
 Audio mixing and playback for the Discord Soundboard.
 """
 
+import ctypes
 import hashlib
 import io
 import os
@@ -16,6 +17,44 @@ import soundfile as sf
 from typing import Optional, Dict, List, Tuple
 
 from .constants import AUDIO, SOUNDS_DIR
+
+
+# Windows API for mouse button simulation
+def _simulate_mouse_button(button: str, press: bool = True):
+    """
+    Simulate mouse button press/release using Windows API.
+    Works reliably for side buttons (XBUTTON1/XBUTTON2).
+    """
+    # Constants from Windows API
+    MOUSEEVENTF_XDOWN = 0x0080
+    MOUSEEVENTF_XUP = 0x0100
+    MOUSEEVENTF_LEFTDOWN = 0x0002
+    MOUSEEVENTF_LEFTUP = 0x0004
+    MOUSEEVENTF_RIGHTDOWN = 0x0008
+    MOUSEEVENTF_RIGHTUP = 0x0010
+    MOUSEEVENTF_MIDDLEDOWN = 0x0020
+    MOUSEEVENTF_MIDDLEUP = 0x0040
+    XBUTTON1 = 0x0001
+    XBUTTON2 = 0x0002
+
+    if button == "left":
+        flags = MOUSEEVENTF_LEFTDOWN if press else MOUSEEVENTF_LEFTUP
+        ctypes.windll.user32.mouse_event(flags, 0, 0, 0, 0)
+    elif button == "right":
+        flags = MOUSEEVENTF_RIGHTDOWN if press else MOUSEEVENTF_RIGHTUP
+        ctypes.windll.user32.mouse_event(flags, 0, 0, 0, 0)
+    elif button == "middle":
+        flags = MOUSEEVENTF_MIDDLEDOWN if press else MOUSEEVENTF_MIDDLEUP
+        ctypes.windll.user32.mouse_event(flags, 0, 0, 0, 0)
+    elif button == "x" or button == "x1":
+        # XBUTTON1 = mouse4 in some apps
+        flags = MOUSEEVENTF_XDOWN if press else MOUSEEVENTF_XUP
+        ctypes.windll.user32.mouse_event(flags, 0, 0, XBUTTON1, 0)
+    elif button == "x2":
+        # XBUTTON2 = mouse5 in some apps
+        flags = MOUSEEVENTF_XDOWN if press else MOUSEEVENTF_XUP
+        ctypes.windll.user32.mouse_event(flags, 0, 0, XBUTTON2, 0)
+
 
 # Try to import pydub for extended format support (M4A, AAC, WMA, etc.)
 try:
@@ -273,9 +312,10 @@ class AudioMixer:
         self.currently_playing: List[Dict] = []
         self.lock = threading.Lock()
 
-        # Buffer for mic input (separate streams need a shared buffer)
-        self._mic_buffer = np.zeros((self.block_size,), dtype=np.float32)
-        self._mic_lock = threading.Lock()
+        # Queue for mic input (handles timing mismatches between input/output)
+        self._mic_queue: queue.Queue = queue.Queue(maxsize=8)
+        # Fallback buffer when queue is empty (prevents choppy audio)
+        self._last_mic_data = np.zeros((self.block_size,), dtype=np.float32)
 
         # Mic settings
         self.mic_volume = 1.0
@@ -289,8 +329,7 @@ class AudioMixer:
         # Local monitoring (play sounds to speakers too)
         self.monitor_enabled = False
         self.monitor_stream = None
-        self._monitor_buffer = np.zeros((self.block_size, self.channels), dtype=np.float32)
-        self._monitor_lock = threading.Lock()
+        self._monitor_queue: queue.Queue = queue.Queue()  # Queue for monitor audio blocks
 
     def start(self):
         """Begin audio streams (separate input and output for compatibility)."""
@@ -341,6 +380,12 @@ class AudioMixer:
     def set_monitor_enabled(self, enabled: bool):
         """Enable or disable local speaker monitoring."""
         if enabled and not self.monitor_stream and self.running:
+            # Clear the monitor queue before starting
+            while not self._monitor_queue.empty():
+                try:
+                    self._monitor_queue.get_nowait()
+                except queue.Empty:
+                    break
             # Start monitor stream (outputs to default device)
             self.monitor_stream = sd.OutputStream(
                 device=None,  # Default speakers
@@ -361,23 +406,33 @@ class AudioMixer:
 
     def _monitor_callback(self, outdata, frames, time, status):
         """Output callback for local speaker monitoring (plays mixed audio)."""
-        with self._monitor_lock:
-            # Copy from buffer, handling size differences
-            if len(self._monitor_buffer) >= frames:
-                outdata[:] = self._monitor_buffer[:frames]
+        try:
+            # Get audio data from queue (non-blocking)
+            audio_block = self._monitor_queue.get_nowait()
+            if len(audio_block) >= frames:
+                outdata[:] = audio_block[:frames]
             else:
-                outdata[:len(self._monitor_buffer)] = self._monitor_buffer
-                outdata[len(self._monitor_buffer):] = 0
+                outdata[: len(audio_block)] = audio_block
+                outdata[len(audio_block) :] = 0
+        except queue.Empty:
+            # No audio data available, output silence
+            outdata.fill(0)
 
     def _input_callback(self, indata, frames, time, status):
-        """Capture microphone input into buffer."""
-        with self._mic_lock:
-            # Store the latest mic input (mono)
-            if len(indata) == len(self._mic_buffer):
-                self._mic_buffer[:] = indata[:, 0]
-            else:
-                # Handle size mismatch
-                self._mic_buffer = indata[:, 0].copy()
+        """Capture microphone input into queue."""
+        # Extract mono channel
+        mic_data = indata[:, 0].copy()
+
+        # Try to add to queue (non-blocking)
+        try:
+            self._mic_queue.put_nowait(mic_data)
+        except queue.Full:
+            # Queue full - discard oldest and add new (prevents falling behind)
+            try:
+                self._mic_queue.get_nowait()
+                self._mic_queue.put_nowait(mic_data)
+            except queue.Empty:
+                pass
 
     def _output_callback(self, outdata, frames, time, status):
         """
@@ -386,9 +441,23 @@ class AudioMixer:
         Called by sounddevice for each audio block.
         Keep this minimal - no blocking operations!
         """
-        # Get microphone input from buffer
-        with self._mic_lock:
-            mic_data = self._mic_buffer.copy()
+        # Get microphone input from queue (handles timing variations)
+        try:
+            mic_data = self._mic_queue.get_nowait()
+            # Only use if size matches, otherwise fall back
+            if len(mic_data) == frames:
+                self._last_mic_data = mic_data.copy()
+            else:
+                mic_data = self._last_mic_data
+        except queue.Empty:
+            # No new data - use last known data (prevents choppy audio)
+            mic_data = self._last_mic_data
+
+        # Ensure mic_data is valid (resize fallback if needed)
+        if len(mic_data) != frames:
+            # Resize the fallback buffer to match current frame size
+            self._last_mic_data = np.zeros(frames, dtype=np.float32)
+            mic_data = self._last_mic_data
 
         # Initialize sounds-only buffer for monitoring
         sounds_mix = np.zeros((frames, self.channels), dtype=np.float32)
@@ -397,9 +466,6 @@ class AudioMixer:
         if self.mic_muted:
             mixed = np.zeros((frames, self.channels), dtype=np.float32)
         else:
-            # Ensure mic_data matches frames size
-            if len(mic_data) != frames:
-                mic_data = np.zeros(frames, dtype=np.float32)
             mic_mono = mic_data * self.mic_volume
             mixed = np.column_stack([mic_mono, mic_mono])
 
@@ -458,11 +524,15 @@ class AudioMixer:
 
         # Clip to prevent distortion and write to output
         np.clip(mixed, -1.0, 1.0, out=outdata)
-        
-        # Copy sounds-only to monitor buffer for local speaker playback
-        if self.monitor_enabled:
-            with self._monitor_lock:
-                np.clip(sounds_mix, -1.0, 1.0, out=self._monitor_buffer[:frames])
+
+        # Queue sounds-only for local speaker monitoring
+        if self.monitor_enabled and np.any(sounds_mix):
+            # Only queue if there's actual sound data (not silence)
+            clipped = np.clip(sounds_mix, -1.0, 1.0).astype(np.float32)
+            try:
+                self._monitor_queue.put_nowait(clipped.copy())
+            except queue.Full:
+                pass  # Drop frame if queue is full
 
     def play_sound(self, file_path: str, volume: float = 1.0):
         """Queue a sound for playback. Uses cache if available for better performance."""
@@ -515,6 +585,8 @@ class AudioMixer:
     def set_ptt_key(self, key: Optional[str]):
         """Set the Push-to-Talk key for Discord integration."""
         self.ptt_key = key if key and key.strip() else None
+        with open("debug.log", "a") as f:
+            f.write(f"[PTT] Key set to: {self.ptt_key}\n")
 
     def _press_ptt(self):
         """Press the PTT key if configured and not already pressed."""
@@ -524,27 +596,35 @@ class AudioMixer:
         with self._ptt_lock:
             if not self.ptt_active:
                 try:
+                    with open("debug.log", "a") as f:
+                        f.write(f"[PTT] Pressing: {self.ptt_key}\n")
                     # Check if it's a mouse button
                     if self.ptt_key.startswith("mouse"):
-                        import mouse
-
-                        # Map mouse button names back
+                        # Map mouse button names back to Windows button names
+                        # mouse4 = x2 (XBUTTON2), mouse5 = x (XBUTTON1) - matches Discord
                         button_map = {
                             "mouse1": "left",
                             "mouse2": "right",
                             "mouse3": "middle",
-                            "mouse4": "x",
-                            "mouse5": "x2",
+                            "mouse4": "x2",
+                            "mouse5": "x",
                         }
-                        button = button_map.get(self.ptt_key, "x")
-                        mouse.press(button)
+                        button = button_map.get(self.ptt_key, "x2")
+                        with open("debug.log", "a") as f:
+                            f.write(f"[PTT] Using Windows API to press: {button}\n")
+                        _simulate_mouse_button(button, press=True)
+                        with open("debug.log", "a") as f:
+                            f.write(f"[PTT] Windows API mouse press done\n")
                     else:
                         import keyboard
 
                         keyboard.press(self.ptt_key)
                     self.ptt_active = True
+                    with open("debug.log", "a") as f:
+                        f.write(f"[PTT] Active = True\n")
                 except Exception as e:
-                    print(f"Failed to press PTT key: {e}")
+                    with open("debug.log", "a") as f:
+                        f.write(f"Failed to press PTT key: {e}\n")
 
     def _release_ptt(self):
         """Release the PTT key if it's currently pressed."""
@@ -556,25 +636,24 @@ class AudioMixer:
                 try:
                     # Check if it's a mouse button
                     if self.ptt_key.startswith("mouse"):
-                        import mouse
-
-                        # Map mouse button names back
+                        # Map mouse button names back to Windows button names
                         button_map = {
                             "mouse1": "left",
                             "mouse2": "right",
                             "mouse3": "middle",
-                            "mouse4": "x",
-                            "mouse5": "x2",
+                            "mouse4": "x2",
+                            "mouse5": "x",
                         }
-                        button = button_map.get(self.ptt_key, "x")
-                        mouse.release(button)
+                        button = button_map.get(self.ptt_key, "x2")
+                        _simulate_mouse_button(button, press=False)
                     else:
                         import keyboard
 
                         keyboard.release(self.ptt_key)
                     self.ptt_active = False
                 except Exception as e:
-                    print(f"Failed to release PTT key: {e}")
+                    with open("debug.log", "a") as f:
+                        f.write(f"Failed to release PTT key: {e}\n")
 
     def _check_ptt_release(self):
         """Check if all sounds finished and release PTT if so."""

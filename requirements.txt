@@ -3,6 +3,7 @@ soundfile>=0.12.1
 numpy>=1.24.0
 keyboard>=0.13.5
 mouse>=0.7.1
+pynput>=1.7.0
 pillow>=9.0.0
 pydub>=0.25.0
 pydub>=0.25.1  # For M4A, AAC, WMA, WebM support (requires ffmpeg)

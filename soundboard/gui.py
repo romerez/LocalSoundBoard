@@ -489,8 +489,7 @@ class SoundboardApp:
         scrollable_frame = tk.Frame(canvas, bg=COLORS["bg_dark"])
 
         scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+            "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
         )
 
         canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
@@ -539,7 +538,11 @@ class SoundboardApp:
                     bg=COLORS["bg_medium"],
                     fg="white",
                     relief=tk.FLAT,
-                    command=lambda e=emoji: (cleanup_bindings(), target_var.set(e), picker.destroy()),
+                    command=lambda e=emoji: (
+                        cleanup_bindings(),
+                        target_var.set(e),
+                        picker.destroy(),
+                    ),
                 )
                 btn.grid(row=row, column=col, padx=1, pady=1)
 
@@ -714,6 +717,8 @@ class SoundboardApp:
                     if ptt_key:
                         self.mixer.set_ptt_key(ptt_key)
                 self.mixer.start()
+                # Save device selection
+                self._save_config()
                 self.toggle_btn.configure(text="⏹ Stop", bg=COLORS["red"])
                 ptt_status = f" (PTT: {ptt_key})" if ptt_key else ""
                 self.status_var.set(f"Running - Mic → Virtual Cable{ptt_status}")
@@ -770,6 +775,7 @@ class SoundboardApp:
             if self._ptt_mouse_hook:
                 try:
                     import mouse
+
                     mouse.unhook(self._ptt_mouse_hook)
                 except Exception:
                     pass
@@ -812,37 +818,41 @@ class SoundboardApp:
             set_ptt_key(event.name)
             return False  # Stop propagation
 
-        def on_mouse(event):
-            # Only capture button down events (not up, move, etc.)
-            if hasattr(event, 'event_type') and event.event_type == 'down':
-                # Map mouse button names: x = mouse4, x2 = mouse5
-                button = event.button
-                if button == 'x':
-                    button_name = 'mouse4'
-                elif button == 'x2':
-                    button_name = 'mouse5'
-                elif button == 'left':
-                    button_name = 'mouse1'
-                elif button == 'right':
-                    button_name = 'mouse2'
-                elif button == 'middle':
-                    button_name = 'mouse3'
+        def on_mouse_event(event):
+            """Handle mouse button events using mouse library."""
+            # Check if it's a button event (has event_type and button attributes)
+            event_type = getattr(event, "event_type", None)
+            button = getattr(event, "button", None)
+
+            if event_type == "down" and button:
+                # Map mouse button names: x = mouse5, x2 = mouse4 (to match Discord)
+                if button == "x":
+                    button_name = "mouse5"
+                elif button == "x2":
+                    button_name = "mouse4"
+                elif button == "left":
+                    button_name = "mouse1"
+                elif button == "right":
+                    button_name = "mouse2"
+                elif button == "middle":
+                    button_name = "mouse3"
                 else:
-                    button_name = f'mouse_{button}'
+                    button_name = f"mouse_{button}"
                 set_ptt_key(button_name)
 
-        # Hook keyboard
-        self._ptt_hook = keyboard.on_press(on_key, suppress=True)
-        
-        # Try to hook mouse buttons (side buttons)
+        # Hook keyboard (no suppress to avoid blocking keyboard)
+        self._ptt_hook = keyboard.on_press(on_key)
+
+        # Try to hook mouse buttons using mouse library
         try:
             import mouse
-            self._ptt_mouse_hook = mouse.hook(on_mouse)
+
+            self._ptt_mouse_hook = mouse.hook(on_mouse_event)
         except ImportError:
-            pass  # Mouse module not available, keyboard only
+            pass  # mouse module not available
         except Exception:
             pass
-        
+
         # Set a 5 second timeout
         self._ptt_timeout_id = self.root.after(5000, cancel_recording)
 
@@ -1269,6 +1279,8 @@ class SoundboardApp:
             "current_tab": self.current_tab_idx,
             "ptt_enabled": self.ptt_enabled_var.get(),
             "ptt_key": self.ptt_key_var.get().strip() if self.ptt_key_var.get().strip() else None,
+            "input_device": self.input_var.get() if self.input_var.get() else None,
+            "output_device": self.output_var.get() if self.output_var.get() else None,
         }
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2, ensure_ascii=False)
@@ -1317,6 +1329,21 @@ class SoundboardApp:
             if ptt_enabled:
                 self.ptt_enabled_var.set(True)
                 self.ptt_frame.grid()  # Show PTT settings
+
+            # Load saved device selections
+            saved_input = config.get("input_device")
+            saved_output = config.get("output_device")
+            
+            if saved_input:
+                # Check if the saved device is still in the available devices list
+                current_values = self.input_combo["values"]
+                if saved_input in current_values:
+                    self.input_var.set(saved_input)
+            
+            if saved_output:
+                current_values = self.output_combo["values"]
+                if saved_output in current_values:
+                    self.output_var.set(saved_output)
 
             self._refresh_tab_bar()
             self._refresh_slot_buttons()
