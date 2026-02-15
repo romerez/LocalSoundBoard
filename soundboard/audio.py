@@ -601,7 +601,12 @@ class AudioMixer:
                 pass  # Drop frame if queue is full
 
     def play_sound(
-        self, file_path: str, volume: float = 1.0, speed: float = 1.0, preserve_pitch: bool = True
+        self,
+        file_path: str,
+        volume: float = 1.0,
+        speed: float = 1.0,
+        preserve_pitch: bool = True,
+        sound_id: Optional[str] = None,
     ) -> float:
         """Queue a sound for playback. Uses cache if available for better performance.
 
@@ -610,6 +615,7 @@ class AudioMixer:
             volume: Playback volume (0.0 to 1.5)
             speed: Playback speed (0.5 to 2.0, where 1.0 is normal)
             preserve_pitch: If True, use time-stretch to preserve pitch; if False, simple resample
+            sound_id: Optional identifier for this sound (used to stop individual sounds)
 
         Returns the duration of the sound in seconds (0.0 if failed to play).
         """
@@ -630,11 +636,13 @@ class AudioMixer:
                         data = self._apply_speed(data, speed, preserve_pitch)
                     # Queue sound FIRST, then press PTT (prevents race condition where
                     # output callback sees empty queue and releases PTT immediately)
-                    self.sound_queue.put({"data": data, "position": 0, "volume": volume})
+                    self.sound_queue.put(
+                        {"data": data, "position": 0, "volume": volume, "sound_id": sound_id}
+                    )
                     self._press_ptt()
                     with open("debug.log", "a") as f:
                         f.write(
-                            f"[PLAY] Queued from cache: {len(data)} samples (speed={speed}, preserve_pitch={preserve_pitch}, volume={volume})\n"
+                            f"[PLAY] Queued from cache: {len(data)} samples (speed={speed}, preserve_pitch={preserve_pitch}, volume={volume}, id={sound_id})\n"
                         )
                     return len(data) / self.sample_rate
 
@@ -657,10 +665,12 @@ class AudioMixer:
 
             with open("debug.log", "a") as f:
                 f.write(
-                    f"[AUDIO] Playing from disk: {len(data)} samples (speed={speed}, preserve_pitch={preserve_pitch})\n"
+                    f"[AUDIO] Playing from disk: {len(data)} samples (speed={speed}, preserve_pitch={preserve_pitch}, id={sound_id})\n"
                 )
             # Queue sound FIRST, then press PTT
-            self.sound_queue.put({"data": data, "position": 0, "volume": volume})
+            self.sound_queue.put(
+                {"data": data, "position": 0, "volume": volume, "sound_id": sound_id}
+            )
             self._press_ptt()
             return len(data) / self.sample_rate
         except Exception as e:
@@ -749,7 +759,7 @@ class AudioMixer:
         - Values under 1.0: pass through UNCHANGED
         - Values 1.0-2.0: compressed to 1.0-1.35 range (still noticeably louder)
         - Values > 2.0: approaches 1.4 asymptotically
-        
+
         At 150% volume on a normalized sound (peaks at 0.7):
         - 0.7 * 1.5 = 1.05 -> output ~1.02 (still louder than 1.0)
         - 0.5 * 1.5 = 0.75 -> output 0.75 (unchanged, full 50% boost)
@@ -758,16 +768,16 @@ class AudioMixer:
         max_abs = np.max(np.abs(x))
         if max_abs <= 1.0:
             return x.astype(np.float32)
-        
+
         abs_x = np.abs(x)
         sign_x = np.sign(x)
-        
+
         # Start with original values (preserves values <= 1.0)
         result = np.copy(x)
-        
+
         # Find samples above 1.0 that need limiting
         hot = abs_x > 1.0
-        
+
         if np.any(hot):
             # Map values above 1.0 to a compressed range
             # Using curve: 1.0 + 0.4 * tanh((x - 1.0))
@@ -780,8 +790,51 @@ class AudioMixer:
             excess = abs_x[hot] - 1.0
             soft_output = 1.0 + 0.4 * np.tanh(excess)
             result[hot] = sign_x[hot] * soft_output
-        
+
         return result.astype(np.float32)
+
+    def stop_sound(self, sound_id: str):
+        """Stop a specific sound by its ID.
+
+        Args:
+            sound_id: The identifier of the sound to stop
+        """
+        with open("debug.log", "a") as f:
+            f.write(f"[STOP] stop_sound called with id={sound_id}\n")
+            f.write(f"[STOP] currently_playing count: {len(self.currently_playing)}\n")
+            f.write(
+                f"[STOP] currently_playing ids: {[s.get('sound_id') for s in self.currently_playing]}\n"
+            )
+
+        with self.lock:
+            # Remove sounds with matching ID from currently_playing
+            before_count = len(self.currently_playing)
+            self.currently_playing = [
+                s for s in self.currently_playing if s.get("sound_id") != sound_id
+            ]
+            after_count = len(self.currently_playing)
+
+        with open("debug.log", "a") as f:
+            f.write(f"[STOP] Removed {before_count - after_count} sounds from currently_playing\n")
+
+        # Also drain matching sounds from queue
+        remaining = []
+        while not self.sound_queue.empty():
+            try:
+                sound = self.sound_queue.get_nowait()
+                if sound.get("sound_id") != sound_id:
+                    remaining.append(sound)
+            except queue.Empty:
+                break
+
+        # Put back non-matching sounds
+        for sound in remaining:
+            self.sound_queue.put(sound)
+
+        # Check if we should release PTT (no more sounds playing)
+        with self.lock:
+            if len(self.currently_playing) == 0 and self.sound_queue.empty():
+                self._release_ptt()
 
     def stop_all_sounds(self):
         """Clear playback queue and stop all sounds."""

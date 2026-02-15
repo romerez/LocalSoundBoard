@@ -87,6 +87,7 @@ class SoundboardApp:
         self.empty_slot_clicked: Optional[int] = None
         self.last_play_time: float = 0.0  # Debounce for rapid clicks
         self.click_in_progress: bool = False  # True only during active slot button press
+        self.stop_button_clicked: bool = False  # Prevents slot reactions after stop click
 
         # Ensure images directory exists
         Path(IMAGES_DIR).mkdir(exist_ok=True)
@@ -406,6 +407,7 @@ class SoundboardApp:
         self.is_dragging = False
         self.empty_slot_clicked = None
         self.click_in_progress = False
+        self.stop_button_clicked = False
         self.root.config(cursor="")
 
         # Clear progress bars before switching (sounds from other tabs shouldn't show here)
@@ -806,27 +808,31 @@ class SoundboardApp:
             # Bottom row: progress bar + edit button + preview button (pack first so it's at bottom)
             bottom_frame = tk.Frame(slot_frame, bg=COLORS["bg_dark"], height=BOTTOM_HEIGHT)
             bottom_frame.pack(side=tk.BOTTOM, fill=tk.X)
-            bottom_frame.pack_propagate(False)  # Maintain fixed height
+            # Removed pack_propagate(False) to allow stop button to size properly
 
-            # Stop button (hidden by default, shown when playing) - pack first so it appears leftmost when visible
+            # Stop button (hidden by default, shown when playing)
+            def make_stop_handler(slot_id):
+                def handler(event=None):
+                    print(f"[DEBUG] Stop button clicked for slot {slot_id}")
+                    self._stop_slot_with_flag(slot_id)
+                    return "break"  # Prevent event propagation
+                return handler
+            
             stop_btn = tk.Button(
                 bottom_frame,
-                text="■ Stop",
+                text="⏹",
                 bg=COLORS["red"],
                 fg="white",
-                font=("Segoe UI", 8, "bold"),
-                relief=tk.FLAT,
-                padx=4,
-                pady=0,
+                font=("Segoe UI", 10),
+                relief=tk.RAISED,
+                width=3,
+                state=tk.NORMAL,
             )
-            # Bind click event with break to prevent propagation
-            def make_stop_handler(idx):
-                def handler(event):
-                    self._stop_slot(idx)
-                    return "break"
-                return handler
-            stop_btn.bind("<Button-1>", make_stop_handler(i))
-            # Don't pack initially - will be shown when playing
+            # Use explicit binding instead of command= to ensure we capture the event
+            stop_handler = make_stop_handler(i)
+            stop_btn.bind("<Button-1>", stop_handler)
+            stop_btn.bind("<ButtonRelease-1>", lambda e: "break")  # Block release propagation
+            # Don't pack initially - only show when playing
 
             # Preview button (speaker icon) - pack RIGHT first
             preview_btn = tk.Button(
@@ -880,7 +886,8 @@ class SoundboardApp:
                 wraplength=150,  # Wrap text to fit button
                 justify=tk.CENTER,
             )
-            btn.pack(fill=tk.BOTH, expand=True)
+            # Use fill=tk.BOTH but NOT expand to avoid covering bottom_frame
+            btn.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
             btn.bind("<Button-3>", lambda e, idx=i: self._show_quick_popup(e, idx))
 
             # Drag and drop bindings
@@ -1056,7 +1063,7 @@ class SoundboardApp:
         """Stop all currently playing sounds."""
         if self.mixer:
             self.mixer.stop_all_sounds()
-        
+
         # Clear playing state and hide stop buttons
         for slot_idx in list(self.playing_slots.keys()):
             tab_idx = self.playing_slots[slot_idx].get("tab_idx")
@@ -1067,34 +1074,48 @@ class SoundboardApp:
                     self.slot_progress[slot_idx].delete("progress")
                 if slot_idx in self.slot_stop_buttons:
                     self.slot_stop_buttons[slot_idx].pack_forget()
-        
+
         self.status_var.set("Stopped all sounds")
 
     def _stop_slot(self, slot_idx: int):
         """Stop the sound playing in a specific slot."""
-        # Stop all sounds in mixer first
+        # Get the tab this slot belongs to for sound_id
+        if slot_idx in self.playing_slots:
+            tab_idx = self.playing_slots[slot_idx].get("tab_idx", self.current_tab_idx)
+        else:
+            tab_idx = self.current_tab_idx
+        
+        sound_id = f"{tab_idx}_{slot_idx}"
+        
+        # Stop only this specific sound in the mixer
         if self.mixer:
-            self.mixer.stop_all_sounds()
+            self.mixer.stop_sound(sound_id)
+
+        # Clear this slot's playing state
+        if slot_idx in self.playing_slots:
+            del self.playing_slots[slot_idx]
         
-        # Clear all playing states
-        for idx in list(self.playing_slots.keys()):
-            tab_idx = self.playing_slots[idx].get("tab_idx")
-            del self.playing_slots[idx]
-            if tab_idx == self.current_tab_idx:
-                self._update_slot_button(idx)
-                if idx in self.slot_progress:
-                    self.slot_progress[idx].delete("progress")
-                if idx in self.slot_stop_buttons:
-                    self.slot_stop_buttons[idx].pack_forget()
-        
-        # Also explicitly hide the clicked slot's stop button
-        if slot_idx in self.slot_stop_buttons:
-            self.slot_stop_buttons[slot_idx].pack_forget()
-        if slot_idx in self.slot_progress:
-            self.slot_progress[slot_idx].delete("progress")
-        
-        self._update_slot_button(slot_idx)
+        # Update UI for this slot
+        if tab_idx == self.current_tab_idx:
+            self._update_slot_button(slot_idx)
+            if slot_idx in self.slot_progress:
+                self.slot_progress[slot_idx].delete("progress")
+            if slot_idx in self.slot_stop_buttons:
+                self.slot_stop_buttons[slot_idx].pack_forget()
+
         self.status_var.set("Stopped")
+
+    def _stop_slot_with_flag(self, slot_idx: int):
+        """Stop slot and set flag to prevent slot button from reacting."""
+        print(f"[DEBUG] _stop_slot_with_flag called for slot {slot_idx}")
+        self.stop_button_clicked = True
+        self._stop_slot(slot_idx)
+        # Clear flag after a short delay to allow any pending events to be ignored
+        self.root.after(100, self._clear_stop_flag)
+
+    def _clear_stop_flag(self):
+        """Clear the stop button clicked flag."""
+        self.stop_button_clicked = False
 
     def _record_ptt_key(self):
         """Record a key or mouse button press to use as PTT key."""
@@ -1232,6 +1253,24 @@ class SoundboardApp:
 
     def _on_drag_start(self, event, slot_idx: int):
         """Start dragging a slot."""
+        # Check if click was actually on the slot button, not on stop/preview/edit button
+        widget_under_cursor = self.root.winfo_containing(event.x_root, event.y_root)
+        slot_btn = self.slot_buttons.get(slot_idx)
+        
+        # If click is on a different widget, handle it manually since Tk event delivery is broken
+        if widget_under_cursor != slot_btn:
+            # Check if it's the stop button - call stop handler directly
+            stop_btn = self.slot_stop_buttons.get(slot_idx)
+            if widget_under_cursor == stop_btn:
+                print(f"[DEBUG] _on_drag_start: click on STOP button for slot {slot_idx}, triggering stop")
+                self._stop_slot_with_flag(slot_idx)
+                return "break"
+            
+            # For other widgets (preview, edit), just ignore and let them handle
+            print(f"[DEBUG] _on_drag_start: click NOT on slot button, ignoring (widget={widget_under_cursor})")
+            return "break"  # Block propagation
+        
+        print(f"[DEBUG] _on_drag_start: click on slot button {slot_idx}")
         self.click_in_progress = True  # Mark that a slot click is active
         tab = self._get_current_tab()
         # Only start drag if slot has content
@@ -1289,10 +1328,19 @@ class SoundboardApp:
 
     def _on_drag_end(self, event):
         """Handle drop - swap slots or move to different tab."""
+        print(f"[DEBUG] _on_drag_end called, click_in_progress={getattr(self, 'click_in_progress', False)}, stop_button_clicked={getattr(self, 'stop_button_clicked', False)}")
         # Only process if we started from a slot button press
         if not getattr(self, "click_in_progress", False):
             return "break"
         self.click_in_progress = False
+
+        # Ignore if stop button was just clicked (prevents re-playing after stop)
+        if getattr(self, "stop_button_clicked", False):
+            self.drag_source_idx = None
+            self.drag_source_tab = None
+            self.is_dragging = False
+            self.empty_slot_clicked = None
+            return "break"
 
         # Debounce: ignore rapid clicks (within 150ms)
         current_time = time.time()
@@ -1433,6 +1481,7 @@ class SoundboardApp:
 
     def _play_slot(self, slot_idx: int):
         """Play the sound assigned to a slot, or open config for empty slots."""
+        print(f"[DEBUG] _play_slot called for slot {slot_idx}")
         tab = self._get_current_tab()
         if slot_idx not in tab.slots:
             # Empty slot - open configuration to add a sound
@@ -1442,8 +1491,12 @@ class SoundboardApp:
         slot = tab.slots[slot_idx]
 
         if self.mixer and self.mixer.running:
+            # Create unique sound_id combining tab and slot
+            sound_id = f"{self.current_tab_idx}_{slot_idx}"
             # play_sound returns the duration, avoiding a second cache lookup
-            duration = self.mixer.play_sound(slot.file_path, slot.volume, slot.speed, slot.preserve_pitch)
+            duration = self.mixer.play_sound(
+                slot.file_path, slot.volume, slot.speed, slot.preserve_pitch, sound_id
+            )
             self.status_var.set(f"Playing: {slot.name}")
 
             # Start progress tracking
@@ -1456,10 +1509,12 @@ class SoundboardApp:
                 # Change button color to playing state
                 if slot_idx in self.slot_buttons:
                     self.slot_buttons[slot_idx].configure(bg=COLORS["playing"])
-                # Show stop button (on left side, next to progress bar)
-                if slot_idx in self.slot_stop_buttons:
+                # Show stop button (on left side, before progress bar)
+                if slot_idx in self.slot_stop_buttons and slot_idx in self.slot_progress:
                     stop_btn = self.slot_stop_buttons[slot_idx]
-                    stop_btn.pack(side=tk.LEFT, padx=2, before=self.slot_progress.get(slot_idx))
+                    progress = self.slot_progress[slot_idx]
+                    stop_btn.pack_forget()  # Ensure not already packed
+                    stop_btn.pack(side=tk.LEFT, padx=1, before=progress)
         else:
             self.status_var.set("Start the audio stream first!")
 
@@ -2149,8 +2204,12 @@ class SoundboardApp:
 
         slot = tab.slots[slot_idx]
         if self.mixer and self.mixer.running:
+            # Create unique sound_id combining tab and slot
+            sound_id = f"{tab_idx}_{slot_idx}"
             # play_sound returns the duration, avoiding a second cache lookup
-            duration = self.mixer.play_sound(slot.file_path, slot.volume, slot.speed, slot.preserve_pitch)
+            duration = self.mixer.play_sound(
+                slot.file_path, slot.volume, slot.speed, slot.preserve_pitch, sound_id
+            )
 
             # Start progress tracking (only visible if on current tab)
             if duration > 0 and tab_idx == self.current_tab_idx:
@@ -2165,6 +2224,12 @@ class SoundboardApp:
                     self.status_var.set(f"Playing: {slot.name}")
                     if slot_idx in self.slot_buttons:
                         self.slot_buttons[slot_idx].configure(bg=COLORS["playing"])
+                    # Show stop button
+                    if slot_idx in self.slot_stop_buttons and slot_idx in self.slot_progress:
+                        stop_btn = self.slot_stop_buttons[slot_idx]
+                        progress = self.slot_progress[slot_idx]
+                        stop_btn.pack_forget()  # Ensure not already packed
+                        stop_btn.pack(side=tk.LEFT, padx=1, before=progress)
 
                 self.root.after(0, update_ui)
             else:

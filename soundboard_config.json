@@ -15,17 +15,6 @@
           "speed": 1.0,
           "preserve_pitch": true
         },
-        "0": {
-          "name": "1291763884000018594 - פלט",
-          "file_path": "sounds\\jesus-christ-kid_66804490.wav",
-          "hotkey": null,
-          "volume": 1.5,
-          "emoji": null,
-          "image_path": null,
-          "color": "#E91E63",
-          "speed": 1.0,
-          "preserve_pitch": true
-        },
         "1": {
           "name": "bloody-fuck-you-bloody_Jzdok0G",
           "file_path": "sounds\\bloody-fuck-you-bloody_Jzdok0G_15502481.wav",
@@ -34,8 +23,8 @@
           "emoji": null,
           "image_path": null,
           "color": null,
-          "speed": 1.0,
-          "preserve_pitch": true
+          "speed": 2.0,
+          "preserve_pitch": false
         },
         "4": {
           "name": "ראש צבע עיפרון",
@@ -52,11 +41,22 @@
           "name": "Arakara",
           "file_path": "sounds\\ALL You Need To Know On Ara-Kara Dungeon _ The War Within [ ezmp3.cc ]_14976165.wav",
           "hotkey": null,
-          "volume": 1.5,
+          "volume": 1.0,
           "emoji": null,
           "image_path": null,
           "color": "#9B59B6",
-          "speed": 1.0,
+          "speed": 1.76,
+          "preserve_pitch": true
+        },
+        "0": {
+          "name": "1291763884000018594 - פלט",
+          "file_path": "sounds\\jesus-christ-kid_66804490.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#E91E63",
+          "speed": 1.91,
           "preserve_pitch": true
         }
       }
