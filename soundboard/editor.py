@@ -13,11 +13,13 @@ import numpy as np
 import sounddevice as sd
 import soundfile as sf
 
+from .audio import read_audio_file
 from .constants import AUDIO, COLORS
 
 # Try to get ffmpeg path from imageio-ffmpeg (bundled ffmpeg)
 try:
     import imageio_ffmpeg
+
     FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
 except ImportError:
     FFMPEG_PATH = None
@@ -25,6 +27,7 @@ except ImportError:
 # Try to import pydub for extended format support (M4A, AAC, WMA, etc.)
 try:
     from pydub import AudioSegment
+
     # Configure pydub to use ffmpeg from imageio-ffmpeg if available
     if FFMPEG_PATH:
         AudioSegment.converter = FFMPEG_PATH
@@ -123,57 +126,10 @@ class SoundEditor:
 
     def _read_audio_file(self, file_path: str) -> Tuple[np.ndarray, int]:
         """
-        Read an audio file, using pydub as fallback for formats
-        that soundfile doesn't support (M4A, AAC, WMA, etc.).
+        Read an audio file. Delegates to shared read_audio_file function
+        which handles pydub fallback for OGG, M4A, AAC, WMA, etc.
         """
-        ext = Path(file_path).suffix.lower()
-
-        # Formats that soundfile usually handles well (but may fail on some files)
-        soundfile_formats = {".wav", ".flac", ".ogg", ".aiff", ".aif"}
-
-        # Try soundfile first for known supported formats
-        if ext in soundfile_formats:
-            try:
-                data, sr = sf.read(file_path, dtype="float32")
-                return data, sr
-            except Exception:
-                # Fall through to pydub fallback
-                pass
-
-        # Try soundfile for other formats (MP3 support varies)
-        try:
-            data, sr = sf.read(file_path, dtype="float32")
-            return data, sr
-        except Exception:
-            pass
-
-        # Fallback to pydub for OGG, M4A, AAC, WMA, WebM, etc.
-        if PYDUB_AVAILABLE:
-            try:
-                audio = AudioSegment.from_file(file_path)
-
-                # Get audio properties
-                channels = audio.channels
-                sr = audio.frame_rate
-
-                # Get raw samples as numpy array
-                samples = np.array(audio.get_array_of_samples(), dtype=np.float32)
-
-                # Normalize to [-1.0, 1.0] range
-                max_val = float(2 ** (audio.sample_width * 8 - 1))
-                samples = samples / max_val
-
-                # Reshape for stereo
-                if channels == 2:
-                    samples = samples.reshape((-1, 2))
-
-                return samples, sr
-            except Exception as e:
-                raise RuntimeError(f"Failed to load audio file. Format may require ffmpeg: {e}")
-        else:
-            raise RuntimeError(
-                f"Cannot load '{ext}' files. Install pydub and ffmpeg for extended format support."
-            )
+        return read_audio_file(file_path)
 
     def _create_dialog(self):
         """Create the editor dialog window."""
@@ -592,9 +548,11 @@ class SoundEditor:
             text=f"Total: {total_duration:.2f}s | Selected: {selected_duration:.2f}s"
         )
 
-        start_time = self.trim_start / self.sample_rate
-        end_time = self.trim_end / self.sample_rate
-        self.selection_label.config(text=f"Selection: {start_time:.2f}s - {end_time:.2f}s")
+        # selection_label may not exist during initial UI construction
+        if hasattr(self, "selection_label"):
+            start_time = self.trim_start / self.sample_rate
+            end_time = self.trim_end / self.sample_rate
+            self.selection_label.config(text=f"Selection: {start_time:.2f}s - {end_time:.2f}s")
 
     def _on_canvas_click(self, event):
         """Handle click on the canvas to select trim markers."""
@@ -727,7 +685,7 @@ class SoundEditor:
         """Prepare the selected audio data for playback."""
         if self.audio_data is None:
             return
-            
+
         audio_slice = self.audio_data[self.trim_start : self.trim_end]
 
         if audio_slice.ndim == 1:

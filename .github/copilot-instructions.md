@@ -120,15 +120,30 @@ LocalSoundBoardProject/
 - [x] Unlimited sounds per tab with scrolling support
 - [x] Preview progress bar with distinct green color
 - [x] Different colors for play modes (orange=Discord, green=preview)
+- [x] Improved OGG file loading via pydub fallback
+- [x] Better scrollbar visibility (only shows when needed)
+- [x] Improved slot sizing (larger slots for better text visibility)
 
 ---
 
 ## Planned Features / Backlog
 
+### High Priority
+- [ ] UI design overhaul (modernize look and feel)
+- [ ] Right-click popup on sounds (quick volume/speed controls)
+- [ ] Edit icon on sound slots (quick access to editor)
+
+### Medium Priority
+- [ ] Playback speed adjustment per sound
 - [ ] Drag-and-drop sound file import (from file explorer)
 - [ ] Search/filter sounds
+- [ ] add option to choose a color for a sound slot
+- [ ] Search/filter sounds.
+- [ ] add a sound group/type so we can later filter it or search
 - [ ] Looping sounds option
 - [ ] Fade in/out effects
+
+### Low Priority
 - [ ] Import/export config profiles (sounds, images, tabs)
 - [ ] System tray minimization
 - [ ] Auto-start with Windows
@@ -349,10 +364,11 @@ When asked to add a feature:
 
 | Issue | Cause | Fix |
 |-------|-------|-----|
-| OGG files fail with "malformed" error | `soundfile` claims OGG support but fails on some files | Wrap soundfile read in try/except, fallback to pydub for OGG |
+| OGG files fail with "malformed" error | `soundfile` claims OGG support but fails on some files | Use shared `read_audio_file()` function with pydub fallback. Don't include `.ogg` in soundfile_formats list. |
 | pydub can't load OGG/M4A/AAC | pydub requires ffmpeg binary which isn't bundled | Install `imageio-ffmpeg` (bundles ffmpeg), set `AudioSegment.converter` to `imageio_ffmpeg.get_ffmpeg_exe()` |
 | PTT releases too early | PTT released immediately when audio callback returns | Add debounce delay (5 callback cycles ~100ms) before releasing PTT |
 | Sounds don't play with rapid clicks | Lock contention and duplicate cache lookups | Queue sound before taking locks, use single cache lookup |
+| Direct sf.read() fails for OGG | Multiple code paths used sf.read directly without fallback | Consolidated audio loading to shared `read_audio_file()` function in audio.py |
 
 ### GUI / Tkinter
 
@@ -361,6 +377,12 @@ When asked to add a feature:
 | Progress bar shows on wrong tab | Playing state not tracking which tab the sound belongs to | Store `tab_idx` in `playing_slots` dict, only update UI if current tab matches |
 | Preview button not visible | Button hidden by expanding main button | Pack bottom frame FIRST at bottom, then main button expands into remaining space |
 | UI elements resize unexpectedly | Grid weights and pack expand options | Use `grid_propagate(False)` and `pack_propagate(False)` to lock sizes; set `resizable(False, False)` on window |
+| Sound plays twice on click | Button had both `command=` and drag bindings that call `_play_slot` | Remove `command=` from button, let drag `_on_drag_end` handle click-to-play |
+| Colors reset when dragging | `_reset_drag_highlights()` set all slots to `bg_medium` instead of proper color | Call `_update_slot_button()` to restore full button appearance |
+| Playing color shows on wrong tab after switch | `_update_slot_button` didn't check if playing state was for current tab | Check `playing_slots[idx].get("tab_idx") == current_tab_idx` before applying playing color |
+| Scrollbar shows when not needed | Scrollbar always visible even with few slots | Add `_update_scrollbar_visibility()` to show/hide based on content height vs canvas height |
+| Scrollbar visibility false positive | `winfo_height()` returns 1 before widget is mapped | Check `canvas_height <= 1` and return early; use `winfo_ismapped()` before pack/pack_forget |
+| Editor crashes on OGG import | `_update_info_labels()` called before `selection_label` created | Add `hasattr()` check before updating `selection_label` in `_update_info_labels()` |
 
 ### General Rules
 

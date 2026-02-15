@@ -59,6 +59,7 @@ def _simulate_mouse_button(button: str, press: bool = True):
 # Try to get ffmpeg path from imageio-ffmpeg (bundled ffmpeg)
 try:
     import imageio_ffmpeg
+
     FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
 except ImportError:
     FFMPEG_PATH = None
@@ -66,6 +67,7 @@ except ImportError:
 # Try to import pydub for extended format support (M4A, AAC, WMA, etc.)
 try:
     from pydub import AudioSegment
+
     # Configure pydub to use ffmpeg from imageio-ffmpeg if available
     if FFMPEG_PATH:
         AudioSegment.converter = FFMPEG_PATH
@@ -74,6 +76,69 @@ try:
     PYDUB_AVAILABLE = True
 except ImportError:
     PYDUB_AVAILABLE = False
+
+
+def read_audio_file(file_path: str) -> Tuple[np.ndarray, int]:
+    """
+    Read an audio file, using pydub as fallback for formats
+    that soundfile doesn't support well (OGG, M4A, AAC, WMA, etc.).
+
+    Returns:
+        Tuple of (audio_data as numpy array, sample_rate)
+
+    Raises:
+        RuntimeError if the file cannot be loaded
+    """
+    ext = Path(file_path).suffix.lower()
+
+    # Formats that soundfile usually handles well (but may fail on some OGG files)
+    soundfile_formats = {".wav", ".flac", ".aiff", ".aif"}
+
+    # Try soundfile first for known reliable formats
+    if ext in soundfile_formats:
+        try:
+            data, sr = sf.read(file_path, dtype="float32")
+            return data, sr
+        except Exception:
+            pass  # Fall through to pydub fallback
+
+    # Try soundfile for other formats (might work for some MP3s)
+    try:
+        data, sr = sf.read(file_path, dtype="float32")
+        return data, sr
+    except Exception:
+        pass  # Fall through to pydub fallback
+
+    # Fallback to pydub for OGG, M4A, AAC, WMA, WebM, etc.
+    if PYDUB_AVAILABLE:
+        try:
+            audio = AudioSegment.from_file(file_path)
+
+            # Get audio properties
+            channels = audio.channels
+            sr = audio.frame_rate
+
+            # Get raw samples as numpy array
+            samples = np.array(audio.get_array_of_samples(), dtype=np.float32)
+
+            # Normalize to [-1.0, 1.0] range
+            max_val = float(2 ** (audio.sample_width * 8 - 1))
+            samples = samples / max_val
+
+            # Reshape for stereo
+            if channels == 2:
+                samples = samples.reshape((-1, 2))
+
+            return samples, sr
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to load audio file '{file_path}'. " f"Format may require ffmpeg: {e}"
+            )
+    else:
+        raise RuntimeError(
+            f"Cannot load '{ext}' files. Install pydub and ffmpeg for extended format support: "
+            f"pip install pydub"
+        )
 
 
 class SoundCache:
@@ -181,61 +246,9 @@ class SoundCache:
 
     def _read_audio_file(self, file_path: str) -> Tuple[np.ndarray, int]:
         """
-        Read an audio file, using pydub as fallback for formats
-        that soundfile doesn't support (M4A, AAC, WMA, etc.).
+        Read an audio file. Delegates to module-level read_audio_file function.
         """
-        ext = Path(file_path).suffix.lower()
-
-        # Formats that soundfile usually handles well (but may fail on some files)
-        soundfile_formats = {".wav", ".flac", ".ogg", ".aiff", ".aif"}
-
-        # Try soundfile first for known supported formats
-        if ext in soundfile_formats:
-            try:
-                data, sr = sf.read(file_path, dtype="float32")
-                return data, sr
-            except Exception:
-                # Fall through to pydub fallback
-                pass
-
-        # Try soundfile for other formats (MP3 support varies)
-        try:
-            data, sr = sf.read(file_path, dtype="float32")
-            return data, sr
-        except Exception:
-            pass
-
-        # Fallback to pydub for OGG, M4A, AAC, WMA, WebM, etc.
-        if PYDUB_AVAILABLE:
-            try:
-                audio = AudioSegment.from_file(file_path)
-
-                # Convert to mono or keep stereo
-                channels = audio.channels
-                sr = audio.frame_rate
-
-                # Get raw samples as numpy array
-                samples = np.array(audio.get_array_of_samples(), dtype=np.float32)
-
-                # Normalize to [-1.0, 1.0] range
-                max_val = float(2 ** (audio.sample_width * 8 - 1))
-                samples = samples / max_val
-
-                # Reshape for stereo
-                if channels == 2:
-                    samples = samples.reshape((-1, 2))
-
-                return samples, sr
-            except Exception as e:
-                raise RuntimeError(
-                    f"Failed to load audio file '{file_path}'. " f"Format may require ffmpeg: {e}"
-                )
-        else:
-            raise RuntimeError(
-                f"Cannot load '{ext}' files. Install pydub and ffmpeg for extended format support: "
-                f"pip install pydub"
-            )
-            raise
+        return read_audio_file(file_path)
 
     def get_sound_data(self, file_path: str) -> Optional[np.ndarray]:
         """
@@ -594,11 +607,11 @@ class AudioMixer:
                         f.write(f"[PLAY] Queued from cache: {len(data)} samples\n")
                     return len(data) / self.sample_rate
 
-            # Fallback: load from disk (slower)
+            # Fallback: load from disk (slower) - uses pydub for OGG/M4A/etc
             if not os.path.exists(file_path):
                 return 0.0
 
-            data, sr = sf.read(file_path, dtype="float32")
+            data, sr = read_audio_file(file_path)
 
             # Resample if needed
             if sr != self.sample_rate:

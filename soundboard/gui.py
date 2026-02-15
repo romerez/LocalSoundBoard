@@ -708,16 +708,27 @@ class SoundboardApp:
             return
         content_height = bbox[3] - bbox[1]
         canvas_height = self.slots_canvas.winfo_height()
-        
-        if content_height > canvas_height:
+
+        # Canvas returns 1 before it's properly mapped - ignore these cases
+        if canvas_height <= 1:
+            return
+
+        # Add small buffer (5px) to prevent edge cases where it flickers
+        if content_height > canvas_height + 5:
             # Content is larger than canvas - show scrollbar
-            self.slots_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            if not self.slots_scrollbar.winfo_ismapped():
+                self.slots_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         else:
             # Content fits - hide scrollbar
-            self.slots_scrollbar.pack_forget()
+            if self.slots_scrollbar.winfo_ismapped():
+                self.slots_scrollbar.pack_forget()
 
     def _on_mousewheel(self, event):
         """Handle mouse wheel scrolling."""
+        # Only scroll if scrollbar is visible (content exceeds canvas)
+        if not self.slots_scrollbar.winfo_ismapped():
+            return
+
         # Only scroll if mouse is over the canvas area
         widget = event.widget
         if widget == self.slots_canvas or str(widget).startswith(str(self.slots_canvas)):
@@ -739,9 +750,11 @@ class SoundboardApp:
         max_idx = max(tab.slots.keys()) if tab.slots else -1
         num_slots = max(max_idx + 2, UI["total_slots"])  # +2 to have at least 1 empty
 
-        # Fixed slot dimensions
-        SLOT_WIDTH = 160
-        SLOT_HEIGHT = 90
+        # Fixed slot dimensions - sized to fit 4 columns nicely in window
+        # Window is 760px, main frame has 10px padding, board_frame has 10px padding
+        # Available width: ~700px for 4 columns with 4px padding each side = 168px per slot
+        SLOT_WIDTH = 166
+        SLOT_HEIGHT = 100  # Increased for better text visibility
         BOTTOM_HEIGHT = 22
 
         # Create sound slot compound widgets (button + progress bar)
@@ -755,7 +768,7 @@ class SoundboardApp:
                 width=SLOT_WIDTH,
                 height=SLOT_HEIGHT + BOTTOM_HEIGHT,
             )
-            slot_frame.grid(row=row, column=col, padx=4, pady=4)
+            slot_frame.grid(row=row, column=col, padx=3, pady=3)
             slot_frame.grid_propagate(False)  # Lock frame size
             slot_frame.pack_propagate(False)  # Lock frame size
 
@@ -1218,7 +1231,7 @@ class SoundboardApp:
                 slot_idx in self.preview_slots
                 and self.preview_slots[slot_idx].get("tab_idx") == self.current_tab_idx
             )
-            
+
             if is_playing:
                 self.slot_buttons[slot_idx].configure(bg=COLORS["playing"])
             elif is_previewing:
@@ -1502,7 +1515,7 @@ class SoundboardApp:
                 emoji=emoji_var.get() or None,
                 image_path=image_var.get() or None,
             )
-            self._update_slot_button(slot_idx)
+            self._refresh_slot_buttons()  # Refresh to create new empty slots if needed
             self._register_hotkeys()
             self._save_config()
             dialog.destroy()
@@ -1627,7 +1640,7 @@ class SoundboardApp:
             slot_idx in self.preview_slots
             and self.preview_slots[slot_idx].get("tab_idx") == self.current_tab_idx
         )
-        
+
         if is_playing:
             bg_color = COLORS["playing"]
         elif is_previewing:
