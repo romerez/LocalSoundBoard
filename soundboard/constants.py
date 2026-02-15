@@ -17,6 +17,22 @@ COLORS = {
     "text_muted": "#8E9297",
 }
 
+# Slot color palette for customization
+SLOT_COLORS = {
+    "Default": "#7289DA",  # Blurple (default)
+    "Red": "#F04747",
+    "Orange": "#FAA61A",
+    "Yellow": "#FEE75C",
+    "Green": "#43B581",
+    "Teal": "#3BA55D",
+    "Cyan": "#00D4AA",
+    "Blue": "#3498DB",
+    "Purple": "#9B59B6",
+    "Pink": "#E91E63",
+    "Magenta": "#EB459E",
+    "Gray": "#747F8D",
+}
+
 # Audio settings
 AUDIO = {
     "sample_rate": 48000,  # Discord standard

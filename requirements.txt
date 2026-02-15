@@ -7,3 +7,4 @@ pynput>=1.7.0
 pillow>=10.0.0
 pydub>=0.25.1
 imageio-ffmpeg>=0.6.0  # Bundled ffmpeg for pydub OGG/M4A/AAC support
+librosa>=0.10.0  # Time-stretching for pitch-preserving speed changes

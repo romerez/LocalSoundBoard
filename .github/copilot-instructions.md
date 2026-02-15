@@ -123,6 +123,10 @@ LocalSoundBoardProject/
 - [x] Improved OGG file loading via pydub fallback
 - [x] Better scrollbar visibility (only shows when needed)
 - [x] Improved slot sizing (larger slots for better text visibility)
+- [x] Edit button (✏️) on sound slots for quick access to settings
+- [x] Right-click popup for quick volume/speed adjustment
+- [x] Playback speed adjustment per sound (0.5x to 2x)
+- [x] Custom color selection for sound slots (12 color palette)
 
 ---
 
@@ -130,18 +134,14 @@ LocalSoundBoardProject/
 
 ### High Priority
 - [ ] UI design overhaul (modernize look and feel)
-- [ ] Right-click popup on sounds (quick volume/speed controls)
-- [ ] Edit icon on sound slots (quick access to editor)
 
 ### Medium Priority
-- [ ] Playback speed adjustment per sound
 - [ ] Drag-and-drop sound file import (from file explorer)
 - [ ] Search/filter sounds
-- [ ] add option to choose a color for a sound slot
-- [ ] Search/filter sounds.
-- [ ] add a sound group/type so we can later filter it or search
+- [ ] Add a sound group/type so we can later filter it or search
 - [ ] Looping sounds option
 - [ ] Fade in/out effects
+- [ ] Add stream deck integration
 
 ### Low Priority
 - [ ] Import/export config profiles (sounds, images, tabs)
@@ -167,6 +167,8 @@ class SoundSlot:
     volume: float                # 0.0 to 1.5
     emoji: str | None            # Emoji character to display
     image_path: str | None       # Path to custom image/gif
+    color: str | None            # Custom background color (hex)
+    speed: float                 # Playback speed (0.5 to 2.0)
 ```
 
 #### `SoundTab` (dataclass)
@@ -383,6 +385,12 @@ When asked to add a feature:
 | Scrollbar shows when not needed | Scrollbar always visible even with few slots | Add `_update_scrollbar_visibility()` to show/hide based on content height vs canvas height |
 | Scrollbar visibility false positive | `winfo_height()` returns 1 before widget is mapped | Check `canvas_height <= 1` and return early; use `winfo_ismapped()` before pack/pack_forget |
 | Editor crashes on OGG import | `_update_info_labels()` called before `selection_label` created | Add `hasattr()` check before updating `selection_label` in `_update_info_labels()` |
+| Mouse wheel scrolls when no scrollbar | `_on_mousewheel` always scrolls regardless of scrollbar state | Check `slots_scrollbar.winfo_ismapped()` before allowing scroll |
+| No new slots after filling all | `save` only called `_update_slot_button` not `_refresh_slot_buttons` | Call `_refresh_slot_buttons()` after save/clear to create new empty slots |
+| Sound replays when switching tabs | Drag state not cleared on tab switch, or double-event race condition | Clear `drag_source_idx`/`is_dragging` FIRST in `_on_drag_end`, and also clear in `_switch_tab` |
+| Empty slot '+' button doesn't open dialog | For empty slots, `drag_source_idx=None` causes `_on_drag_end` to return early | Track empty slot clicks separately with `empty_slot_clicked` variable, check it in `_on_drag_end` |
+| Sound plays when clicking tab button | Slot's `ButtonRelease-1` fires even when releasing on a different widget (tab) | Check `winfo_containing()` to verify release is on same slot button; use `click_in_progress` flag and return `"break"` to stop event propagation |
+| Tab buttons unresponsive while sound plays | Slot drag handlers don't properly isolate their events from other widgets | Add `click_in_progress` flag set on `_on_drag_start`, check it in `_on_drag_end`; clear flag on tab switch; return `"break"` from all drag handlers |
 
 ### General Rules
 
@@ -391,3 +399,4 @@ When asked to add a feature:
 3. **Path handling must support both forward and backslashes on Windows**
 4. **Audio file format support varies** - always have pydub fallback ready
 5. **Atomic writes for all config/state files** - prevents corruption on crash
+6. **Tkinter event handling** - return `"break"` to stop event propagation; use `winfo_containing()` to check actual widget under cursor on release; track click state with flags to prevent stray events

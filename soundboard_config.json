@@ -4,29 +4,16 @@
       "name": "Main",
       "emoji": "🎵",
       "slots": {
-        "1": {
-          "name": "bloody-fuck-you-bloody_Jzdok0G",
-          "file_path": "sounds\\bloody-fuck-you-bloody_Jzdok0G_15502481.wav",
-          "hotkey": null,
-          "volume": 1.0,
-          "emoji": null,
-          "image_path": null
-        },
         "3": {
           "name": "aint-nobody-got-time-for-that_1",
           "file_path": "sounds\\aint-nobody-got-time-for-that_1_98957508.wav",
           "hotkey": null,
           "volume": 1.0,
           "emoji": null,
-          "image_path": null
-        },
-        "2": {
-          "name": "Arakara",
-          "file_path": "sounds\\ALL You Need To Know On Ara-Kara Dungeon _ The War Within [ ezmp3.cc ]_14976165.wav",
-          "hotkey": null,
-          "volume": 1.0,
-          "emoji": null,
-          "image_path": null
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true
         },
         "0": {
           "name": "1291763884000018594 - פלט",
@@ -34,7 +21,43 @@
           "hotkey": null,
           "volume": 1.0,
           "emoji": null,
-          "image_path": null
+          "image_path": null,
+          "color": "#E91E63",
+          "speed": 1.0,
+          "preserve_pitch": true
+        },
+        "1": {
+          "name": "bloody-fuck-you-bloody_Jzdok0G",
+          "file_path": "sounds\\bloody-fuck-you-bloody_Jzdok0G_15502481.wav",
+          "hotkey": null,
+          "volume": 1.5,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true
+        },
+        "4": {
+          "name": "ראש צבע עיפרון",
+          "file_path": "sounds\\[appsgolem.com][00-03-40][00-03-45]__ (1)_78640441.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": "✔️",
+          "image_path": null,
+          "color": "#7289DA",
+          "speed": 1.0,
+          "preserve_pitch": true
+        },
+        "2": {
+          "name": "Arakara",
+          "file_path": "sounds\\ALL You Need To Know On Ara-Kara Dungeon _ The War Within [ ezmp3.cc ]_14976165.wav",
+          "hotkey": null,
+          "volume": 1.5,
+          "emoji": null,
+          "image_path": null,
+          "color": "#9B59B6",
+          "speed": 1.0,
+          "preserve_pitch": true
         }
       }
     },
@@ -48,7 +71,10 @@
           "hotkey": null,
           "volume": 1.0,
           "emoji": null,
-          "image_path": null
+          "image_path": "images\\First-time-james-franco-hanging-meme_6287e7cc.jpg",
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true
         }
       }
     }

@@ -78,6 +78,15 @@ except ImportError:
     PYDUB_AVAILABLE = False
 
 
+# Try to import librosa for pitch-preserving time-stretch
+try:
+    import librosa
+
+    LIBROSA_AVAILABLE = True
+except ImportError:
+    LIBROSA_AVAILABLE = False
+
+
 def read_audio_file(file_path: str) -> Tuple[np.ndarray, int]:
     """
     Read an audio file, using pydub as fallback for formats
@@ -585,8 +594,14 @@ class AudioMixer:
             except queue.Full:
                 pass  # Drop frame if queue is full
 
-    def play_sound(self, file_path: str, volume: float = 1.0) -> float:
+    def play_sound(self, file_path: str, volume: float = 1.0, speed: float = 1.0, preserve_pitch: bool = True) -> float:
         """Queue a sound for playback. Uses cache if available for better performance.
+
+        Args:
+            file_path: Path to the audio file
+            volume: Playback volume (0.0 to 1.5)
+            speed: Playback speed (0.5 to 2.0, where 1.0 is normal)
+            preserve_pitch: If True, use time-stretch to preserve pitch; if False, simple resample
 
         Returns the duration of the sound in seconds (0.0 if failed to play).
         """
@@ -595,16 +610,22 @@ class AudioMixer:
             # This prevents PTT from releasing while we're loading/queueing
             self._ptt_release_countdown = 0
 
+            # Clamp speed to valid range
+            speed = max(0.5, min(2.0, speed))
+
             # Use cached audio data if available (much faster - no disk I/O)
             if self.sound_cache:
                 data = self.sound_cache.get_sound_data(file_path)
                 if data is not None:
+                    # Apply speed adjustment
+                    if speed != 1.0:
+                        data = self._apply_speed(data, speed, preserve_pitch)
                     # Queue sound FIRST, then press PTT (prevents race condition where
                     # output callback sees empty queue and releases PTT immediately)
                     self.sound_queue.put({"data": data, "position": 0, "volume": volume})
                     self._press_ptt()
                     with open("debug.log", "a") as f:
-                        f.write(f"[PLAY] Queued from cache: {len(data)} samples\n")
+                        f.write(f"[PLAY] Queued from cache: {len(data)} samples (speed={speed}, preserve_pitch={preserve_pitch})\n")
                     return len(data) / self.sample_rate
 
             # Fallback: load from disk (slower) - uses pydub for OGG/M4A/etc
@@ -620,8 +641,12 @@ class AudioMixer:
                 indices = np.linspace(0, len(data) - 1, new_length).astype(int)
                 data = data[indices]
 
+            # Apply speed adjustment
+            if speed != 1.0:
+                data = self._apply_speed(data, speed, preserve_pitch)
+
             with open("debug.log", "a") as f:
-                f.write(f"[AUDIO] Playing from disk: {len(data)} samples\n")
+                f.write(f"[AUDIO] Playing from disk: {len(data)} samples (speed={speed}, preserve_pitch={preserve_pitch})\n")
             # Queue sound FIRST, then press PTT
             self.sound_queue.put({"data": data, "position": 0, "volume": volume})
             self._press_ptt()
@@ -630,6 +655,62 @@ class AudioMixer:
             with open("debug.log", "a") as f:
                 f.write(f"[AUDIO] Error loading sound: {e}\n")
             return 0.0
+
+    def _apply_speed(self, data: np.ndarray, speed: float, preserve_pitch: bool = True) -> np.ndarray:
+        """Apply playback speed adjustment to audio data.
+
+        Args:
+            data: Audio data as numpy array
+            speed: Speed factor (>1.0 = faster, <1.0 = slower)
+            preserve_pitch: If True, use time-stretch (natural sound); if False, simple resample (chipmunk/deep voice)
+
+        Speed > 1.0 = faster (shorter duration)
+        Speed < 1.0 = slower (longer duration)
+        """
+        if speed == 1.0:
+            return data
+
+        # Try pitch-preserving time-stretch if librosa is available and preserve_pitch is True
+        if preserve_pitch and LIBROSA_AVAILABLE:
+            try:
+                # librosa.effects.time_stretch expects mono audio
+                # For stereo, we need to process each channel separately
+                if data.ndim == 1:
+                    # Mono audio
+                    result = librosa.effects.time_stretch(data, rate=speed)
+                else:
+                    # Stereo audio - process each channel
+                    channels = []
+                    for ch in range(data.shape[1]):
+                        stretched = librosa.effects.time_stretch(data[:, ch], rate=speed)
+                        channels.append(stretched)
+                    # Stack channels back together
+                    result = np.column_stack(channels)
+                return result.astype(np.float32)
+            except Exception as e:
+                # Fall back to simple resampling if librosa fails
+                with open("debug.log", "a") as f:
+                    f.write(f"[AUDIO] librosa time_stretch failed, falling back: {e}\n")
+
+        # Simple resampling (changes pitch with speed - chipmunk/deep effect)
+        new_length = int(len(data) / speed)
+        if new_length < 1:
+            return data
+
+        # Simple resampling using linear interpolation
+        old_indices = np.arange(len(data))
+        new_indices = np.linspace(0, len(data) - 1, new_length)
+
+        # Handle both mono (1D) and stereo (2D) data
+        if data.ndim == 1:
+            result = np.interp(new_indices, old_indices, data)
+        else:
+            # Stereo: interpolate each channel separately
+            result = np.zeros((new_length, data.shape[1]), dtype=np.float32)
+            for ch in range(data.shape[1]):
+                result[:, ch] = np.interp(new_indices, old_indices, data[:, ch])
+
+        return result.astype(np.float32)
 
     def stop_all_sounds(self):
         """Clear playback queue and stop all sounds."""

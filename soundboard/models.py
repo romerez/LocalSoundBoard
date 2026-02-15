@@ -16,6 +16,9 @@ class SoundSlot:
     volume: float = 1.0
     emoji: Optional[str] = None  # Emoji character to display
     image_path: Optional[str] = None  # Path to custom image/gif
+    color: Optional[str] = None  # Custom background color (hex)
+    speed: float = 1.0  # Playback speed (0.5 to 2.0)
+    preserve_pitch: bool = True  # If True, use time-stretch; if False, simple resample (chipmunk effect)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -26,6 +29,9 @@ class SoundSlot:
             "volume": self.volume,
             "emoji": self.emoji,
             "image_path": self.image_path,
+            "color": self.color,
+            "speed": self.speed,
+            "preserve_pitch": self.preserve_pitch,
         }
 
     @classmethod
@@ -38,6 +44,9 @@ class SoundSlot:
             volume=data.get("volume", 1.0),
             emoji=data.get("emoji"),
             image_path=data.get("image_path"),
+            color=data.get("color"),
+            speed=data.get("speed", 1.0),
+            preserve_pitch=data.get("preserve_pitch", True),
         )
 
 
