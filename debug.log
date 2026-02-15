@@ -1,948 +1,222 @@
+[IMPORT] librosa imported successfully: 0.11.0
+[PTT] Key set to: mouse4
+[IMPORT] librosa import FAILED: ModuleNotFoundError: No module named 'librosa'
 [PTT] Key set to: mouse4
 [PTT] Pressing: mouse4
 [PTT] Using Windows API to press: x2
 [PTT] Windows API mouse press done
 [PTT] Active = True
-[PLAY] Queued from cache: 40794 samples
+[PLAY] Queued from cache: 40794 samples (speed=1.0, preserve_pitch=True, volume=1.5)
 [PTT] Pressing: mouse4
 [PTT] Using Windows API to press: x2
 [PTT] Windows API mouse press done
 [PTT] Active = True
-[PLAY] Queued from cache: 56475 samples
+[PLAY] Queued from cache: 40794 samples (speed=1.0, preserve_pitch=True, volume=1.5)
 [PTT] Pressing: mouse4
 [PTT] Using Windows API to press: x2
 [PTT] Windows API mouse press done
 [PTT] Active = True
-[PLAY] Queued from cache: 165642 samples
-[PLAY] Queued from cache: 71026 samples
-[PLAY] Queued from cache: 56475 samples
+[PLAY] Queued from cache: 40794 samples (speed=1.0, preserve_pitch=True, volume=1.5)
 [PTT] Pressing: mouse4
 [PTT] Using Windows API to press: x2
 [PTT] Windows API mouse press done
 [PTT] Active = True
-[PLAY] Queued from cache: 56475 samples
-[PLAY] Queued from cache: 71026 samples
-[PLAY] Queued from cache: 40794 samples
+[PLAY] Queued from cache: 40794 samples (speed=1.0, preserve_pitch=True, volume=1.5)
 [PTT] Pressing: mouse4
 [PTT] Using Windows API to press: x2
 [PTT] Windows API mouse press done
 [PTT] Active = True
-[PLAY] Queued from cache: 165642 samples
-[PLAY] Queued from cache: 56475 samples
+[PLAY] Queued from cache: 165642 samples (speed=1.0, preserve_pitch=True, volume=1.5)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 165642 samples (speed=1.0, preserve_pitch=True, volume=1.5)
+[SPEED] _apply_speed called: speed=1.57, preserve_pitch=False, LIBROSA=True
+[SPEED] Using simple resample (preserve_pitch=False, LIBROSA=True)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 53541 samples (speed=1.57, preserve_pitch=False, volume=1.5)
+[SPEED] _apply_speed called: speed=1.57, preserve_pitch=False, LIBROSA=True
+[SPEED] Using simple resample (preserve_pitch=False, LIBROSA=True)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 53541 samples (speed=1.57, preserve_pitch=False, volume=1.5)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 84060 samples (speed=1.0, preserve_pitch=True, volume=1.5)
+[SPEED] _apply_speed called: speed=2.0, preserve_pitch=True, LIBROSA=True
+[SPEED] Attempting librosa time_stretch...
+[SPEED] Processing 2 stereo channels...
+[SPEED] librosa SUCCESS: 84060 -> 42030 samples
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 42030 samples (speed=2.0, preserve_pitch=True, volume=1.5)
+[SPEED] _apply_speed called: speed=2.0, preserve_pitch=True, LIBROSA=True
+[SPEED] Attempting librosa time_stretch...
+[SPEED] Processing 2 stereo channels...
+[SPEED] librosa SUCCESS: 84060 -> 42030 samples
+[PLAY] Queued from cache: 42030 samples (speed=2.0, preserve_pitch=True, volume=1.5)
+[SPEED] _apply_speed called: speed=2.0, preserve_pitch=True, LIBROSA=True
+[SPEED] Attempting librosa time_stretch...
+[SPEED] Processing 2 stereo channels...
+[SPEED] librosa SUCCESS: 84060 -> 42030 samples
+[PLAY] Queued from cache: 42030 samples (speed=2.0, preserve_pitch=True, volume=1.5)
+[SPEED] _apply_speed called: speed=2.0, preserve_pitch=True, LIBROSA=True
+[SPEED] Attempting librosa time_stretch...
+[SPEED] Processing 2 stereo channels...
+[SPEED] librosa SUCCESS: 84060 -> 42030 samples
+[PLAY] Queued from cache: 42030 samples (speed=2.0, preserve_pitch=True, volume=1.5)
+[SPEED] _apply_speed called: speed=2.0, preserve_pitch=True, LIBROSA=True
+[SPEED] Attempting librosa time_stretch...
+[SPEED] Processing 2 stereo channels...
+[SPEED] librosa SUCCESS: 84060 -> 42030 samples
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 42030 samples (speed=2.0, preserve_pitch=True, volume=1.5)
+[SPEED] _apply_speed called: speed=0.5, preserve_pitch=True, LIBROSA=True
+[SPEED] Attempting librosa time_stretch...
+[SPEED] Processing 2 stereo channels...
+[SPEED] librosa SUCCESS: 84060 -> 168120 samples
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 168120 samples (speed=0.5, preserve_pitch=True, volume=1.5)
+[IMPORT] librosa imported successfully: 0.11.0
+[IMPORT] librosa imported successfully: 0.11.0
+[IMPORT] librosa imported successfully: 0.11.0
+[IMPORT] librosa imported successfully: 0.11.0
 [PTT] Key set to: mouse4
+[SPEED] _apply_speed called: speed=0.5, preserve_pitch=True, LIBROSA=True
+[SPEED] Attempting librosa time_stretch...
+[SPEED] Processing 2 stereo channels...
+[SPEED] librosa SUCCESS: 84060 -> 168120 samples
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 168120 samples (speed=0.5, preserve_pitch=True, volume=1.5)
+[SPEED] _apply_speed called: speed=0.5, preserve_pitch=True, LIBROSA=True
+[SPEED] Attempting librosa time_stretch...
+[SPEED] Processing 2 stereo channels...
+[SPEED] librosa SUCCESS: 84060 -> 168120 samples
+[PLAY] Queued from cache: 168120 samples (speed=0.5, preserve_pitch=True, volume=1.5)
+[SPEED] _apply_speed called: speed=0.5, preserve_pitch=True, LIBROSA=True
+[SPEED] Attempting librosa time_stretch...
+[SPEED] Processing 2 stereo channels...
+[SPEED] librosa SUCCESS: 84060 -> 168120 samples
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 168120 samples (speed=0.5, preserve_pitch=True, volume=1.5)
+[SPEED] _apply_speed called: speed=0.5, preserve_pitch=True, LIBROSA=True
+[SPEED] Attempting librosa time_stretch...
+[SPEED] Processing 2 stereo channels...
+[SPEED] librosa SUCCESS: 84060 -> 168120 samples
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 168120 samples (speed=0.5, preserve_pitch=True, volume=1.0)
+[SPEED] _apply_speed called: speed=0.5, preserve_pitch=True, LIBROSA=True
+[SPEED] Attempting librosa time_stretch...
+[SPEED] Processing 2 stereo channels...
+[SPEED] librosa SUCCESS: 84060 -> 168120 samples
+[PLAY] Queued from cache: 168120 samples (speed=0.5, preserve_pitch=True, volume=1.0)
+[SPEED] _apply_speed called: speed=0.5, preserve_pitch=True, LIBROSA=True
+[SPEED] Attempting librosa time_stretch...
+[SPEED] Processing 2 stereo channels...
+[SPEED] librosa SUCCESS: 84060 -> 168120 samples
+[PLAY] Queued from cache: 168120 samples (speed=0.5, preserve_pitch=True, volume=1.0)
+[IMPORT] librosa import FAILED: ModuleNotFoundError: No module named 'librosa'
 [PTT] Key set to: mouse4
-[PTT] Key set to: mouse4
-[PTT] Key set to: mouse4
+[SPEED] _apply_speed called: speed=0.5, preserve_pitch=True, LIBROSA=False
+[SPEED] Using simple resample (preserve_pitch=True, LIBROSA=False)
 [PTT] Pressing: mouse4
 [PTT] Using Windows API to press: x2
 [PTT] Windows API mouse press done
 [PTT] Active = True
-[PLAY] Queued from cache: 40794 samples
+[PLAY] Queued from cache: 168120 samples (speed=0.5, preserve_pitch=True, volume=1.0)
 [PTT] Pressing: mouse4
 [PTT] Using Windows API to press: x2
 [PTT] Windows API mouse press done
 [PTT] Active = True
-[PLAY] Queued from cache: 56475 samples
+[PLAY] Queued from cache: 84060 samples (speed=1.0, preserve_pitch=True, volume=1.0)
 [PTT] Pressing: mouse4
 [PTT] Using Windows API to press: x2
 [PTT] Windows API mouse press done
 [PTT] Active = True
-[PLAY] Queued from cache: 289880 samples
+[PLAY] Queued from cache: 84060 samples (speed=1.0, preserve_pitch=True, volume=1.5)
 [PTT] Pressing: mouse4
 [PTT] Using Windows API to press: x2
 [PTT] Windows API mouse press done
 [PTT] Active = True
-[PLAY] Queued from cache: 56475 samples
+[PLAY] Queued from cache: 182354 samples (speed=1.0, preserve_pitch=True, volume=1.5)
 [PTT] Pressing: mouse4
 [PTT] Using Windows API to press: x2
 [PTT] Windows API mouse press done
 [PTT] Active = True
-[PLAY] Queued from cache: 71026 samples
-[PTT] Key set to: mouse4
+[PLAY] Queued from cache: 182354 samples (speed=1.0, preserve_pitch=True, volume=1.0)
 [PTT] Pressing: mouse4
 [PTT] Using Windows API to press: x2
 [PTT] Windows API mouse press done
 [PTT] Active = True
-[PLAY] Queued from cache: 40794 samples
+[PLAY] Queued from cache: 182354 samples (speed=1.0, preserve_pitch=True, volume=0.49)
+[PLAY] Queued from cache: 182354 samples (speed=1.0, preserve_pitch=True, volume=1.5)
 [PTT] Pressing: mouse4
 [PTT] Using Windows API to press: x2
 [PTT] Windows API mouse press done
 [PTT] Active = True
-[PLAY] Queued from cache: 40794 samples
+[PLAY] Queued from cache: 182354 samples (speed=1.0, preserve_pitch=True, volume=1.0)
 [PTT] Pressing: mouse4
 [PTT] Using Windows API to press: x2
 [PTT] Windows API mouse press done
 [PTT] Active = True
-[PLAY] Queued from cache: 56475 samples
-[PLAY] Queued from cache: 56475 samples
-[PLAY] Queued from cache: 71026 samples
-[PTT] Key set to: mouse4
+[PLAY] Queued from cache: 182354 samples (speed=1.0, preserve_pitch=True, volume=1.0)
+[PLAY] Queued from cache: 182354 samples (speed=1.0, preserve_pitch=True, volume=1.0)
 [PTT] Pressing: mouse4
 [PTT] Using Windows API to press: x2
 [PTT] Windows API mouse press done
 [PTT] Active = True
-[PLAY] Queued from cache: 40794 samples
-[PTT] Key set to: mouse4
+[PLAY] Queued from cache: 182354 samples (speed=1.0, preserve_pitch=True, volume=1.0)
 [PTT] Pressing: mouse4
 [PTT] Using Windows API to press: x2
 [PTT] Windows API mouse press done
 [PTT] Active = True
-[PLAY] Queued from cache: 56475 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 165642 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 56475 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 40794 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 71026 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 165642 samples
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 56475 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 165642 samples
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 56475 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 56475 samples
-[PTT] Key set to: mouse4
-[PTT] Key set to: None
-[PTT] Key set to: mouse4
-[PTT] Key set to: None
-[PTT] Key set to: mouse4
-[PTT] Key set to: None
-[PTT] Key set to: mouse4
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 56475 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 56475 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 56475 samples
-[PLAY] Queued from cache: 56475 samples
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 56475 samples
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 56475 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 56475 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 71026 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 40794 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 40794 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 40794 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 40794 samples
-[PTT] Key set to: mouse4
+[PLAY] Queued from cache: 182354 samples (speed=1.0, preserve_pitch=True, volume=1.0)
+[IMPORT] librosa imported successfully: 0.11.0
 [PTT] Key set to: mouse4
 [PTT] Pressing: mouse4
 [PTT] Using Windows API to press: x2
 [PTT] Windows API mouse press done
 [PTT] Active = True
-[PLAY] Queued from cache: 40794 samples
+[PLAY] Queued from cache: 84060 samples (speed=1.0, preserve_pitch=True, volume=1.5)
+[IMPORT] librosa import FAILED: ModuleNotFoundError: No module named 'librosa'
 [PTT] Pressing: mouse4
 [PTT] Using Windows API to press: x2
 [PTT] Windows API mouse press done
 [PTT] Active = True
-[PLAY] Queued from cache: 40794 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 71026 samples
+[PLAY] Queued from cache: 84060 samples (speed=1.0, preserve_pitch=True, volume=1.5)
 [PTT] Key set to: mouse4
 [PTT] Pressing: mouse4
 [PTT] Using Windows API to press: x2
 [PTT] Windows API mouse press done
 [PTT] Active = True
-[PLAY] Queued from cache: 40794 samples
-[PTT] Key set to: mouse4
+[PLAY] Queued from cache: 84060 samples (speed=1.0, preserve_pitch=True, volume=1.5)
 [PTT] Pressing: mouse4
 [PTT] Using Windows API to press: x2
 [PTT] Windows API mouse press done
 [PTT] Active = True
-[PLAY] Queued from cache: 71026 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 165642 samples
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 71026 samples
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 109612 samples
-[PTT] Key set to: mouse4
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 40794 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 40794 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 109612 samples
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 40794 samples
-[PLAY] Queued from cache: 40794 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 71026 samples
-[PLAY] Queued from cache: 71026 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 40794 samples
-[PLAY] Queued from cache: 40794 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 71026 samples
-[PLAY] Queued from cache: 71026 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 109612 samples
-[PLAY] Queued from cache: 109612 samples
-[PTT] Key set to: mouse4
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 109612 samples
-[PLAY] Queued from cache: 109612 samples
-[PLAY] Queued from cache: 109612 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 71026 samples
-[PLAY] Queued from cache: 71026 samples
-[PLAY] Queued from cache: 71026 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 40794 samples
-[PLAY] Queued from cache: 40794 samples
-[PLAY] Queued from cache: 40794 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 165642 samples
-[PLAY] Queued from cache: 165642 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 109612 samples
-[PLAY] Queued from cache: 109612 samples
-[PLAY] Queued from cache: 109612 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 109612 samples
-[PLAY] Queued from cache: 109612 samples
-[PLAY] Queued from cache: 109612 samples
-[PTT] Key set to: mouse4
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 40794 samples
-[PLAY] Queued from cache: 40794 samples
-[PLAY] Queued from cache: 40794 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 165642 samples
-[PLAY] Queued from cache: 165642 samples
-[PLAY] Queued from cache: 40794 samples
-[PLAY] Queued from cache: 40794 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 71026 samples
-[PLAY] Queued from cache: 71026 samples
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 71026 samples
-[PLAY] Queued from cache: 71026 samples
-[PLAY] Queued from cache: 40794 samples
-[PLAY] Queued from cache: 71026 samples
-[PLAY] Queued from cache: 71026 samples
-[PLAY] Queued from cache: 71026 samples
-[PLAY] Queued from cache: 71026 samples
-[PLAY] Queued from cache: 71026 samples
-[PLAY] Queued from cache: 109612 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 165642 samples
-[PLAY] Queued from cache: 40794 samples
-[PLAY] Queued from cache: 71026 samples
-[PTT] Key set to: mouse4
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 165642 samples
-[PLAY] Queued from cache: 40794 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 71026 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 165642 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 40794 samples
-[PLAY] Queued from cache: 109612 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 165642 samples
-[PTT] Key set to: mouse4
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 165642 samples
-[PLAY] Queued from cache: 165642 samples
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 109612 samples
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 109612 samples
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 165642 samples
-[PLAY] Queued from cache: 165642 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 165642 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 165642 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 109612 samples
-[PLAY] Queued from cache: 109612 samples
-[PTT] Key set to: mouse4
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 165642 samples
-[PLAY] Queued from cache: 165642 samples
-[PLAY] Queued from cache: 40794 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 40794 samples
-[PLAY] Queued from cache: 40794 samples
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 109612 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 109612 samples
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 109612 samples
-[PLAY] Queued from cache: 84060 samples
-[PLAY] Queued from cache: 109612 samples
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 109612 samples
-[PTT] Key set to: mouse4
-[AUDIO] Error loading sound: operands could not be broadcast together with shapes (22917,2) (22917,) 
-[AUDIO] Error loading sound: operands could not be broadcast together with shapes (22917,2) (22917,) 
-[AUDIO] Error loading sound: operands could not be broadcast together with shapes (22917,2) (22917,) 
-[AUDIO] Error loading sound: operands could not be broadcast together with shapes (20397,2) (20397,) 
-[AUDIO] Error loading sound: operands could not be broadcast together with shapes (81588,2) (81588,) 
-[AUDIO] Error loading sound: operands could not be broadcast together with shapes (81588,2) (81588,) 
-[AUDIO] Error loading sound: operands could not be broadcast together with shapes (81588,2) (81588,) 
-[AUDIO] Error loading sound: operands could not be broadcast together with shapes (81588,2) (81588,) 
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 165642 samples (speed=1.0)
-[PLAY] Queued from cache: 84060 samples (speed=1.0)
-[AUDIO] Error loading sound: operands could not be broadcast together with shapes (81588,2) (81588,) 
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 165642 samples (speed=1.0)
-[PLAY] Queued from cache: 165642 samples (speed=1.0)
-[PTT] Key set to: mouse4
-[PTT] Key set to: mouse4
-[AUDIO] Error loading sound: operands could not be broadcast together with shapes (81588,2) (81588,) 
-[AUDIO] Error loading sound: operands could not be broadcast together with shapes (81588,2) (81588,) 
-[AUDIO] Error loading sound: operands could not be broadcast together with shapes (81588,2) (81588,) 
-[AUDIO] Error loading sound: operands could not be broadcast together with shapes (81588,2) (81588,) 
-[AUDIO] Error loading sound: operands could not be broadcast together with shapes (81588,2) (81588,) 
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 165642 samples (speed=1.0)
-[AUDIO] Error loading sound: operands could not be broadcast together with shapes (81588,2) (81588,) 
-[AUDIO] Error loading sound: operands could not be broadcast together with shapes (81588,2) (81588,) 
-[PLAY] Queued from cache: 71026 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 40794 samples (speed=1.0)
-[AUDIO] Error loading sound: operands could not be broadcast together with shapes (81588,2) (81588,) 
-[AUDIO] Error loading sound: operands could not be broadcast together with shapes (81588,2) (81588,) 
-[AUDIO] Error loading sound: operands could not be broadcast together with shapes (81588,2) (81588,) 
-[AUDIO] Error loading sound: operands could not be broadcast together with shapes (29138,2) (29138,) 
-[AUDIO] Error loading sound: operands could not be broadcast together with shapes (29138,2) (29138,) 
-[AUDIO] Error loading sound: operands could not be broadcast together with shapes (29138,2) (29138,) 
-[AUDIO] Error loading sound: operands could not be broadcast together with shapes (29138,2) (29138,) 
-[AUDIO] Error loading sound: operands could not be broadcast together with shapes (29138,2) (29138,) 
-[AUDIO] Error loading sound: operands could not be broadcast together with shapes (29138,2) (29138,) 
-[AUDIO] Error loading sound: operands could not be broadcast together with shapes (29138,2) (29138,) 
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 40794 samples (speed=1.0)
-[PLAY] Queued from cache: 40794 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 40794 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 40794 samples (speed=1.0)
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 182354 samples (speed=1.0)
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 109194 samples (speed=1.67)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 91177 samples (speed=2.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 337692 samples (speed=0.54)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 40794 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 40794 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 40794 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 40794 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 165642 samples (speed=1.0)
-[PLAY] Queued from cache: 337692 samples (speed=0.54)
-[PLAY] Queued from cache: 182354 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 182354 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 182354 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 40794 samples (speed=1.0)
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 165642 samples (speed=1.0)
-[PLAY] Queued from cache: 165642 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 165642 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 165642 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 71026 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 71026 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 165642 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 165642 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 165642 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 142794 samples (speed=1.16)
-[PTT] Key set to: mouse4
-[PTT] Key set to: mouse4
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 71026 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 165642 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 84060 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 165642 samples (speed=1.0)
-[PLAY] Queued from cache: 165642 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 182354 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 71026 samples (speed=1.0)
-[PTT] Pressing: mouse4
-[PTT] Using Windows API to press: x2
-[PTT] Windows API mouse press done
-[PTT] Active = True
-[PLAY] Queued from cache: 71026 samples (speed=1.0)
-[PTT] Key set to: mouse4
-[PTT] Key set to: mouse4
+[PLAY] Queued from cache: 84060 samples (speed=1.0, preserve_pitch=True, volume=1.5)

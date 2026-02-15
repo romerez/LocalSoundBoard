@@ -83,8 +83,12 @@ try:
     import librosa
 
     LIBROSA_AVAILABLE = True
-except ImportError:
+    with open("debug.log", "a") as f:
+        f.write(f"[IMPORT] librosa imported successfully: {librosa.__version__}\n")
+except Exception as e:
     LIBROSA_AVAILABLE = False
+    with open("debug.log", "a") as f:
+        f.write(f"[IMPORT] librosa import FAILED: {type(e).__name__}: {e}\n")
 
 
 def read_audio_file(file_path: str) -> Tuple[np.ndarray, int]:
@@ -582,19 +586,23 @@ class AudioMixer:
             # Sounds are playing - reset countdown
             self._ptt_release_countdown = 0
 
-        # Clip to prevent distortion and write to output
-        np.clip(mixed, -1.0, 1.0, out=outdata)
+        # Apply soft clipping to allow volume boost above 100% to sound louder
+        # This soft limiter preserves normal audio but compresses peaks above 1.0
+        # instead of hard clipping, so volume boost actually increases loudness
+        outdata[:] = self._soft_clip(mixed)
 
         # Queue sounds-only for local speaker monitoring
         if self.monitor_enabled and np.any(sounds_mix):
             # Only queue if there's actual sound data (not silence)
-            clipped = np.clip(sounds_mix, -1.0, 1.0).astype(np.float32)
+            clipped = self._soft_clip(sounds_mix).astype(np.float32)
             try:
                 self._monitor_queue.put_nowait(clipped.copy())
             except queue.Full:
                 pass  # Drop frame if queue is full
 
-    def play_sound(self, file_path: str, volume: float = 1.0, speed: float = 1.0, preserve_pitch: bool = True) -> float:
+    def play_sound(
+        self, file_path: str, volume: float = 1.0, speed: float = 1.0, preserve_pitch: bool = True
+    ) -> float:
         """Queue a sound for playback. Uses cache if available for better performance.
 
         Args:
@@ -625,7 +633,9 @@ class AudioMixer:
                     self.sound_queue.put({"data": data, "position": 0, "volume": volume})
                     self._press_ptt()
                     with open("debug.log", "a") as f:
-                        f.write(f"[PLAY] Queued from cache: {len(data)} samples (speed={speed}, preserve_pitch={preserve_pitch})\n")
+                        f.write(
+                            f"[PLAY] Queued from cache: {len(data)} samples (speed={speed}, preserve_pitch={preserve_pitch}, volume={volume})\n"
+                        )
                     return len(data) / self.sample_rate
 
             # Fallback: load from disk (slower) - uses pydub for OGG/M4A/etc
@@ -646,7 +656,9 @@ class AudioMixer:
                 data = self._apply_speed(data, speed, preserve_pitch)
 
             with open("debug.log", "a") as f:
-                f.write(f"[AUDIO] Playing from disk: {len(data)} samples (speed={speed}, preserve_pitch={preserve_pitch})\n")
+                f.write(
+                    f"[AUDIO] Playing from disk: {len(data)} samples (speed={speed}, preserve_pitch={preserve_pitch})\n"
+                )
             # Queue sound FIRST, then press PTT
             self.sound_queue.put({"data": data, "position": 0, "volume": volume})
             self._press_ptt()
@@ -656,7 +668,9 @@ class AudioMixer:
                 f.write(f"[AUDIO] Error loading sound: {e}\n")
             return 0.0
 
-    def _apply_speed(self, data: np.ndarray, speed: float, preserve_pitch: bool = True) -> np.ndarray:
+    def _apply_speed(
+        self, data: np.ndarray, speed: float, preserve_pitch: bool = True
+    ) -> np.ndarray:
         """Apply playback speed adjustment to audio data.
 
         Args:
@@ -667,12 +681,19 @@ class AudioMixer:
         Speed > 1.0 = faster (shorter duration)
         Speed < 1.0 = slower (longer duration)
         """
+        with open("debug.log", "a") as f:
+            f.write(
+                f"[SPEED] _apply_speed called: speed={speed}, preserve_pitch={preserve_pitch}, LIBROSA={LIBROSA_AVAILABLE}\n"
+            )
+
         if speed == 1.0:
             return data
 
         # Try pitch-preserving time-stretch if librosa is available and preserve_pitch is True
         if preserve_pitch and LIBROSA_AVAILABLE:
             try:
+                with open("debug.log", "a") as f:
+                    f.write(f"[SPEED] Attempting librosa time_stretch...\n")
                 # librosa.effects.time_stretch expects mono audio
                 # For stereo, we need to process each channel separately
                 if data.ndim == 1:
@@ -680,17 +701,26 @@ class AudioMixer:
                     result = librosa.effects.time_stretch(data, rate=speed)
                 else:
                     # Stereo audio - process each channel
+                    with open("debug.log", "a") as f:
+                        f.write(f"[SPEED] Processing {data.shape[1]} stereo channels...\n")
                     channels = []
                     for ch in range(data.shape[1]):
                         stretched = librosa.effects.time_stretch(data[:, ch], rate=speed)
                         channels.append(stretched)
                     # Stack channels back together
                     result = np.column_stack(channels)
+                with open("debug.log", "a") as f:
+                    f.write(f"[SPEED] librosa SUCCESS: {len(data)} -> {len(result)} samples\n")
                 return result.astype(np.float32)
             except Exception as e:
                 # Fall back to simple resampling if librosa fails
                 with open("debug.log", "a") as f:
-                    f.write(f"[AUDIO] librosa time_stretch failed, falling back: {e}\n")
+                    f.write(f"[SPEED] librosa FAILED: {e}\n")
+        else:
+            with open("debug.log", "a") as f:
+                f.write(
+                    f"[SPEED] Using simple resample (preserve_pitch={preserve_pitch}, LIBROSA={LIBROSA_AVAILABLE})\n"
+                )
 
         # Simple resampling (changes pitch with speed - chipmunk/deep effect)
         new_length = int(len(data) / speed)
@@ -710,6 +740,47 @@ class AudioMixer:
             for ch in range(data.shape[1]):
                 result[:, ch] = np.interp(new_indices, old_indices, data[:, ch])
 
+        return result.astype(np.float32)
+
+    def _soft_clip(self, x: np.ndarray) -> np.ndarray:
+        """Apply soft limiting to prevent harsh clipping while allowing volume boost.
+
+        Volume > 100% makes audio louder. This limiter:
+        - Values under 1.0: pass through UNCHANGED
+        - Values 1.0-2.0: compressed to 1.0-1.35 range (still noticeably louder)
+        - Values > 2.0: approaches 1.4 asymptotically
+        
+        At 150% volume on a normalized sound (peaks at 0.7):
+        - 0.7 * 1.5 = 1.05 -> output ~1.02 (still louder than 1.0)
+        - 0.5 * 1.5 = 0.75 -> output 0.75 (unchanged, full 50% boost)
+        """
+        # Fast path: no limiting needed for normal audio
+        max_abs = np.max(np.abs(x))
+        if max_abs <= 1.0:
+            return x.astype(np.float32)
+        
+        abs_x = np.abs(x)
+        sign_x = np.sign(x)
+        
+        # Start with original values (preserves values <= 1.0)
+        result = np.copy(x)
+        
+        # Find samples above 1.0 that need limiting
+        hot = abs_x > 1.0
+        
+        if np.any(hot):
+            # Map values above 1.0 to a compressed range
+            # Using curve: 1.0 + 0.4 * tanh((x - 1.0))
+            # This gives approximately:
+            #   input 1.0 -> output 1.0
+            #   input 1.2 -> output ~1.08
+            #   input 1.5 -> output ~1.16
+            #   input 2.0 -> output ~1.30
+            #   input 3.0 -> output ~1.38 (approaches 1.4)
+            excess = abs_x[hot] - 1.0
+            soft_output = 1.0 + 0.4 * np.tanh(excess)
+            result[hot] = sign_x[hot] * soft_output
+        
         return result.astype(np.float32)
 
     def stop_all_sounds(self):

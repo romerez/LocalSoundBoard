@@ -47,6 +47,7 @@ sounddevice>=0.4.6
 soundfile>=0.12.1
 numpy>=1.24.0
 keyboard>=0.13.5
+librosa>=0.10.0
 ```
 
 ---
@@ -127,12 +128,16 @@ LocalSoundBoardProject/
 - [x] Right-click popup for quick volume/speed adjustment
 - [x] Playback speed adjustment per sound (0.5x to 2x)
 - [x] Custom color selection for sound slots (12 color palette)
+- [x] Per-slot stop button (■) appears while sound is playing
+- [x] Global "Stop All Sounds" button in audio options
+- [x] Pitch preservation option for speed changes (uses librosa time-stretch)
 
 ---
 
 ## Planned Features / Backlog
 
 ### High Priority
+- [ ] Fix volume above 100% not making sounds louder (soft clipping needs work)
 - [ ] UI design overhaul (modernize look and feel)
 
 ### Medium Priority
@@ -169,6 +174,7 @@ class SoundSlot:
     image_path: str | None       # Path to custom image/gif
     color: str | None            # Custom background color (hex)
     speed: float                 # Playback speed (0.5 to 2.0)
+    preserve_pitch: bool         # True = natural sound (librosa), False = chipmunk/deep voice
 ```
 
 #### `SoundTab` (dataclass)

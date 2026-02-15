@@ -811,15 +811,21 @@ class SoundboardApp:
             # Stop button (hidden by default, shown when playing) - pack first so it appears leftmost when visible
             stop_btn = tk.Button(
                 bottom_frame,
-                text="⏹ Stop",
+                text="■ Stop",
                 bg=COLORS["red"],
                 fg="white",
                 font=("Segoe UI", 8, "bold"),
                 relief=tk.FLAT,
-                command=lambda idx=i: self._stop_slot(idx),
                 padx=4,
                 pady=0,
             )
+            # Bind click event with break to prevent propagation
+            def make_stop_handler(idx):
+                def handler(event):
+                    self._stop_slot(idx)
+                    return "break"
+                return handler
+            stop_btn.bind("<Button-1>", make_stop_handler(i))
             # Don't pack initially - will be shown when playing
 
             # Preview button (speaker icon) - pack RIGHT first
@@ -1066,16 +1072,11 @@ class SoundboardApp:
 
     def _stop_slot(self, slot_idx: int):
         """Stop the sound playing in a specific slot."""
-        # Remove from playing state
-        if slot_idx in self.playing_slots:
-            del self.playing_slots[slot_idx]
-        
-        # Stop all sounds in mixer (we can't stop individual sounds yet)
-        # For now, this stops all sounds - a future improvement would be per-slot stop
+        # Stop all sounds in mixer first
         if self.mixer:
             self.mixer.stop_all_sounds()
         
-        # Clear all playing states since we stopped everything
+        # Clear all playing states
         for idx in list(self.playing_slots.keys()):
             tab_idx = self.playing_slots[idx].get("tab_idx")
             del self.playing_slots[idx]
@@ -1086,13 +1087,13 @@ class SoundboardApp:
                 if idx in self.slot_stop_buttons:
                     self.slot_stop_buttons[idx].pack_forget()
         
-        # Update the clicked slot
-        self._update_slot_button(slot_idx)
-        if slot_idx in self.slot_progress:
-            self.slot_progress[slot_idx].delete("progress")
+        # Also explicitly hide the clicked slot's stop button
         if slot_idx in self.slot_stop_buttons:
             self.slot_stop_buttons[slot_idx].pack_forget()
+        if slot_idx in self.slot_progress:
+            self.slot_progress[slot_idx].delete("progress")
         
+        self._update_slot_button(slot_idx)
         self.status_var.set("Stopped")
 
     def _record_ptt_key(self):
@@ -1457,7 +1458,8 @@ class SoundboardApp:
                     self.slot_buttons[slot_idx].configure(bg=COLORS["playing"])
                 # Show stop button (on left side, next to progress bar)
                 if slot_idx in self.slot_stop_buttons:
-                    self.slot_stop_buttons[slot_idx].pack(side=tk.LEFT, padx=2)
+                    stop_btn = self.slot_stop_buttons[slot_idx]
+                    stop_btn.pack(side=tk.LEFT, padx=2, before=self.slot_progress.get(slot_idx))
         else:
             self.status_var.set("Start the audio stream first!")
 
