@@ -56,10 +56,21 @@ def _simulate_mouse_button(button: str, press: bool = True):
         ctypes.windll.user32.mouse_event(flags, 0, 0, XBUTTON2, 0)
 
 
+# Try to get ffmpeg path from imageio-ffmpeg (bundled ffmpeg)
+try:
+    import imageio_ffmpeg
+    FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
+except ImportError:
+    FFMPEG_PATH = None
+
 # Try to import pydub for extended format support (M4A, AAC, WMA, etc.)
 try:
     from pydub import AudioSegment
-
+    # Configure pydub to use ffmpeg from imageio-ffmpeg if available
+    if FFMPEG_PATH:
+        AudioSegment.converter = FFMPEG_PATH
+        AudioSegment.ffmpeg = FFMPEG_PATH
+        AudioSegment.ffprobe = FFMPEG_PATH.replace("ffmpeg", "ffprobe")
     PYDUB_AVAILABLE = True
 except ImportError:
     PYDUB_AVAILABLE = False
@@ -175,13 +186,17 @@ class SoundCache:
         """
         ext = Path(file_path).suffix.lower()
 
-        # Formats that soundfile handles well
+        # Formats that soundfile usually handles well (but may fail on some files)
         soundfile_formats = {".wav", ".flac", ".ogg", ".aiff", ".aif"}
 
         # Try soundfile first for known supported formats
         if ext in soundfile_formats:
-            data, sr = sf.read(file_path, dtype="float32")
-            return data, sr
+            try:
+                data, sr = sf.read(file_path, dtype="float32")
+                return data, sr
+            except Exception:
+                # Fall through to pydub fallback
+                pass
 
         # Try soundfile for other formats (MP3 support varies)
         try:
@@ -190,7 +205,7 @@ class SoundCache:
         except Exception:
             pass
 
-        # Fallback to pydub for M4A, AAC, WMA, WebM, etc.
+        # Fallback to pydub for OGG, M4A, AAC, WMA, WebM, etc.
         if PYDUB_AVAILABLE:
             try:
                 audio = AudioSegment.from_file(file_path)
@@ -228,9 +243,15 @@ class SoundCache:
 
         Returns cached data if available, otherwise loads and caches it.
         """
+        # Get cached data reference under lock, but copy OUTSIDE lock
+        # This reduces lock contention when clicking rapidly
+        cached_data = None
         with self._lock:
             if file_path in self._cache:
-                return self._cache[file_path].copy()
+                cached_data = self._cache[file_path]
+
+        if cached_data is not None:
+            return cached_data.copy()
 
         # Not in cache, try to load
         try:
@@ -273,7 +294,12 @@ class SoundCache:
             return file_path in self._cache
 
     def get_sound_duration(self, file_path: str) -> float:
-        """Get the duration of a sound in seconds."""
+        """Get the duration of a sound in seconds (without copying data)."""
+        with self._lock:
+            if file_path in self._cache:
+                return len(self._cache[file_path]) / self.sample_rate
+
+        # Not cached - try to load it first
         data = self.get_sound_data(file_path)
         if data is not None:
             return len(data) / self.sample_rate
@@ -325,6 +351,10 @@ class AudioMixer:
         self.ptt_key: Optional[str] = None
         self.ptt_active: bool = False
         self._ptt_lock = threading.Lock()
+        # PTT release debounce: wait N callback cycles after last sound finishes
+        # At 48kHz with 1024 block size, each cycle is ~21ms, so 5 cycles = ~100ms
+        self._ptt_release_delay = 5  # Number of empty cycles before releasing PTT
+        self._ptt_release_countdown = 0  # Current countdown (0 = not counting)
 
         # Local monitoring (play sounds to speakers too)
         self.monitor_enabled = False
@@ -515,12 +545,20 @@ class AudioMixer:
             for i in reversed(finished):
                 self.currently_playing.pop(i)
 
-            # Check if we should release PTT (all sounds finished)
-            should_release_ptt = len(self.currently_playing) == 0
+            # Check if we should start PTT release countdown (all sounds finished)
+            all_sounds_finished = len(self.currently_playing) == 0
 
-        # Release PTT if no more sounds are playing
-        if should_release_ptt and self.sound_queue.empty():
-            self._release_ptt()
+        # Handle PTT release with debounce to prevent premature release
+        if all_sounds_finished and self.sound_queue.empty():
+            # No sounds playing - increment or start countdown
+            if self.ptt_active:
+                self._ptt_release_countdown += 1
+                if self._ptt_release_countdown >= self._ptt_release_delay:
+                    self._release_ptt()
+                    self._ptt_release_countdown = 0
+        else:
+            # Sounds are playing - reset countdown
+            self._ptt_release_countdown = 0
 
         # Clip to prevent distortion and write to output
         np.clip(mixed, -1.0, 1.0, out=outdata)
@@ -534,22 +572,31 @@ class AudioMixer:
             except queue.Full:
                 pass  # Drop frame if queue is full
 
-    def play_sound(self, file_path: str, volume: float = 1.0):
-        """Queue a sound for playback. Uses cache if available for better performance."""
+    def play_sound(self, file_path: str, volume: float = 1.0) -> float:
+        """Queue a sound for playback. Uses cache if available for better performance.
+
+        Returns the duration of the sound in seconds (0.0 if failed to play).
+        """
         try:
-            # Press PTT key if configured
-            self._press_ptt()
+            # Reset PTT release countdown immediately when a new sound is triggered
+            # This prevents PTT from releasing while we're loading/queueing
+            self._ptt_release_countdown = 0
 
             # Use cached audio data if available (much faster - no disk I/O)
             if self.sound_cache:
                 data = self.sound_cache.get_sound_data(file_path)
                 if data is not None:
+                    # Queue sound FIRST, then press PTT (prevents race condition where
+                    # output callback sees empty queue and releases PTT immediately)
                     self.sound_queue.put({"data": data, "position": 0, "volume": volume})
-                    return
+                    self._press_ptt()
+                    with open("debug.log", "a") as f:
+                        f.write(f"[PLAY] Queued from cache: {len(data)} samples\n")
+                    return len(data) / self.sample_rate
 
             # Fallback: load from disk (slower)
             if not os.path.exists(file_path):
-                return
+                return 0.0
 
             data, sr = sf.read(file_path, dtype="float32")
 
@@ -562,10 +609,14 @@ class AudioMixer:
 
             with open("debug.log", "a") as f:
                 f.write(f"[AUDIO] Playing from disk: {len(data)} samples\n")
+            # Queue sound FIRST, then press PTT
             self.sound_queue.put({"data": data, "position": 0, "volume": volume})
+            self._press_ptt()
+            return len(data) / self.sample_rate
         except Exception as e:
             with open("debug.log", "a") as f:
                 f.write(f"[AUDIO] Error loading sound: {e}\n")
+            return 0.0
 
     def stop_all_sounds(self):
         """Clear playback queue and stop all sounds."""

@@ -53,6 +53,7 @@ class SoundboardApp:
         self.root = tk.Tk()
         self.root.title(UI["window_title"])
         self.root.geometry(UI["window_size"])
+        self.root.resizable(False, False)  # Lock window size
         self.root.configure(bg=COLORS["bg_dark"])
 
         self.mixer: Optional[AudioMixer] = None
@@ -62,12 +63,24 @@ class SoundboardApp:
         self.slot_buttons: Dict[int, tk.Button] = {}
         self.slot_frames: Dict[int, tk.Frame] = {}  # Frames containing buttons + progress bars
         self.slot_progress: Dict[int, tk.Canvas] = {}  # Progress bar canvases
+        self.slot_preview_buttons: Dict[int, tk.Button] = {}  # Preview buttons
+        self.slot_bottom_frames: Dict[int, tk.Frame] = {}  # Bottom frames with progress/preview
         self.slot_images: Dict[int, ImageTk.PhotoImage] = {}  # Keep references to images
         self.registered_hotkeys: list = []
         self.tab_buttons: List[tk.Button] = []
 
         # Playing state tracking: slot_idx -> {start_time, duration, tab_idx}
         self.playing_slots: Dict[int, Dict] = {}
+
+        # Preview state tracking: slot_idx -> {start_time, duration}
+        self.preview_slots: Dict[int, Dict] = {}
+
+        # Drag and drop state
+        self.drag_source_idx: Optional[int] = None
+        self.drag_source_tab: Optional[int] = None
+        self.drag_start_x: int = 0
+        self.drag_start_y: int = 0
+        self.is_dragging: bool = False
 
         # Ensure images directory exists
         Path(IMAGES_DIR).mkdir(exist_ok=True)
@@ -101,8 +114,30 @@ class SoundboardApp:
         self._create_status_bar(main_frame)
 
     def _create_device_section(self, parent):
-        """Create the audio device selection and PTT section."""
-        device_frame = ttk.LabelFrame(parent, text="Audio Options", padding=10)
+        """Create the collapsible audio device selection and PTT section."""
+        # Header frame for collapse toggle
+        header_frame = tk.Frame(parent, bg=COLORS["bg_dark"])
+        header_frame.pack(fill=tk.X, pady=(0, 2))
+
+        self.audio_options_expanded = tk.BooleanVar(value=False)
+
+        self.toggle_audio_btn = tk.Button(
+            header_frame,
+            text="▶ Audio Options",
+            command=self._toggle_audio_options,
+            bg=COLORS["bg_medium"],
+            fg=COLORS["text_primary"],
+            font=("Segoe UI", 9),
+            relief=tk.FLAT,
+            cursor="hand2",
+        )
+        self.toggle_audio_btn.pack(side=tk.LEFT)
+
+        # Collapsible content frame
+        self.audio_options_frame = ttk.Frame(parent)
+        # Hidden by default
+
+        device_frame = ttk.LabelFrame(self.audio_options_frame, text="Audio Options", padding=10)
         device_frame.pack(fill=tk.X, pady=(0, 10))
 
         # Get available devices
@@ -243,13 +278,25 @@ class SoundboardApp:
             selectcolor=COLORS["red"],
         ).pack(side=tk.LEFT, padx=20)
 
-        # Local speaker monitoring checkbox
-        self.monitor_var = tk.BooleanVar(value=False)
+        # Local speaker monitoring checkbox (enabled by default)
+        self.monitor_var = tk.BooleanVar(value=True)
         tk.Checkbutton(
             mic_row,
             text="🔊 Monitor",
             variable=self.monitor_var,
             command=self._toggle_monitor,
+            bg=COLORS["bg_dark"],
+            fg="white",
+            selectcolor=COLORS["green"],
+        ).pack(side=tk.LEFT, padx=10)
+
+        # Auto-start checkbox (enabled by default)
+        self.auto_start_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(
+            mic_row,
+            text="Auto-Start",
+            variable=self.auto_start_var,
+            command=self._save_config,
             bg=COLORS["bg_dark"],
             fg="white",
             selectcolor=COLORS["green"],
@@ -262,6 +309,19 @@ class SoundboardApp:
             bg=COLORS["red"],
             fg="white",
         ).pack(side=tk.RIGHT, padx=5)
+
+    def _toggle_audio_options(self):
+        """Toggle the audio options visibility."""
+        if self.audio_options_expanded.get():
+            self.audio_options_frame.pack_forget()
+            self.toggle_audio_btn.config(text="▶ Audio Options")
+            self.audio_options_expanded.set(False)
+        else:
+            self.audio_options_frame.pack(
+                fill=tk.X, pady=(0, 5), after=self.toggle_audio_btn.master
+            )
+            self.toggle_audio_btn.config(text="▼ Audio Options")
+            self.audio_options_expanded.set(True)
 
     def _create_tab_bar(self, parent):
         """Create the tab bar with tabs and + button."""
@@ -316,6 +376,10 @@ class SoundboardApp:
         """Switch to a different tab."""
         if tab_idx < 0 or tab_idx >= len(self.tabs):
             return
+
+        # Clear progress bars before switching (sounds from other tabs shouldn't show here)
+        for slot_idx in self.slot_progress:
+            self.slot_progress[slot_idx].delete("progress")
 
         self.current_tab_idx = tab_idx
         self._refresh_tab_bar()
@@ -591,57 +655,166 @@ class SoundboardApp:
         self._save_config()
 
     def _create_soundboard_section(self, parent):
-        """Create the soundboard grid section."""
+        """Create the soundboard grid section with scrolling."""
         board_frame = ttk.LabelFrame(
             parent, text="Soundboard (Right-click to configure)", padding=10
         )
         board_frame.pack(fill=tk.BOTH, expand=True)
 
-        self.grid_frame = ttk.Frame(board_frame)
-        self.grid_frame.pack(fill=tk.BOTH, expand=True)
+        # Create scrollable canvas
+        self.slots_canvas = tk.Canvas(board_frame, bg=COLORS["bg_dark"], highlightthickness=0)
+        self.slots_scrollbar = ttk.Scrollbar(
+            board_frame, orient="vertical", command=self.slots_canvas.yview
+        )
+        self.slots_canvas.configure(yscrollcommand=self.slots_scrollbar.set)
+
+        # Pack canvas (scrollbar will be shown/hidden dynamically based on content)
+        self.slots_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Frame inside canvas for the grid
+        self.grid_frame = tk.Frame(self.slots_canvas, bg=COLORS["bg_dark"])
+        self.grid_frame_window = self.slots_canvas.create_window(
+            (0, 0), window=self.grid_frame, anchor="nw"
+        )
+
+        # Bind resize events
+        self.grid_frame.bind("<Configure>", self._on_grid_configure)
+        self.slots_canvas.bind("<Configure>", self._on_canvas_configure)
+
+        # Bind mouse wheel for scrolling
+        self.slots_canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+
+        # Create initial slots (will be populated in _refresh_slot_buttons)
+        self._create_slot_widgets()
+
+    def _on_grid_configure(self, event):
+        """Update scroll region when grid changes size."""
+        self.slots_canvas.configure(scrollregion=self.slots_canvas.bbox("all"))
+        # Show/hide scrollbar based on content height vs canvas height
+        self._update_scrollbar_visibility()
+
+    def _on_canvas_configure(self, event):
+        """Update grid frame width to match canvas width."""
+        # Make grid frame at least as wide as canvas
+        self.slots_canvas.itemconfig(self.grid_frame_window, width=event.width)
+        # Show/hide scrollbar based on content height vs canvas height
+        self._update_scrollbar_visibility()
+
+    def _update_scrollbar_visibility(self):
+        """Show scrollbar only when content exceeds visible area."""
+        # Get the bounding box of content
+        bbox = self.slots_canvas.bbox("all")
+        if bbox is None:
+            return
+        content_height = bbox[3] - bbox[1]
+        canvas_height = self.slots_canvas.winfo_height()
+        
+        if content_height > canvas_height:
+            # Content is larger than canvas - show scrollbar
+            self.slots_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        else:
+            # Content fits - hide scrollbar
+            self.slots_scrollbar.pack_forget()
+
+    def _on_mousewheel(self, event):
+        """Handle mouse wheel scrolling."""
+        # Only scroll if mouse is over the canvas area
+        widget = event.widget
+        if widget == self.slots_canvas or str(widget).startswith(str(self.slots_canvas)):
+            self.slots_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    def _create_slot_widgets(self):
+        """Dynamically create slot widgets based on current tab content."""
+        # Clear existing slots
+        for frame in self.slot_frames.values():
+            frame.destroy()
+        self.slot_frames.clear()
+        self.slot_buttons.clear()
+        self.slot_progress.clear()
+        self.slot_preview_buttons.clear()
+        self.slot_bottom_frames.clear()
+
+        # Calculate how many slots we need: max slot index + 1 extra empty, minimum 12
+        tab = self._get_current_tab()
+        max_idx = max(tab.slots.keys()) if tab.slots else -1
+        num_slots = max(max_idx + 2, UI["total_slots"])  # +2 to have at least 1 empty
+
+        # Fixed slot dimensions
+        SLOT_WIDTH = 160
+        SLOT_HEIGHT = 90
+        BOTTOM_HEIGHT = 22
 
         # Create sound slot compound widgets (button + progress bar)
-        for i in range(UI["total_slots"]):
+        for i in range(num_slots):
             row, col = divmod(i, UI["grid_columns"])
 
-            # Container frame for button and progress bar
-            slot_frame = tk.Frame(self.grid_frame, bg=COLORS["bg_dark"])
-            slot_frame.grid(row=row, column=col, padx=5, pady=5, sticky="nsew")
+            # Container frame for button and progress bar - fixed size
+            slot_frame = tk.Frame(
+                self.grid_frame,
+                bg=COLORS["bg_dark"],
+                width=SLOT_WIDTH,
+                height=SLOT_HEIGHT + BOTTOM_HEIGHT,
+            )
+            slot_frame.grid(row=row, column=col, padx=4, pady=4)
+            slot_frame.grid_propagate(False)  # Lock frame size
+            slot_frame.pack_propagate(False)  # Lock frame size
 
-            # Sound button
-            btn = tk.Button(
-                slot_frame,
-                text=f"Slot {i+1}\n(Empty)",
-                width=18,
-                height=4,
+            # Bottom row: progress bar + preview button (pack first so it's at bottom)
+            bottom_frame = tk.Frame(slot_frame, bg=COLORS["bg_dark"], height=BOTTOM_HEIGHT)
+            bottom_frame.pack(side=tk.BOTTOM, fill=tk.X)
+            bottom_frame.pack_propagate(False)  # Maintain fixed height
+
+            # Preview button (speaker icon)
+            preview_btn = tk.Button(
+                bottom_frame,
+                text="🔊",
+                width=2,
                 bg=COLORS["bg_medium"],
                 fg=COLORS["text_muted"],
-                font=("Segoe UI", 9),
+                font=("Segoe UI", 8),
+                relief=tk.FLAT,
+                command=lambda idx=i: self._preview_slot(idx),
+            )
+            preview_btn.pack(side=tk.RIGHT, fill=tk.Y)
+
+            # Progress bar canvas (thin bar at bottom)
+            progress = tk.Canvas(
+                bottom_frame,
+                height=6,
+                bg=COLORS["bg_medium"],
+                highlightthickness=0,
+            )
+            progress.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, pady=8)
+
+            # Sound button (pack after so it fills remaining space)
+            # Note: No command - click is handled by drag bindings to avoid double-play
+            btn = tk.Button(
+                slot_frame,
+                text="+",
+                bg=COLORS["bg_medium"],
+                fg=COLORS["text_muted"],
+                font=("Segoe UI", 14, "bold"),
                 relief=tk.FLAT,
                 compound=tk.TOP,  # Image above text
-                command=lambda idx=i: self._play_slot(idx),
+                wraplength=150,  # Wrap text to fit button
+                justify=tk.CENTER,
             )
             btn.pack(fill=tk.BOTH, expand=True)
             btn.bind("<Button-3>", lambda e, idx=i: self._configure_slot(idx))
 
-            # Progress bar canvas (thin bar at bottom)
-            progress = tk.Canvas(
-                slot_frame,
-                height=4,
-                bg=COLORS["bg_medium"],
-                highlightthickness=0,
-            )
-            progress.pack(fill=tk.X)
+            # Drag and drop bindings
+            btn.bind("<ButtonPress-1>", lambda e, idx=i: self._on_drag_start(e, idx))
+            btn.bind("<B1-Motion>", self._on_drag_motion)
+            btn.bind("<ButtonRelease-1>", self._on_drag_end)
 
             self.slot_frames[i] = slot_frame
             self.slot_buttons[i] = btn
             self.slot_progress[i] = progress
+            self.slot_preview_buttons[i] = preview_btn
+            self.slot_bottom_frames[i] = bottom_frame
 
-        # Configure grid weights for resizing
-        for i in range(UI["grid_columns"]):
-            self.grid_frame.columnconfigure(i, weight=1)
-        for i in range(UI["grid_rows"]):
-            self.grid_frame.rowconfigure(i, weight=1)
+        # Schedule scrollbar visibility update after layout is complete
+        self.root.after(10, self._update_scrollbar_visibility)
 
     def _animate_progress(self):
         """Update progress bars for playing sounds."""
@@ -653,43 +826,96 @@ class SoundboardApp:
             duration = play_info["duration"]
             progress_ratio = min(elapsed / duration, 1.0) if duration > 0 else 1.0
 
-            # Update progress bar
-            if slot_idx in self.slot_progress:
-                canvas = self.slot_progress[slot_idx]
-                canvas.delete("progress")
-                width = canvas.winfo_width()
-                if width > 1:  # Canvas has been rendered
-                    fill_width = int(width * progress_ratio)
-                    canvas.create_rectangle(
-                        0,
-                        0,
-                        fill_width,
-                        4,
-                        fill=COLORS["playing"],
-                        outline="",
-                        tags="progress",
-                    )
+            # Only update progress bar if this slot's sound is from the current tab
+            if play_info["tab_idx"] == self.current_tab_idx:
+                if slot_idx in self.slot_progress:
+                    canvas = self.slot_progress[slot_idx]
+                    canvas.delete("progress")
+                    width = canvas.winfo_width()
+                    if width > 1:  # Canvas has been rendered
+                        fill_width = int(width * progress_ratio)
+                        canvas.create_rectangle(
+                            0,
+                            0,
+                            fill_width,
+                            4,
+                            fill=COLORS["playing"],
+                            outline="",
+                            tags="progress",
+                        )
 
             # Check if finished
             if progress_ratio >= 1.0:
                 finished.append(slot_idx)
 
-        # Reset finished slots
+        # Reset finished playing slots
         for slot_idx in finished:
+            tab_idx = self.playing_slots[slot_idx]["tab_idx"]
             del self.playing_slots[slot_idx]
-            # Only reset button color if this slot is in current tab
-            if slot_idx in self.slot_buttons:
+            # Only reset button color if this slot is in current tab AND from current tab
+            if slot_idx in self.slot_buttons and tab_idx == self.current_tab_idx:
                 self._update_slot_button(slot_idx)
-            # Clear progress bar
-            if slot_idx in self.slot_progress:
+            # Clear progress bar only if from current tab
+            if slot_idx in self.slot_progress and tab_idx == self.current_tab_idx:
                 self.slot_progress[slot_idx].delete("progress")
+
+        # Handle preview slots (same logic but with green color)
+        preview_finished = []
+
+        for slot_idx, play_info in self.preview_slots.items():
+            elapsed = current_time - play_info["start_time"]
+            duration = play_info["duration"]
+            progress_ratio = min(elapsed / duration, 1.0) if duration > 0 else 1.0
+
+            # Only update progress bar if this slot's sound is from the current tab
+            if play_info["tab_idx"] == self.current_tab_idx:
+                if slot_idx in self.slot_progress:
+                    canvas = self.slot_progress[slot_idx]
+                    canvas.delete("preview_progress")
+                    width = canvas.winfo_width()
+                    if width > 1:  # Canvas has been rendered
+                        fill_width = int(width * progress_ratio)
+                        canvas.create_rectangle(
+                            0,
+                            0,
+                            fill_width,
+                            4,
+                            fill=COLORS["preview"],
+                            outline="",
+                            tags="preview_progress",
+                        )
+
+            # Check if finished
+            if progress_ratio >= 1.0:
+                preview_finished.append(slot_idx)
+
+        # Reset finished preview slots
+        for slot_idx in preview_finished:
+            tab_idx = self.preview_slots[slot_idx]["tab_idx"]
+            del self.preview_slots[slot_idx]
+            # Only reset button color if this slot is in current tab AND from current tab
+            if slot_idx in self.slot_buttons and tab_idx == self.current_tab_idx:
+                self._update_slot_button(slot_idx)
+            # Clear progress bar only if from current tab
+            if slot_idx in self.slot_progress and tab_idx == self.current_tab_idx:
+                self.slot_progress[slot_idx].delete("preview_progress")
 
         # Schedule next frame (60fps-ish)
         self.root.after(16, self._animate_progress)
 
     def _refresh_slot_buttons(self):
         """Refresh all slot buttons for current tab."""
-        for i in range(UI["total_slots"]):
+        # Check if we need to recreate the grid (more/fewer slots needed)
+        tab = self._get_current_tab()
+        max_idx = max(tab.slots.keys()) if tab.slots else -1
+        needed_slots = max(max_idx + 2, UI["total_slots"])
+
+        if len(self.slot_frames) != needed_slots:
+            # Need to recreate slots
+            self._create_slot_widgets()
+
+        # Update all slot buttons
+        for i in self.slot_buttons.keys():
             self._update_slot_button(i)
 
     def _create_status_bar(self, parent):
@@ -875,20 +1101,199 @@ class SoundboardApp:
             self.tabs.append(SoundTab(name="Main", emoji="🎵"))
         return self.tabs[self.current_tab_idx]
 
+    # ─────────────────────────────────────────────────────────
+    # Drag and Drop for slot reordering
+    # ─────────────────────────────────────────────────────────
+
+    def _on_drag_start(self, event, slot_idx: int):
+        """Start dragging a slot."""
+        tab = self._get_current_tab()
+        # Only start drag if slot has content
+        if slot_idx in tab.slots:
+            self.drag_source_idx = slot_idx
+            self.drag_source_tab = self.current_tab_idx
+            self.drag_start_x = event.x_root
+            self.drag_start_y = event.y_root
+            self.is_dragging = False  # Will become True on motion
+        else:
+            # For empty slots, trigger configure on release
+            self.drag_source_idx = None
+            self.drag_source_tab = None
+
+    def _on_drag_motion(self, event):
+        """Handle drag motion - highlight drop targets."""
+        if self.drag_source_idx is None:
+            return
+
+        # Check if we've moved enough to start dragging
+        if not getattr(self, "is_dragging", False):
+            dx = abs(event.x_root - getattr(self, "drag_start_x", event.x_root))
+            dy = abs(event.y_root - getattr(self, "drag_start_y", event.y_root))
+            if dx > 5 or dy > 5:
+                self.is_dragging = True
+                # Change cursor to indicate dragging
+                self.root.config(cursor="fleur")
+            else:
+                return
+
+        # Find which slot or tab we're hovering over
+        widget = self.root.winfo_containing(event.x_root, event.y_root)
+
+        # Reset all highlights
+        self._reset_drag_highlights()
+
+        # Check if over a tab button
+        for idx, tab_btn in enumerate(self.tab_buttons):
+            if widget == tab_btn or (widget and widget.master == tab_btn):
+                if idx != self.drag_source_tab:
+                    # Highlight this tab as drop target
+                    tab_btn.configure(bg=COLORS["drag_target"])
+                return
+
+        # Check if over a slot button
+        for slot_idx, btn in self.slot_buttons.items():
+            if widget == btn or (widget and widget.master == btn):
+                if slot_idx != self.drag_source_idx:
+                    # Highlight as drop target
+                    btn.configure(bg=COLORS["drag_target"])
+                return
+
+    def _on_drag_end(self, event):
+        """Handle drop - swap slots or move to different tab."""
+        if self.drag_source_idx is None:
+            return
+
+        # Store locally for type safety
+        source_idx = self.drag_source_idx
+        source_tab = self.drag_source_tab or 0
+
+        # Reset cursor and highlights
+        self.root.config(cursor="")
+        self._reset_drag_highlights()
+
+        # If we weren't really dragging, treat as normal click
+        if not getattr(self, "is_dragging", False):
+            self._play_slot(source_idx)
+            self.drag_source_idx = None
+            self.drag_source_tab = None
+            return
+
+        self.is_dragging = False
+
+        # Find what we dropped on
+        widget = self.root.winfo_containing(event.x_root, event.y_root)
+
+        # Check if dropped on a tab button
+        for idx, tab_btn in enumerate(self.tab_buttons):
+            if widget == tab_btn or (widget and widget.master == tab_btn):
+                if idx != source_tab:
+                    self._move_slot_to_tab(source_idx, source_tab, idx)
+                self.drag_source_idx = None
+                self.drag_source_tab = None
+                return
+
+        # Check if dropped on a slot button
+        for slot_idx, btn in self.slot_buttons.items():
+            if widget == btn or (widget and widget.master == btn):
+                if slot_idx != source_idx and source_tab == self.current_tab_idx:
+                    self._swap_slots(source_idx, slot_idx)
+                self.drag_source_idx = None
+                self.drag_source_tab = None
+                return
+
+        # Dropped elsewhere - cancel
+        self.drag_source_idx = None
+        self.drag_source_tab = None
+
+    def _reset_drag_highlights(self):
+        """Reset all drag highlight colors to proper state."""
+        # Restore all slot buttons to their proper appearance
+        for slot_idx in self.slot_buttons.keys():
+            # Check if this slot is playing/previewing ON THE CURRENT TAB
+            is_playing = (
+                slot_idx in self.playing_slots
+                and self.playing_slots[slot_idx].get("tab_idx") == self.current_tab_idx
+            )
+            is_previewing = (
+                slot_idx in self.preview_slots
+                and self.preview_slots[slot_idx].get("tab_idx") == self.current_tab_idx
+            )
+            
+            if is_playing:
+                self.slot_buttons[slot_idx].configure(bg=COLORS["playing"])
+            elif is_previewing:
+                self.slot_buttons[slot_idx].configure(bg=COLORS["preview"])
+            else:
+                self._update_slot_button(slot_idx)
+
+        # Reset tab buttons
+        for idx, tab_btn in enumerate(self.tab_buttons):
+            if idx == self.current_tab_idx:
+                tab_btn.configure(bg=COLORS["blurple"])
+            else:
+                tab_btn.configure(bg=COLORS["bg_medium"])
+
+    def _swap_slots(self, idx1: int, idx2: int):
+        """Swap two slots within the current tab."""
+        tab = self._get_current_tab()
+        slot1 = tab.slots.get(idx1)
+        slot2 = tab.slots.get(idx2)
+
+        if slot1 is not None and slot2 is not None:
+            # Both have content - swap
+            tab.slots[idx1] = slot2
+            tab.slots[idx2] = slot1
+        elif slot1 is not None:
+            # Only slot1 has content - move to slot2
+            tab.slots[idx2] = slot1
+            del tab.slots[idx1]
+        # else: slot1 is empty, nothing to move
+
+        self._save_config()
+        self._refresh_slot_buttons()
+
+    def _move_slot_to_tab(self, slot_idx: int, from_tab_idx: int, to_tab_idx: int):
+        """Move a slot from one tab to another."""
+        if from_tab_idx >= len(self.tabs) or to_tab_idx >= len(self.tabs):
+            return
+
+        from_tab = self.tabs[from_tab_idx]
+        to_tab = self.tabs[to_tab_idx]
+
+        if slot_idx not in from_tab.slots:
+            return
+
+        slot = from_tab.slots[slot_idx]
+
+        # Find first empty slot in target tab
+        target_idx = 0
+        while target_idx in to_tab.slots:
+            target_idx += 1
+
+        # Move the slot
+        to_tab.slots[target_idx] = slot
+        del from_tab.slots[slot_idx]
+
+        self._save_config()
+        self._refresh_slot_buttons()
+        self.status_var.set(f"Moved '{slot.name}' to {to_tab.emoji or ''} {to_tab.name}")
+
     def _play_slot(self, slot_idx: int):
-        """Play the sound assigned to a slot."""
+        """Play the sound assigned to a slot, or open config for empty slots."""
         tab = self._get_current_tab()
         if slot_idx not in tab.slots:
+            # Empty slot - open configuration to add a sound
+            self._configure_slot(slot_idx)
             return
 
         slot = tab.slots[slot_idx]
 
         if self.mixer and self.mixer.running:
-            self.mixer.play_sound(slot.file_path, slot.volume)
+            # play_sound returns the duration, avoiding a second cache lookup
+            duration = self.mixer.play_sound(slot.file_path, slot.volume)
             self.status_var.set(f"Playing: {slot.name}")
 
             # Start progress tracking
-            duration = self.sound_cache.get_sound_duration(slot.file_path)
             if duration > 0:
                 self.playing_slots[slot_idx] = {
                     "start_time": time.time(),
@@ -900,6 +1305,45 @@ class SoundboardApp:
                     self.slot_buttons[slot_idx].configure(bg=COLORS["playing"])
         else:
             self.status_var.set("Start the audio stream first!")
+
+    def _preview_slot(self, slot_idx: int):
+        """Preview a sound through default speakers (without streaming to Discord)."""
+        tab = self._get_current_tab()
+        if slot_idx not in tab.slots:
+            self.status_var.set("No sound in this slot")
+            return
+
+        slot = tab.slots[slot_idx]
+
+        # Get cached audio data
+        data = self.sound_cache.get_sound_data(slot.file_path)
+        if data is None:
+            self.status_var.set("Failed to load sound for preview")
+            return
+
+        try:
+            # Stop any currently playing preview
+            sd.stop()
+
+            # Calculate duration
+            duration = len(data) / self.sound_cache.sample_rate
+
+            # Play through default speakers (not the virtual cable)
+            sd.play(data * slot.volume, samplerate=self.sound_cache.sample_rate, device=None)
+            self.status_var.set(f"Preview: {slot.name}")
+
+            # Track preview progress
+            if duration > 0:
+                self.preview_slots[slot_idx] = {
+                    "start_time": time.time(),
+                    "duration": duration,
+                    "tab_idx": self.current_tab_idx,
+                }
+                # Change button color to preview state (green)
+                if slot_idx in self.slot_buttons:
+                    self.slot_buttons[slot_idx].configure(bg=COLORS["preview"])
+        except Exception as e:
+            self.status_var.set(f"Preview error: {e}")
 
     def _configure_slot(self, slot_idx: int):
         """Open configuration dialog for a slot."""
@@ -1035,8 +1479,17 @@ class SoundboardApp:
                         edited_audio_data["original_name"] or Path(source_path).name,
                     )
                 # Otherwise copy original sound to local storage if not already there
-                elif not source_path.startswith(str(Path(SOUNDS_DIR).absolute())):
-                    local_path = self.sound_cache.add_sound(source_path)
+                else:
+                    # Check if already in sounds folder (handle both relative and absolute paths)
+                    source_abs = str(Path(source_path).absolute())
+                    sounds_abs = str(Path(SOUNDS_DIR).absolute())
+                    is_already_local = (
+                        source_path.startswith(SOUNDS_DIR + "/")
+                        or source_path.startswith(SOUNDS_DIR + "\\")
+                        or source_abs.startswith(sounds_abs)
+                    )
+                    if not is_already_local:
+                        local_path = self.sound_cache.add_sound(source_path)
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to add sound:\n{e}")
                 return
@@ -1165,17 +1618,36 @@ class SoundboardApp:
         btn = self.slot_buttons[slot_idx]
         tab = self._get_current_tab()
 
-        # Determine background color (playing state takes precedence)
-        is_playing = slot_idx in self.playing_slots
-        bg_color = COLORS["playing"] if is_playing else COLORS["blurple"]
+        # Determine background color (playing/preview state takes precedence, but only for current tab)
+        is_playing = (
+            slot_idx in self.playing_slots
+            and self.playing_slots[slot_idx].get("tab_idx") == self.current_tab_idx
+        )
+        is_previewing = (
+            slot_idx in self.preview_slots
+            and self.preview_slots[slot_idx].get("tab_idx") == self.current_tab_idx
+        )
+        
+        if is_playing:
+            bg_color = COLORS["playing"]
+        elif is_previewing:
+            bg_color = COLORS["preview"]
+        else:
+            bg_color = COLORS["blurple"]
 
         if slot_idx in tab.slots:
             slot = tab.slots[slot_idx]
             hk = f"\n[{slot.hotkey}]" if slot.hotkey else ""
 
+            # Truncate name if too long (max ~18 chars per line, 2 lines)
+            max_name_len = 32
+            display_name = (
+                slot.name[:max_name_len] + "…" if len(slot.name) > max_name_len else slot.name
+            )
+
             # Build display text with emoji
             emoji_prefix = f"{slot.emoji} " if slot.emoji else ""
-            display_text = f"{emoji_prefix}{slot.name}{hk}"
+            display_text = f"{emoji_prefix}{display_name}{hk}"
 
             # Try to load image
             photo = None
@@ -1191,6 +1663,7 @@ class SoundboardApp:
                     compound=tk.TOP,
                     bg=bg_color,
                     fg="white",
+                    font=("Segoe UI", 9),
                 )
             else:
                 btn.configure(
@@ -1199,6 +1672,13 @@ class SoundboardApp:
                     compound=tk.TOP,
                     bg=bg_color,
                     fg="white",
+                    font=("Segoe UI", 9),
+                )
+
+            # Enable preview button when slot has a sound
+            if slot_idx in self.slot_preview_buttons:
+                self.slot_preview_buttons[slot_idx].configure(
+                    bg=COLORS["bg_light"], fg=COLORS["text_primary"]
                 )
         else:
             # Clear image reference if exists
@@ -1206,12 +1686,19 @@ class SoundboardApp:
                 del self.slot_images[slot_idx]
 
             btn.configure(
-                text=f"Slot {slot_idx + 1}\n(Empty)",
+                text="+",
                 image="",
                 compound=tk.TOP,
                 bg=COLORS["bg_medium"],
                 fg=COLORS["text_muted"],
+                font=("Segoe UI", 14, "bold"),
             )
+
+            # Dim preview button when slot is empty
+            if slot_idx in self.slot_preview_buttons:
+                self.slot_preview_buttons[slot_idx].configure(
+                    bg=COLORS["bg_medium"], fg=COLORS["text_muted"]
+                )
 
     def _register_hotkeys(self):
         """Register global hotkeys for all slots across all tabs."""
@@ -1250,10 +1737,10 @@ class SoundboardApp:
 
         slot = tab.slots[slot_idx]
         if self.mixer and self.mixer.running:
-            self.mixer.play_sound(slot.file_path, slot.volume)
+            # play_sound returns the duration, avoiding a second cache lookup
+            duration = self.mixer.play_sound(slot.file_path, slot.volume)
 
             # Start progress tracking (only visible if on current tab)
-            duration = self.sound_cache.get_sound_duration(slot.file_path)
             if duration > 0 and tab_idx == self.current_tab_idx:
                 self.playing_slots[slot_idx] = {
                     "start_time": time.time(),
@@ -1273,7 +1760,7 @@ class SoundboardApp:
                 self.root.after(0, lambda: self.status_var.set(f"Playing: {slot.name}"))
 
     def _save_config(self):
-        """Save configuration to JSON file."""
+        """Save configuration to JSON file using atomic write to prevent corruption."""
         config = {
             "tabs": [t.to_dict() for t in self.tabs],
             "current_tab": self.current_tab_idx,
@@ -1281,9 +1768,28 @@ class SoundboardApp:
             "ptt_key": self.ptt_key_var.get().strip() if self.ptt_key_var.get().strip() else None,
             "input_device": self.input_var.get() if self.input_var.get() else None,
             "output_device": self.output_var.get() if self.output_var.get() else None,
+            "auto_start": self.auto_start_var.get() if hasattr(self, "auto_start_var") else True,
+            "monitor_enabled": self.monitor_var.get() if hasattr(self, "monitor_var") else True,
         }
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2, ensure_ascii=False)
+
+        # Atomic write: write to temp file first, then rename
+        temp_file = CONFIG_FILE + ".tmp"
+        try:
+            with open(temp_file, "w", encoding="utf-8") as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+
+            # On Windows, need to remove target first if it exists
+            if os.path.exists(CONFIG_FILE):
+                os.remove(CONFIG_FILE)
+            os.rename(temp_file, CONFIG_FILE)
+        except Exception as e:
+            print(f"Error saving config: {e}")
+            # Clean up temp file if it exists
+            if os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                except Exception:
+                    pass
 
     def _load_config(self):
         """Load configuration from JSON file."""
@@ -1333,26 +1839,46 @@ class SoundboardApp:
             # Load saved device selections
             saved_input = config.get("input_device")
             saved_output = config.get("output_device")
-            
+
             if saved_input:
                 # Check if the saved device is still in the available devices list
                 current_values = self.input_combo["values"]
                 if saved_input in current_values:
                     self.input_var.set(saved_input)
-            
+
             if saved_output:
                 current_values = self.output_combo["values"]
                 if saved_output in current_values:
                     self.output_var.set(saved_output)
 
+            # Load auto-start and monitor settings (default to True for new users)
+            auto_start = config.get("auto_start", True)
+            monitor_enabled = config.get("monitor_enabled", True)
+
+            self.auto_start_var.set(auto_start)
+            self.monitor_var.set(monitor_enabled)
+
             self._refresh_tab_bar()
             self._refresh_slot_buttons()
             self._register_hotkeys()
+
+            # Auto-start the stream if enabled and devices are selected
+            if auto_start and self.input_var.get() and self.output_var.get():
+                self.root.after(100, self._auto_start_stream)
+
         except Exception as e:
             print(f"Error loading config: {e}")
             # Create default tab on error
             self.tabs = [SoundTab(name="Main", emoji="🎵")]
             self._refresh_tab_bar()
+
+    def _auto_start_stream(self):
+        """Auto-start the audio stream after config load."""
+        if not self.mixer or not self.mixer.running:
+            self._toggle_stream()
+            # Apply monitor setting after stream starts
+            if hasattr(self, "monitor_var") and self.mixer:
+                self.mixer.set_monitor_enabled(self.monitor_var.get())
 
     def _preload_sounds(self):
         """Preload all configured sounds into memory cache for fast playback."""

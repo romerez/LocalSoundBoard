@@ -15,10 +15,21 @@ import soundfile as sf
 
 from .constants import AUDIO, COLORS
 
+# Try to get ffmpeg path from imageio-ffmpeg (bundled ffmpeg)
+try:
+    import imageio_ffmpeg
+    FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
+except ImportError:
+    FFMPEG_PATH = None
+
 # Try to import pydub for extended format support (M4A, AAC, WMA, etc.)
 try:
     from pydub import AudioSegment
-
+    # Configure pydub to use ffmpeg from imageio-ffmpeg if available
+    if FFMPEG_PATH:
+        AudioSegment.converter = FFMPEG_PATH
+        AudioSegment.ffmpeg = FFMPEG_PATH
+        AudioSegment.ffprobe = FFMPEG_PATH.replace("ffmpeg", "ffprobe")
     PYDUB_AVAILABLE = True
 except ImportError:
     PYDUB_AVAILABLE = False
@@ -117,13 +128,17 @@ class SoundEditor:
         """
         ext = Path(file_path).suffix.lower()
 
-        # Formats that soundfile handles well
+        # Formats that soundfile usually handles well (but may fail on some files)
         soundfile_formats = {".wav", ".flac", ".ogg", ".aiff", ".aif"}
 
         # Try soundfile first for known supported formats
         if ext in soundfile_formats:
-            data, sr = sf.read(file_path, dtype="float32")
-            return data, sr
+            try:
+                data, sr = sf.read(file_path, dtype="float32")
+                return data, sr
+            except Exception:
+                # Fall through to pydub fallback
+                pass
 
         # Try soundfile for other formats (MP3 support varies)
         try:
@@ -132,7 +147,7 @@ class SoundEditor:
         except Exception:
             pass
 
-        # Fallback to pydub for M4A, AAC, WMA, WebM, etc.
+        # Fallback to pydub for OGG, M4A, AAC, WMA, WebM, etc.
         if PYDUB_AVAILABLE:
             try:
                 audio = AudioSegment.from_file(file_path)

@@ -6,10 +6,13 @@ Constants and configuration values for the Discord Soundboard.
 COLORS = {
     "bg_dark": "#2C2F33",
     "bg_medium": "#40444B",
+    "bg_light": "#4F545C",
     "blurple": "#7289DA",
     "green": "#43B581",
     "red": "#F04747",
-    "playing": "#FAA61A",  # Orange/amber for playing state
+    "playing": "#FAA61A",  # Orange/amber for playing to Discord
+    "preview": "#3BA55D",  # Green for preview playback
+    "drag_target": "#5865F2",  # Bright blurple for drop target
     "text_primary": "#FFFFFF",
     "text_muted": "#8E9297",
 }
@@ -24,7 +27,7 @@ AUDIO = {
 # UI settings
 UI = {
     "window_title": "Discord Soundboard",
-    "window_size": "800x600",
+    "window_size": "760x620",
     "grid_columns": 4,
     "grid_rows": 3,
     "total_slots": 12,

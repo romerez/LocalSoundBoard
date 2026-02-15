@@ -5,6 +5,14 @@
       "emoji": "🎵",
       "slots": {
         "1": {
+          "name": "bloody-fuck-you-bloody_Jzdok0G",
+          "file_path": "sounds\\bloody-fuck-you-bloody_Jzdok0G_15502481.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null
+        },
+        "3": {
           "name": "aint-nobody-got-time-for-that_1",
           "file_path": "sounds\\aint-nobody-got-time-for-that_1_98957508.wav",
           "hotkey": null,
@@ -13,14 +21,6 @@
           "image_path": null
         },
         "2": {
-          "name": "gotcha-bitch_1",
-          "file_path": "sounds\\gotcha-bitch_1_99498771.wav",
-          "hotkey": null,
-          "volume": 1.0,
-          "emoji": null,
-          "image_path": null
-        },
-        "3": {
           "name": "Arakara",
           "file_path": "sounds\\ALL You Need To Know On Ara-Kara Dungeon _ The War Within [ ezmp3.cc ]_14976165.wav",
           "hotkey": null,
@@ -29,8 +29,8 @@
           "image_path": null
         },
         "0": {
-          "name": "bloody-fuck-you-bloody_Jzdok0G",
-          "file_path": "sounds\\bloody-fuck-you-bloody_Jzdok0G_15502481.wav",
+          "name": "1291763884000018594 - פלט",
+          "file_path": "sounds\\jesus-christ-kid_66804490.wav",
           "hotkey": null,
           "volume": 1.0,
           "emoji": null,
@@ -43,12 +43,12 @@
       "emoji": "🔥",
       "slots": {
         "0": {
-          "name": "(שיחת טלפון עם המשטרה) אתם על הזין שלי (רמיקס) [ ezmp3.cc ]",
-          "file_path": "sounds\\(שיחת טלפון עם המשטרה) אתם על הזין שלי (רמיקס) [ ezmp3.cc ]_00584692.wav",
+          "name": "AnywayHowsYourSexLife (1)",
+          "file_path": "sounds\\AnywayHowsYourSexLife (1)_67113881.wav",
           "hotkey": null,
           "volume": 1.0,
           "emoji": null,
-          "image_path": "images\\First-time-james-franco-hanging-meme_6287e7cc.jpg"
+          "image_path": null
         }
       }
     }
@@ -57,5 +57,7 @@
   "ptt_enabled": true,
   "ptt_key": "mouse4",
   "input_device": "5: Microphone (HyperX Quadcast)",
-  "output_device": "15: CABLE In 16ch (VB-Audio Virtual"
+  "output_device": "15: CABLE In 16ch (VB-Audio Virtual",
+  "auto_start": true,
+  "monitor_enabled": true
 }

@@ -1,6 +1,6 @@
 # Copilot Instructions - Discord Soundboard Project
 
-> **Last Updated:** 2024
+> **Last Updated:** 2026-02
 > **Status:** Active Development
 > **Language:** Python 3.x
 
@@ -77,7 +77,7 @@ LocalSoundBoardProject/
 
 - [x] Real-time microphone passthrough
 - [x] Mix multiple sounds simultaneously
-- [x] 12 configurable sound slots (4x3 grid)
+- [x] Unlimited configurable sound slots (4-column grid with scrolling)
 - [x] Per-slot volume control
 - [x] Global hotkey support (e.g., `ctrl+1`, `F1`)
 - [x] Mic volume slider (0-150%)
@@ -107,13 +107,25 @@ LocalSoundBoardProject/
 - [x] Playing state color indicator (orange/amber)
 - [x] Preview play/pause/resume/stop controls in sound editor
 - [x] Local speaker monitoring (hear sounds through your speakers while playing to Discord)
+- [x] Per-slot preview button (🔊) to test sounds locally before streaming
+- [x] Tab-aware progress bars (no cross-tab visual issues when switching)
+- [x] PTT release debounce (prevents premature release with rapid sound clicks)
+- [x] Collapsible audio options panel (closed by default)
+- [x] Auto-start stream on launch (configurable)
+- [x] "+" button on empty slots to quickly add sounds
+- [x] Fixed-size UI elements (locked window and slot dimensions)
+- [x] Tab-aware progress bars (no cross-tab visual issues when switching)
+- [x] Drag-and-drop slot reordering (within same tab)
+- [x] Drag-and-drop to move sounds between tabs
+- [x] Unlimited sounds per tab with scrolling support
+- [x] Preview progress bar with distinct green color
+- [x] Different colors for play modes (orange=Discord, green=preview)
 
 ---
 
 ## Planned Features / Backlog
 
-- [ ] Drag-and-drop sound file import
-- [ ] Adjustable grid size (more/fewer slots)
+- [ ] Drag-and-drop sound file import (from file explorer)
 - [ ] Search/filter sounds
 - [ ] Looping sounds option
 - [ ] Fade in/out effects
@@ -318,3 +330,42 @@ When asked to add a feature:
 2. Move to "Current Features" once implemented
 3. Update "Code Architecture" if adding new classes
 4. Update "Configuration Format" if adding new settings
+
+---
+
+## Known Gotchas & Lessons Learned
+
+> **IMPORTANT:** Add to this section whenever you encounter a bug or learn something the hard way. This prevents repeating mistakes.
+
+### Config & File Handling
+
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| Config deleted on startup | Missing color constant (e.g., `bg_light`) used in UI before being added to `COLORS` dict | Always add new color constants to `constants.py` BEFORE using them in GUI code |
+| Config file corruption (duplicate JSON) | Non-atomic writes - crash during save corrupts file | Use atomic writes: write to temp file, then `os.replace()` to target |
+| Sound paths break when editing slot | Path comparison failed for relative paths like `sounds/file.mp3` vs absolute | Check both relative AND absolute paths when detecting if sound is already in local storage |
+
+### Audio
+
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| OGG files fail with "malformed" error | `soundfile` claims OGG support but fails on some files | Wrap soundfile read in try/except, fallback to pydub for OGG |
+| pydub can't load OGG/M4A/AAC | pydub requires ffmpeg binary which isn't bundled | Install `imageio-ffmpeg` (bundles ffmpeg), set `AudioSegment.converter` to `imageio_ffmpeg.get_ffmpeg_exe()` |
+| PTT releases too early | PTT released immediately when audio callback returns | Add debounce delay (5 callback cycles ~100ms) before releasing PTT |
+| Sounds don't play with rapid clicks | Lock contention and duplicate cache lookups | Queue sound before taking locks, use single cache lookup |
+
+### GUI / Tkinter
+
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| Progress bar shows on wrong tab | Playing state not tracking which tab the sound belongs to | Store `tab_idx` in `playing_slots` dict, only update UI if current tab matches |
+| Preview button not visible | Button hidden by expanding main button | Pack bottom frame FIRST at bottom, then main button expands into remaining space |
+| UI elements resize unexpectedly | Grid weights and pack expand options | Use `grid_propagate(False)` and `pack_propagate(False)` to lock sizes; set `resizable(False, False)` on window |
+
+### General Rules
+
+1. **Always test after adding new UI elements** - layout issues are common with Tkinter
+2. **Never use a new color constant without adding it to COLORS first**
+3. **Path handling must support both forward and backslashes on Windows**
+4. **Audio file format support varies** - always have pydub fallback ready
+5. **Atomic writes for all config/state files** - prevents corruption on crash
