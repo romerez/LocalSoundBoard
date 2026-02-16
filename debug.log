@@ -61,3 +61,607 @@
 [STOP] currently_playing count: 1
 [STOP] currently_playing ids: ['0_1']
 [STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 182354 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_4)
+[STOP] stop_sound called with id=0_4
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['0_4']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 182354 samples (speed=1.0, preserve_pitch=True, volume=0.43, id=0_4)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 182354 samples (speed=1.0, preserve_pitch=True, volume=0.06, id=0_4)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 182354 samples (speed=1.0, preserve_pitch=True, volume=0.13, id=0_4)
+[SPEED] _apply_speed called: speed=1.91, preserve_pitch=True, LIBROSA=True
+[SPEED] Attempting librosa time_stretch...
+[SPEED] Processing 2 stereo channels...
+[SPEED] librosa SUCCESS: 84060 -> 44010 samples
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 44010 samples (speed=1.91, preserve_pitch=True, volume=1.0, id=0_0)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 84060 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_0)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 109612 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=1_0)
+[STOP] stop_sound called with id=1_0
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['1_0']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 109612 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=1_0)
+[STOP] stop_sound called with id=1_0
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['1_0']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 109612 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=1_0)
+[PLAY] Queued from cache: 109612 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=1_0)
+[STOP] stop_sound called with id=1_0
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['1_0']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 109612 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=1_0)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 182354 samples (speed=1.0, preserve_pitch=True, volume=0.13, id=0_4)
+[STOP] stop_sound called with id=0_0
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['0_4']
+[STOP] Removed 0 sounds from currently_playing
+[STOP] stop_sound called with id=0_4
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['0_4']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 182354 samples (speed=1.0, preserve_pitch=True, volume=0.13, id=0_4)
+[STOP] stop_sound called with id=0_4
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['0_4']
+[STOP] Removed 1 sounds from currently_playing
+[SPEED] _apply_speed called: speed=2.0, preserve_pitch=False, LIBROSA=True
+[SPEED] Using simple resample (preserve_pitch=False, LIBROSA=True)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 82821 samples (speed=2.0, preserve_pitch=False, volume=1.5, id=0_1)
+[PLAY] Queued from cache: 182354 samples (speed=1.0, preserve_pitch=True, volume=0.13, id=0_4)
+[STOP] stop_sound called with id=0_4
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['0_4']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 84060 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_0)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 109612 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=1_0)
+[STOP] stop_sound called with id=1_0
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['1_0']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 109612 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=1_0)
+[STOP] stop_sound called with id=1_0
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['1_0']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 109612 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=1_0)
+[STOP] stop_sound called with id=1_0
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['1_0']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 109612 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=1_0)
+[STOP] stop_sound called with id=1_0
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['1_0']
+[STOP] Removed 1 sounds from currently_playing
+[SPEED] _apply_speed called: speed=1.36, preserve_pitch=True, LIBROSA=True
+[SPEED] Attempting librosa time_stretch...
+[SPEED] Processing 2 stereo channels...
+[SPEED] librosa SUCCESS: 109612 -> 80597 samples
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 80597 samples (speed=1.36, preserve_pitch=True, volume=1.0, id=1_0)
+[SPEED] _apply_speed called: speed=0.82, preserve_pitch=True, LIBROSA=True
+[SPEED] Attempting librosa time_stretch...
+[SPEED] Processing 2 stereo channels...
+[SPEED] librosa SUCCESS: 109612 -> 133673 samples
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 133673 samples (speed=0.82, preserve_pitch=True, volume=1.0, id=1_0)
+[STOP] stop_sound called with id=1_0
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['1_0']
+[STOP] Removed 1 sounds from currently_playing
+[SPEED] _apply_speed called: speed=1.51, preserve_pitch=False, LIBROSA=True
+[SPEED] Using simple resample (preserve_pitch=False, LIBROSA=True)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 72590 samples (speed=1.51, preserve_pitch=False, volume=1.0, id=1_0)
+[SPEED] _apply_speed called: speed=1.76, preserve_pitch=True, LIBROSA=True
+[SPEED] Attempting librosa time_stretch...
+[SPEED] Processing 2 stereo channels...
+[SPEED] librosa SUCCESS: 40794 -> 23178 samples
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 23178 samples (speed=1.76, preserve_pitch=True, volume=1.0, id=0_2)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 40794 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_2)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 219840 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_5)
+[PLAY] Queued from cache: 219840 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_5)
+[STOP] stop_sound called with id=0_5
+[STOP] currently_playing count: 2
+[STOP] currently_playing ids: ['0_5', '0_5']
+[STOP] Removed 2 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 231967 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_6)
+[PLAY] Queued from cache: 231967 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_6)
+[STOP] stop_sound called with id=0_6
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['0_6']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 231967 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_6)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 112848 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_6)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 146880 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_7)
+[STOP] stop_sound called with id=0_7
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['0_7']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 71026 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_3)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 911708 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_11)
+[STOP] stop_sound called with id=0_11
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['0_11']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 146880 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_7)
+[STOP] stop_sound called with id=0_7
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['0_7']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 71026 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_3)
+[STOP] stop_sound called with id=0_3
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['0_3']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 112848 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_6)
+[STOP] stop_sound called with id=0_6
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['0_6']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 48214 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_9)
+[SPEED] _apply_speed called: speed=1.51, preserve_pitch=True, LIBROSA=True
+[SPEED] Attempting librosa time_stretch...
+[SPEED] Processing 2 stereo channels...
+[SPEED] librosa SUCCESS: 109612 -> 72591 samples
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 72591 samples (speed=1.51, preserve_pitch=True, volume=1.0, id=1_0)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 109612 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=1_0)
+[IMPORT] librosa imported successfully: 0.11.0
+[PTT] Key set to: mouse4
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 84060 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_0)
+[PLAY] Queued from cache: 84060 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_0)
+[STOP] stop_sound called with id=0_0
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['0_0']
+[STOP] Removed 1 sounds from currently_playing
+[SPEED] _apply_speed called: speed=2.0, preserve_pitch=False, LIBROSA=True
+[SPEED] Using simple resample (preserve_pitch=False, LIBROSA=True)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 82821 samples (speed=2.0, preserve_pitch=False, volume=1.5, id=0_1)
+[PLAY] Queued from cache: 84060 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_0)
+[STOP] stop_sound called with id=0_0
+[STOP] currently_playing count: 2
+[STOP] currently_playing ids: ['0_1', '0_0']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 165642 samples (speed=1.0, preserve_pitch=False, volume=1.0, id=0_1)
+[PLAY] Queued from cache: 165642 samples (speed=1.0, preserve_pitch=False, volume=1.0, id=0_1)
+[STOP] stop_sound called with id=0_1
+[STOP] currently_playing count: 2
+[STOP] currently_playing ids: ['0_1', '0_1']
+[STOP] Removed 2 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 165642 samples (speed=1.0, preserve_pitch=False, volume=0.21, id=0_1)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 48214 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_9)
+[PLAY] Queued from cache: 48214 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_9)
+[STOP] stop_sound called with id=0_9
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['0_9']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 109612 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=1_0)
+[STOP] stop_sound called with id=1_0
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['1_0']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 109612 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=1_0)
+[STOP] stop_sound called with id=1_0
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['1_0']
+[STOP] Removed 1 sounds from currently_playing
+[IMPORT] librosa imported successfully: 0.11.0
+[IMPORT] librosa imported successfully: 0.11.0
+[IMPORT] librosa imported successfully: 0.11.0
+[PTT] Key set to: mouse4
+[IMPORT] librosa imported successfully: 0.11.0
+[PTT] Key set to: mouse4
+[IMPORT] librosa imported successfully: 0.11.0
+[IMPORT] librosa imported successfully: 0.11.0
+[PTT] Key set to: mouse4
+[IMPORT] librosa imported successfully: 0.11.0
+[PTT] Key set to: mouse4
+[IMPORT] librosa imported successfully: 0.11.0
+[IMPORT] librosa imported successfully: 0.11.0
+[PTT] Key set to: mouse4
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 112848 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_6)
+[STOP] stop_sound called with id=0_6
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['0_6']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 146880 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_7)
+[STOP] stop_sound called with id=0_7
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['0_7']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 84060 samples (speed=1.0, preserve_pitch=True, volume=1.09, id=0_0)
+[STOP] stop_sound called with id=0_0
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['0_0']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 84060 samples (speed=1.0, preserve_pitch=True, volume=1.09, id=0_0)
+[STOP] stop_sound called with id=0_0
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['0_0']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 71026 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_3)
+[STOP] stop_sound called with id=0_3
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['0_3']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 71026 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_3)
+[STOP] stop_sound called with id=0_3
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['0_3']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 71026 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_3)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 71026 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_3)
+[STOP] stop_sound called with id=0_3
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['0_3']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 71026 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_3)
+[STOP] stop_sound called with id=0_3
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['0_3']
+[STOP] Removed 1 sounds from currently_playing
+[IMPORT] librosa imported successfully: 0.11.0
+[PTT] Key set to: mouse4
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 71026 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_3)
+[STOP] stop_sound called with id=0_3
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['0_3']
+[STOP] Removed 1 sounds from currently_playing
+[STOP] stop_sound called with id=0_3
+[STOP] currently_playing count: 0
+[STOP] currently_playing ids: []
+[STOP] Removed 0 sounds from currently_playing
+[IMPORT] librosa imported successfully: 0.11.0
+[PTT] Key set to: mouse4
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 40794 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_2)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 40794 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_2)
+[STOP] stop_sound called with id=0_2
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['0_2']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 109612 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=1_0)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 109612 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=1_0)
+[STOP] stop_sound called with id=1_0
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['1_0']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 109612 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=1_0)
+[IMPORT] librosa imported successfully: 0.11.0
+[IMPORT] librosa imported successfully: 0.11.0
+[IMPORT] librosa imported successfully: 0.11.0
+[IMPORT] librosa imported successfully: 0.11.0
+[IMPORT] librosa imported successfully: 0.11.0
+[PTT] Key set to: mouse4
+[IMPORT] librosa imported successfully: 0.11.0
+[IMPORT] librosa imported successfully: 0.11.0
+[IMPORT] librosa imported successfully: 0.11.0
+[IMPORT] librosa imported successfully: 0.11.0
+[IMPORT] librosa imported successfully: 0.11.0
+[IMPORT] librosa imported successfully: 0.11.0
+[PTT] Key set to: mouse4
+[IMPORT] librosa imported successfully: 0.11.0
+[PTT] Key set to: mouse4
+[IMPORT] librosa imported successfully: 0.11.0
+[IMPORT] librosa import FAILED: ModuleNotFoundError: No module named 'librosa'
+[PTT] Key set to: mouse4
+[IMPORT] librosa import FAILED: ModuleNotFoundError: No module named 'librosa'
+[PTT] Key set to: mouse4
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 84060 samples (speed=1.0, preserve_pitch=True, volume=1.09, id=0_0)
+[STOP] stop_sound called with id=0_0
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['0_0']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 165642 samples (speed=1.0, preserve_pitch=False, volume=0.21, id=0_1)
+[STOP] stop_sound called with id=0_1
+[STOP] currently_playing count: 1
+[STOP] currently_playing ids: ['0_1']
+[STOP] Removed 1 sounds from currently_playing
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 48214 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_9)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 182354 samples (speed=1.0, preserve_pitch=True, volume=0.13, id=0_4)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 40794 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_2)
+[IMPORT] librosa imported successfully: 0.11.0
+[IMPORT] librosa imported successfully: 0.11.0
+[IMPORT] librosa import FAILED: ModuleNotFoundError: No module named 'librosa'
+[PTT] Key set to: mouse4
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 219840 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_5)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 219840 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_5)
+[IMPORT] librosa import FAILED: ModuleNotFoundError: No module named 'librosa'
+[PTT] Key set to: mouse4
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 219840 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_5)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 48214 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_9)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 40794 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_2)
+[SPEED] _apply_speed called: speed=2.0, preserve_pitch=True, LIBROSA=False
+[SPEED] Using simple resample (preserve_pitch=True, LIBROSA=False)
+[RESAMPLE] Using linear interpolation fallback (low quality)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 109920 samples (speed=2.0, preserve_pitch=True, volume=1.0, id=0_5)
+[SPEED] _apply_speed called: speed=0.5, preserve_pitch=True, LIBROSA=False
+[SPEED] Using simple resample (preserve_pitch=True, LIBROSA=False)
+[RESAMPLE] Using linear interpolation fallback (low quality)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 439680 samples (speed=0.5, preserve_pitch=True, volume=1.0, id=0_5)
+[SPEED] _apply_speed called: speed=1.42, preserve_pitch=False, LIBROSA=False
+[SPEED] Using simple resample (preserve_pitch=False, LIBROSA=False)
+[RESAMPLE] Using linear interpolation fallback (low quality)
+[PTT] Pressing: mouse4
+[PTT] Using Windows API to press: x2
+[PTT] Windows API mouse press done
+[PTT] Active = True
+[PLAY] Queued from cache: 154816 samples (speed=1.42, preserve_pitch=False, volume=1.0, id=0_5)

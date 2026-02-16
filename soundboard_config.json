@@ -19,18 +19,18 @@
           "name": "bloody-fuck-you-bloody_Jzdok0G",
           "file_path": "sounds\\bloody-fuck-you-bloody_Jzdok0G_15502481.wav",
           "hotkey": null,
-          "volume": 1.5,
+          "volume": 0.21,
           "emoji": null,
           "image_path": null,
           "color": null,
-          "speed": 2.0,
+          "speed": 1.0,
           "preserve_pitch": false
         },
         "4": {
           "name": "ראש צבע עיפרון",
           "file_path": "sounds\\[appsgolem.com][00-03-40][00-03-45]__ (1)_78640441.wav",
           "hotkey": null,
-          "volume": 1.0,
+          "volume": 0.13,
           "emoji": "✔️",
           "image_path": null,
           "color": "#7289DA",
@@ -45,18 +45,73 @@
           "emoji": null,
           "image_path": null,
           "color": "#9B59B6",
-          "speed": 1.76,
+          "speed": 1.0,
           "preserve_pitch": true
         },
         "0": {
           "name": "1291763884000018594 - פלט",
           "file_path": "sounds\\jesus-christ-kid_66804490.wav",
           "hotkey": null,
-          "volume": 1.0,
+          "volume": 1.09,
           "emoji": null,
           "image_path": null,
           "color": "#E91E63",
-          "speed": 1.91,
+          "speed": 1.0,
+          "preserve_pitch": true
+        },
+        "5": {
+          "name": "ביבי זיינתי את אשתך",
+          "file_path": "sounds\\1291763884000018594 - פלט_89842547.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#7289DA",
+          "speed": 1.0,
+          "preserve_pitch": true
+        },
+        "9": {
+          "name": "ראש מגנזיום",
+          "file_path": "sounds\\[appsgolem.com][00-03-45][00-03-50]___89919708.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#7289DA",
+          "speed": 1.0,
+          "preserve_pitch": true
+        },
+        "6": {
+          "name": "icecream so good",
+          "file_path": "sounds\\pinkydoll-icecream_90098579.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#7289DA",
+          "speed": 1.0,
+          "preserve_pitch": true
+        },
+        "11": {
+          "name": "סתום ת'פה ש'ך כבר!!! (רמיקס) ",
+          "file_path": "sounds\\סתום ת'פה ש'ך כבר!!! (רמיקס) [ ezmp3.cc ]_90365669.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#7289DA",
+          "speed": 1.0,
+          "preserve_pitch": true
+        },
+        "7": {
+          "name": "זה כתב\"ם",
+          "file_path": "sounds\\zv katbam (1)_90303935.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#7289DA",
+          "speed": 1.0,
           "preserve_pitch": true
         }
       }

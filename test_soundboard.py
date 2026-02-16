@@ -10,7 +10,7 @@ import os
 import time
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Optional
 
 # Add parent directory to path for imports
@@ -36,11 +36,10 @@ class SoundSlot:
 class SoundTab:
     name: str
     emoji: Optional[str] = None
-    slots: Dict[int, SoundSlot] = None
-    
+    slots: Dict[int, SoundSlot] = field(default_factory=dict)
+
     def __post_init__(self):
-        if self.slots is None:
-            self.slots = {}
+        pass  # slots is already initialized by default_factory
 
 
 class TestSoundSlot(unittest.TestCase):
@@ -104,7 +103,7 @@ class TestPlayingStateTracking(unittest.TestCase):
             "duration": 2.0,
             "tab_idx": 0,
         }
-        
+
         # Check if slot is playing on current tab
         is_playing = (
             slot_idx in self.playing_slots
@@ -120,7 +119,7 @@ class TestPlayingStateTracking(unittest.TestCase):
             "duration": 2.0,
             "tab_idx": 1,  # Different tab
         }
-        
+
         # Check if slot is playing on current tab (tab 0)
         is_playing = (
             slot_idx in self.playing_slots
@@ -136,7 +135,7 @@ class TestPlayingStateTracking(unittest.TestCase):
             "duration": 2.0,
             "tab_idx": 0,
         }
-        
+
         is_previewing = (
             slot_idx in self.preview_slots
             and self.preview_slots[slot_idx].get("tab_idx") == self.current_tab_idx
@@ -151,7 +150,7 @@ class TestPlayingStateTracking(unittest.TestCase):
             "duration": 2.0,
             "tab_idx": 1,  # Different tab
         }
-        
+
         is_previewing = (
             slot_idx in self.preview_slots
             and self.preview_slots[slot_idx].get("tab_idx") == self.current_tab_idx
@@ -166,7 +165,7 @@ class TestPlayingStateTracking(unittest.TestCase):
             "duration": 2.0,
             "tab_idx": 0,
         }
-        
+
         # On tab 0, slot should show as playing
         self.current_tab_idx = 0
         is_playing_tab0 = (
@@ -174,7 +173,7 @@ class TestPlayingStateTracking(unittest.TestCase):
             and self.playing_slots[slot_idx].get("tab_idx") == self.current_tab_idx
         )
         self.assertTrue(is_playing_tab0)
-        
+
         # Switch to tab 1, slot should NOT show as playing
         self.current_tab_idx = 1
         is_playing_tab1 = (
@@ -212,12 +211,12 @@ class TestColorConstants(unittest.TestCase):
     def test_playing_color_is_orange(self):
         """Test that playing color is orange/amber."""
         # Playing should be orange for Discord playback
-        self.assertEqual(COLORS["playing"], "#FAA61A")
+        self.assertEqual(COLORS["playing"], "#F5A623")
 
     def test_preview_color_is_green(self):
         """Test that preview color is green."""
         # Preview should be green
-        self.assertEqual(COLORS["preview"], "#3BA55D")
+        self.assertEqual(COLORS["preview"], "#23A559")
 
 
 class TestUIConstants(unittest.TestCase):
@@ -270,7 +269,7 @@ class TestDragAndDropState(unittest.TestCase):
         drag_start_x = 0
         drag_start_y = 0
         is_dragging = False
-        
+
         self.assertIsNone(drag_source_idx)
         self.assertIsNone(drag_source_tab)
         self.assertFalse(is_dragging)
@@ -279,7 +278,7 @@ class TestDragAndDropState(unittest.TestCase):
         """Test drag threshold calculation."""
         drag_start_x = 100
         drag_start_y = 100
-        
+
         # Small movement - should not trigger drag
         event_x = 102
         event_y = 102
@@ -287,7 +286,7 @@ class TestDragAndDropState(unittest.TestCase):
         dy = abs(event_y - drag_start_y)
         should_drag = dx > 5 or dy > 5
         self.assertFalse(should_drag)
-        
+
         # Larger movement - should trigger drag
         event_x = 110
         dx = abs(event_x - drag_start_x)
@@ -304,14 +303,14 @@ class TestSlotSwapping(unittest.TestCase):
             0: SoundSlot(name="Sound A", file_path="a.mp3"),
             1: SoundSlot(name="Sound B", file_path="b.mp3"),
         }
-        
+
         # Swap
         slot1 = slots.get(0)
         slot2 = slots.get(1)
         if slot1 is not None and slot2 is not None:
             slots[0] = slot2
             slots[1] = slot1
-        
+
         self.assertEqual(slots[0].name, "Sound B")
         self.assertEqual(slots[1].name, "Sound A")
 
@@ -320,16 +319,16 @@ class TestSlotSwapping(unittest.TestCase):
         slots = {
             0: SoundSlot(name="Sound A", file_path="a.mp3"),
         }
-        
+
         # Move slot 0 to slot 5
         idx1, idx2 = 0, 5
         slot1 = slots.get(idx1)
         slot2 = slots.get(idx2)
-        
+
         if slot1 is not None and slot2 is None:
             slots[idx2] = slot1
             del slots[idx1]
-        
+
         self.assertNotIn(0, slots)
         self.assertIn(5, slots)
         self.assertEqual(slots[5].name, "Sound A")
@@ -345,29 +344,29 @@ class TestMoveSlotBetweenTabs(unittest.TestCase):
             slots={0: SoundSlot(name="Sound A", file_path="a.mp3")},
         )
         tab2 = SoundTab(name="Tab 2", slots={})
-        
+
         tabs = [tab1, tab2]
-        
+
         # Move slot 0 from tab 0 to tab 1
         from_tab_idx = 0
         to_tab_idx = 1
         slot_idx = 0
-        
+
         from_tab = tabs[from_tab_idx]
         to_tab = tabs[to_tab_idx]
-        
+
         if slot_idx in from_tab.slots:
             slot = from_tab.slots[slot_idx]
-            
+
             # Find first empty slot in target tab
             target_idx = 0
             while target_idx in to_tab.slots:
                 target_idx += 1
-            
+
             # Move
             to_tab.slots[target_idx] = slot
             del from_tab.slots[slot_idx]
-        
+
         self.assertNotIn(0, tab1.slots)
         self.assertIn(0, tab2.slots)
         self.assertEqual(tab2.slots[0].name, "Sound A")
@@ -378,11 +377,11 @@ if __name__ == "__main__":
     print("=" * 60)
     print("Discord Soundboard Test Suite")
     print("=" * 60)
-    
+
     # Create test suite
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
-    
+
     # Add all test classes
     suite.addTests(loader.loadTestsFromTestCase(TestSoundSlot))
     suite.addTests(loader.loadTestsFromTestCase(TestSoundTab))
@@ -393,11 +392,11 @@ if __name__ == "__main__":
     suite.addTests(loader.loadTestsFromTestCase(TestDragAndDropState))
     suite.addTests(loader.loadTestsFromTestCase(TestSlotSwapping))
     suite.addTests(loader.loadTestsFromTestCase(TestMoveSlotBetweenTabs))
-    
+
     # Run with verbosity
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
-    
+
     # Summary
     print("\n" + "=" * 60)
     if result.wasSuccessful():
@@ -405,6 +404,6 @@ if __name__ == "__main__":
     else:
         print(f"❌ {len(result.failures)} failures, {len(result.errors)} errors")
     print("=" * 60)
-    
+
     # Exit with appropriate code
     sys.exit(0 if result.wasSuccessful() else 1)

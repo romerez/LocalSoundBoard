@@ -33,7 +33,7 @@ Replace Discord's built-in soundboard with a standalone, local solution that:
 | Component | Technology |
 |-----------|------------|
 | Language | Python 3.x |
-| GUI | Tkinter |
+| GUI | CustomTkinter (modern Tkinter extension) |
 | Audio I/O | `sounddevice` |
 | Audio Files | `soundfile` |
 | Audio Processing | `numpy` |
@@ -43,11 +43,14 @@ Replace Discord's built-in soundboard with a standalone, local solution that:
 | Image Processing | `pillow` |
 | Audio Format Conversion | `pydub` + `imageio-ffmpeg` |
 | Pitch-Preserving Speed | `librosa` |
+| Emoji Data | `emoji-data-python` |
+| Color Utilities | `colour` |
 
 ### Dependencies with Explanations
 
 | Library | Version | Purpose |
 |---------|---------|---------|
+| `customtkinter` | >=5.2.0 | Modern Tkinter extension with rounded corners, dark mode support, and modern styling. |
 | `sounddevice` | >=0.4.6 | Real-time audio I/O using PortAudio. Provides low-latency audio streams for mic capture and output to virtual cable. |
 | `soundfile` | >=0.12.1 | Read/write audio files (WAV, FLAC, AIFF). Primary audio file loader for reliable formats. |
 | `numpy` | >=1.24.0 | Audio buffer manipulation, waveform processing, sample mixing, resampling operations. |
@@ -58,12 +61,15 @@ Replace Discord's built-in soundboard with a standalone, local solution that:
 | `pydub` | >=0.25.1 | Extended audio format support (MP3, OGG, M4A, AAC, WMA, Opus, WebM). Fallback when soundfile fails. |
 | `imageio-ffmpeg` | >=0.6.0 | Bundled ffmpeg binary for pydub. No separate ffmpeg installation required. |
 | `librosa` | >=0.10.0 | Time-stretching for pitch-preserving speed changes. Allows 0.5x-2x speed without chipmunk voice. |
+| `emoji-data-python` | >=1.6.0 | Emoji database with categories. Provides 1800+ emojis organized by category for emoji picker. |
+| `colour` | >=0.1.5 | Color manipulation utilities. Lighten, darken, saturate, generate gradients, complementary colors. |
 
 ### Core Python Modules Used
 
 | Module | Purpose |
 |--------|---------|
-| `tkinter` | GUI framework - windows, buttons, sliders, dialogs |
+| `customtkinter` | Modern GUI widgets - CTkFrame, CTkButton, CTkSlider, etc. |
+| `tkinter` | Base GUI framework - used by CustomTkinter and for dialogs |
 | `threading` | Background audio processing, non-blocking operations |
 | `queue` | Thread-safe audio data transfer between callbacks |
 | `ctypes` | Windows API calls for mouse button simulation (PTT) |
@@ -139,7 +145,9 @@ def main():
 | Constant | Description |
 |----------|-------------|
 | `COLORS` | Discord-style color palette (bg_dark, blurple, green, red, playing, preview, etc.) |
-| `SLOT_COLORS` | 12-color palette for custom slot backgrounds |
+| `SLOT_COLORS` | 12-color standard palette for slot backgrounds |
+| `NEON_COLORS` | 12-color vibrant neon palette (Neon Pink, Electric Blue, etc.) |
+| `ALL_SLOT_COLORS` | Combined standard + neon colors (24 total) |
 | `AUDIO` | Sample rate (48000), block size (1024), channels (2) |
 | `UI` | Window title, size (740x650), grid columns (4), rows (3) |
 | `EDITOR` | Max duration warning (5s), zoom limits (1x-50x) |
@@ -148,7 +156,22 @@ def main():
 | `IMAGES_DIR` | "images" folder name |
 | `SUPPORTED_FORMATS` | Audio formats tuple (*.mp3, *.wav, *.ogg, etc.) |
 | `SUPPORTED_IMAGE_FORMATS` | Image formats tuple (*.png, *.jpg, *.gif, etc.) |
-| `EMOJI_CATEGORIES` | Dict of 13 categories with 500+ emojis |
+| `EMOJI_CATEGORIES` | Dict of 9 categories with 1800+ emojis (from emoji-data-python) |
+| `FONTS` | Font configuration with "Segoe UI Emoji" for colored emoji support |
+
+**Color Utility Functions:**
+| Function | Purpose |
+|----------|--------|
+| `hex_to_rgb()` | Convert hex color to RGB tuple |
+| `rgb_to_hex()` | Convert RGB to hex |
+| `lighten_color()` | Make color lighter |
+| `darken_color()` | Make color darker |
+| `saturate_color()` | Increase color saturation |
+| `desaturate_color()` | Decrease color saturation |
+| `get_complementary_color()` | Get opposite color on color wheel |
+| `generate_color_gradient()` | Create gradient between two colors |
+| `is_light_color()` | Check if color is light (for contrast) |
+| `get_text_color_for_bg()` | Auto-select text color for readability |
 
 ---
 
@@ -318,6 +341,7 @@ Example: `airhorn_8f3a2b1c.mp3`
 - [x] Per-slot stop button (■) appears while sound is playing
 - [x] Global "Stop All Sounds" button in audio options
 - [x] Pitch preservation option for speed changes (uses librosa time-stretch)
+- [x] Modern UI with CustomTkinter (rounded corners, modern styling)
 
 ---
 
@@ -325,7 +349,6 @@ Example: `airhorn_8f3a2b1c.mp3`
 
 ### High Priority
 - [ ] Fix volume above 100% not making sounds louder (soft clipping needs work)
-- [ ] UI design overhaul (modernize look and feel)
 
 ### Medium Priority
 - [ ] Drag-and-drop sound file import (from file explorer)
@@ -341,6 +364,7 @@ Example: `airhorn_8f3a2b1c.mp3`
 - [ ] Auto-start with Windows
 - [ ] Discord Rich Presence
 - [ ] Emoji search by description in picker
+- [ ] Convert sound editor to CustomTkinter
 
 ---
 
@@ -1036,9 +1060,11 @@ When asked to add a feature:
 
 | Issue | Cause | Fix |
 |-------|-------|-----|
+| Audio sounds distorted/poor quality in Discord | Naive linear interpolation resampling causes aliasing and distortion when audio files have different sample rates than 48kHz | Use `librosa.resample()` for high-quality resampling with anti-aliasing; added `_resample_audio()` helper function |
+| Audio sounds "cut off" in Discord | PTT releasing too early + abrupt sound endings | Increased PTT debounce delay from 5 to 15 cycles (~300ms); added `_apply_fade_out()` to apply 30ms fade at end of sounds |
 | OGG files fail with "malformed" error | `soundfile` claims OGG support but fails on some files | Use shared `read_audio_file()` function with pydub fallback. Don't include `.ogg` in soundfile_formats list. |
 | pydub can't load OGG/M4A/AAC | pydub requires ffmpeg binary which isn't bundled | Install `imageio-ffmpeg` (bundles ffmpeg), set `AudioSegment.converter` to `imageio_ffmpeg.get_ffmpeg_exe()` |
-| PTT releases too early | PTT released immediately when audio callback returns | Add debounce delay (5 callback cycles ~100ms) before releasing PTT |
+| PTT releases too early | PTT released immediately when audio callback returns | Add debounce delay (15 callback cycles ~300ms) before releasing PTT |
 | Sounds don't play with rapid clicks | Lock contention and duplicate cache lookups | Queue sound before taking locks, use single cache lookup |
 | Direct sf.read() fails for OGG | Multiple code paths used sf.read directly without fallback | Consolidated audio loading to shared `read_audio_file()` function in audio.py |
 

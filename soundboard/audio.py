@@ -154,6 +154,110 @@ def read_audio_file(file_path: str) -> Tuple[np.ndarray, int]:
         )
 
 
+def _resample_audio(data: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
+    """
+    High-quality audio resampling using librosa.
+
+    This avoids the aliasing and distortion that naive linear interpolation causes.
+    Falls back to scipy if librosa is unavailable.
+
+    Args:
+        data: Audio data as numpy array (mono or stereo)
+        orig_sr: Original sample rate
+        target_sr: Target sample rate
+
+    Returns:
+        Resampled audio data
+    """
+    if orig_sr == target_sr:
+        return data
+
+    # Use librosa for high-quality resampling (already imported for time-stretch)
+    if LIBROSA_AVAILABLE:
+        try:
+            if data.ndim == 1:
+                # Mono audio
+                return librosa.resample(data, orig_sr=orig_sr, target_sr=target_sr).astype(
+                    np.float32
+                )
+            else:
+                # Stereo audio - process each channel
+                channels = []
+                for ch in range(data.shape[1]):
+                    resampled = librosa.resample(data[:, ch], orig_sr=orig_sr, target_sr=target_sr)
+                    channels.append(resampled)
+                return np.column_stack(channels).astype(np.float32)
+        except Exception as e:
+            with open("debug.log", "a") as f:
+                f.write(f"[RESAMPLE] librosa failed: {e}, falling back to interpolation\n")
+
+    # Fallback: scipy resample (still better than linear interpolation)
+    try:
+        from scipy import signal
+
+        ratio = target_sr / orig_sr
+        new_length = int(len(data) * ratio)
+        if data.ndim == 1:
+            return signal.resample(data, new_length).astype(np.float32)
+        else:
+            return signal.resample(data, new_length, axis=0).astype(np.float32)
+    except ImportError:
+        pass
+
+    # Last resort: linear interpolation (low quality but always works)
+    with open("debug.log", "a") as f:
+        f.write(f"[RESAMPLE] Using linear interpolation fallback (low quality)\n")
+    ratio = target_sr / orig_sr
+    new_length = int(len(data) * ratio)
+    old_indices = np.arange(len(data))
+    new_indices = np.linspace(0, len(data) - 1, new_length)
+
+    if data.ndim == 1:
+        return np.interp(new_indices, old_indices, data).astype(np.float32)
+    else:
+        result = np.zeros((new_length, data.shape[1]), dtype=np.float32)
+        for ch in range(data.shape[1]):
+            result[:, ch] = np.interp(new_indices, old_indices, data[:, ch])
+        return result
+
+
+def _apply_fade_out(data: np.ndarray, sample_rate: int, fade_ms: int = 30) -> np.ndarray:
+    """
+    Apply a short fade-out to the end of audio to prevent abrupt cutoffs.
+
+    This helps prevent the "cut" sound that can occur when audio ends abruptly,
+    especially when transmitted through Discord's audio processing.
+
+    Args:
+        data: Audio data as numpy array
+        sample_rate: Sample rate of the audio
+        fade_ms: Fade duration in milliseconds (default 30ms)
+
+    Returns:
+        Audio data with fade-out applied
+    """
+    fade_samples = int(sample_rate * fade_ms / 1000)
+
+    if fade_samples <= 0 or len(data) < fade_samples:
+        return data
+
+    # Create a copy to avoid modifying cached data
+    result = data.copy()
+
+    # Create fade curve (linear fade from 1.0 to 0.0)
+    fade_curve = np.linspace(1.0, 0.0, fade_samples).astype(np.float32)
+
+    # Apply fade to the end of the audio
+    if result.ndim == 1:
+        result[-fade_samples:] *= fade_curve
+    else:
+        # Stereo: apply to all channels
+        for ch in range(result.shape[1]):
+            result[-fade_samples:, ch] *= fade_curve
+
+    return result
+
+
 class SoundCache:
     """
     Manages local sound storage and in-memory caching for optimal performance.
@@ -244,10 +348,7 @@ class SoundCache:
 
             # Resample if needed (do this once, not on every play)
             if sr != self.sample_rate:
-                ratio = self.sample_rate / sr
-                new_length = int(len(data) * ratio)
-                indices = np.linspace(0, len(data) - 1, new_length).astype(int)
-                data = data[indices]
+                data = _resample_audio(data, sr, self.sample_rate)
 
             with self._lock:
                 self._cache[file_path] = data
@@ -378,8 +479,10 @@ class AudioMixer:
         self.ptt_active: bool = False
         self._ptt_lock = threading.Lock()
         # PTT release debounce: wait N callback cycles after last sound finishes
-        # At 48kHz with 1024 block size, each cycle is ~21ms, so 5 cycles = ~100ms
-        self._ptt_release_delay = 5  # Number of empty cycles before releasing PTT
+        # At 48kHz with 1024 block size, each cycle is ~21ms
+        # Discord has audio processing buffers, so we need ~300ms to ensure
+        # the end of sounds isn't cut off when PTT releases
+        self._ptt_release_delay = 15  # ~300ms delay before releasing PTT
         self._ptt_release_countdown = 0  # Current countdown (0 = not counting)
 
         # Local monitoring (play sounds to speakers too)
@@ -634,6 +737,8 @@ class AudioMixer:
                     # Apply speed adjustment
                     if speed != 1.0:
                         data = self._apply_speed(data, speed, preserve_pitch)
+                    # Apply fade-out to prevent abrupt cutoff
+                    data = _apply_fade_out(data, self.sample_rate)
                     # Queue sound FIRST, then press PTT (prevents race condition where
                     # output callback sees empty queue and releases PTT immediately)
                     self.sound_queue.put(
@@ -654,14 +759,14 @@ class AudioMixer:
 
             # Resample if needed
             if sr != self.sample_rate:
-                ratio = self.sample_rate / sr
-                new_length = int(len(data) * ratio)
-                indices = np.linspace(0, len(data) - 1, new_length).astype(int)
-                data = data[indices]
+                data = _resample_audio(data, sr, self.sample_rate)
 
             # Apply speed adjustment
             if speed != 1.0:
                 data = self._apply_speed(data, speed, preserve_pitch)
+
+            # Apply fade-out to prevent abrupt cutoff
+            data = _apply_fade_out(data, self.sample_rate)
 
             with open("debug.log", "a") as f:
                 f.write(
@@ -732,24 +837,10 @@ class AudioMixer:
                     f"[SPEED] Using simple resample (preserve_pitch={preserve_pitch}, LIBROSA={LIBROSA_AVAILABLE})\n"
                 )
 
-        # Simple resampling (changes pitch with speed - chipmunk/deep effect)
-        new_length = int(len(data) / speed)
-        if new_length < 1:
-            return data
-
-        # Simple resampling using linear interpolation
-        old_indices = np.arange(len(data))
-        new_indices = np.linspace(0, len(data) - 1, new_length)
-
-        # Handle both mono (1D) and stereo (2D) data
-        if data.ndim == 1:
-            result = np.interp(new_indices, old_indices, data)
-        else:
-            # Stereo: interpolate each channel separately
-            result = np.zeros((new_length, data.shape[1]), dtype=np.float32)
-            for ch in range(data.shape[1]):
-                result[:, ch] = np.interp(new_indices, old_indices, data[:, ch])
-
+        # Resampling with pitch change (chipmunk/deep effect)
+        # Calculate the new sample rate that produces the desired speed effect
+        new_sr = int(self.sample_rate * speed)
+        result = _resample_audio(data, new_sr, self.sample_rate)
         return result.astype(np.float32)
 
     def _soft_clip(self, x: np.ndarray) -> np.ndarray:

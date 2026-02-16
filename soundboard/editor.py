@@ -18,7 +18,7 @@ from .constants import AUDIO, COLORS
 
 # Try to get ffmpeg path from imageio-ffmpeg (bundled ffmpeg)
 try:
-    import imageio_ffmpeg
+    import imageio_ffmpeg  # type: ignore[import-untyped]
 
     FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
 except ImportError:
@@ -32,7 +32,7 @@ try:
     if FFMPEG_PATH:
         AudioSegment.converter = FFMPEG_PATH
         AudioSegment.ffmpeg = FFMPEG_PATH
-        AudioSegment.ffprobe = FFMPEG_PATH.replace("ffmpeg", "ffprobe")
+        AudioSegment.ffprobe = FFMPEG_PATH.replace("ffmpeg", "ffprobe")  # type: ignore[attr-defined]
     PYDUB_AVAILABLE = True
 except ImportError:
     PYDUB_AVAILABLE = False
