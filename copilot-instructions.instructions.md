@@ -1,6 +1,6 @@
 # Copilot Instructions - Discord Soundboard Project
 
-> **Last Updated:** 2026-02-19
+> **Last Updated:** 2026-02-19 (major: Slot Button Click & Drag Architecture documented)
 > **Status:** Active Development
 > **Language:** Python 3.x
 
@@ -96,6 +96,83 @@ LocalSoundBoardProject/
 | `audio.py` | Audio I/O, mixing logic, sound caching, resampling utilities |
 | `editor.py` | Sound editor with waveform visualization and trimming |
 | `gui.py` | CustomTkinter UI components, configuration I/O |
+
+---
+
+## CRITICAL: Slot Button Click & Drag Architecture
+
+> **DO NOT MODIFY this system without reading this section first.**
+> This was solved after extensive debugging — every design choice has a reason.
+
+### The Problem
+
+CTkButton's internal `_draw()` method re-binds `<Button-1>` on its internal canvas
+**without `add`**, which **wipes any raw `canvas.bind()` handlers** we add. This means:
+
+- `canvas.bind("<ButtonPress-1>", handler)` — **WILL BE WIPED** by `_draw()`
+- `canvas.bind("<ButtonPress-1>", handler, add="+")` — **WILL ALSO BE WIPED** by `_draw()`
+- `_draw()` runs on **every** `btn.configure()` call (color changes, text updates, etc.)
+
+### The Solution: Two-Mechanism Split
+
+| Mechanism | Purpose | Why it works |
+|-----------|---------|--------------|
+| `command=` callback | **Click-to-play** (primary) | Stored as `CTkButton._command` property — immune to `_draw()` |
+| `CTkButton.bind()` | **Drag detection** (motion/release) | CTkButton stores bindings internally and re-applies after `_draw()` |
+
+### Event Flow
+
+```
+USER CLICKS A SLOT:
+  1. <Button-1> fires on internal canvas
+  2. CTkButton._clicked() calls self._command → _on_slot_command(slot_idx)
+  3. _on_slot_command checks _click_dragging → False → calls _handle_slot_click
+  4. _handle_slot_click: debounce check → just-stopped check → _play_slot(slot_idx)
+  5. (simultaneously) _on_slot_press records position for potential drag
+
+USER DRAGS A SLOT:
+  1. <Button-1>: command= fires → _on_slot_command → _click_dragging is False → play fires
+     (this is acceptable: drag operations are rare, and the play is instant)
+  2. <B1-Motion>: _on_slot_motion detects movement > 5px → sets _click_dragging = True
+  3. <ButtonRelease-1>: _on_slot_release sees was_dragging → handles drop
+```
+
+### State Machine
+
+```
+State fields (reset atomically via _reset_click_state()):
+  _click_active   : bool          — a press is being tracked
+  _click_slot     : Optional[int] — slot index that was pressed
+  _click_tab      : Optional[int] — tab that was active at press time
+  _click_start_x/y: int           — screen position of press
+  _click_dragging : bool          — drag threshold exceeded
+
+Persistent (NOT reset per-click):
+  _last_play_time      : float         — debounce rapid clicks (< 150ms)
+  _just_stopped_slot   : Optional[int] — slot just stopped (prevent re-play < 200ms)
+  _just_stopped_at     : float         — when it was stopped
+```
+
+### What NOT To Do
+
+| Approach | Why it fails |
+|----------|-------------|
+| `canvas.bind(event, handler)` on CTkButton's internal canvas | **Wiped by `_draw()`** on every `btn.configure()` call |
+| `canvas.bind(event, handler, add="+")` | Same — `_draw()` replaces ALL `<Button-1>` bindings |
+| `_rebind_slot_internals()` (deferred re-binding after configure) | Creates race conditions; replaces CTkButton's own bindings without `add`; causes wrong-slot-index bugs |
+| Using `winfo_containing()` to verify click target | Returns stale/mismatched widgets after CTkButton redraws; caused "first click ignored" bugs |
+| Using `<ButtonRelease-1>` for click-to-play | Unreliable — CTkButton's `_draw()` can wipe the release binding between press and release |
+
+### Stop Button
+
+- `command=` set **once** at creation time in `_create_slot_widgets` (via `make_stop_handler`)
+- `_show_stop_button()` just packs/unpacks — **no re-binding**
+- `_stop_slot_with_flag()` records `_just_stopped_slot` + timestamp; `_handle_slot_click` checks this to prevent re-play within 200ms
+
+### Tab Integration
+
+- `_switch_tab()` calls `_reset_click_state()` to cancel any in-progress interaction
+- If a drag was active, cursor and highlights are also reset
 
 ---
 
@@ -420,7 +497,7 @@ When asked to add a feature:
 | Progress bar shows on wrong tab | Playing state not tracking which tab the sound belongs to | Store `tab_idx` in `playing_slots` dict, only update UI if current tab matches |
 | Preview button not visible | Button hidden by expanding main button | Pack bottom frame FIRST at bottom, then main button expands into remaining space |
 | UI elements resize unexpectedly | Grid weights and pack expand options | Use `grid_propagate(False)` and `pack_propagate(False)` to lock sizes; set `resizable(False, False)` on window |
-| Sound plays twice on click | Button had both `command=` and drag bindings that call `_play_slot` | Remove `command=` from button, let drag `_on_drag_end` handle click-to-play |
+| Sound plays twice on click | Button had both `command=` and raw canvas bindings calling `_play_slot` | **CURRENT FIX:** Use ONLY `command=` for click-to-play. Raw canvas bindings are wiped by `_draw()`. See "Slot Button Click & Drag Architecture" section. |
 | Colors reset when dragging | `_reset_drag_highlights()` set all slots to `bg_medium` instead of proper color | Call `_update_slot_button()` to restore full button appearance |
 | Playing color shows on wrong tab after switch | `_update_slot_button` didn't check if playing state was for current tab | Check `playing_slots[idx].get("tab_idx") == current_tab_idx` before applying playing color |
 | Scrollbar shows when not needed | Scrollbar always visible even with few slots | Add `_update_scrollbar_visibility()` to show/hide based on content height vs canvas height |
@@ -428,14 +505,14 @@ When asked to add a feature:
 | Editor crashes on OGG import | `_update_info_labels()` called before `selection_label` created | Add `hasattr()` check before updating `selection_label` in `_update_info_labels()` |
 | Mouse wheel scrolls when no scrollbar | `_on_mousewheel` always scrolls regardless of scrollbar state | Check `slots_scrollbar.winfo_ismapped()` before allowing scroll |
 | No new slots after filling all | `save` only called `_update_slot_button` not `_refresh_slot_buttons` | Call `_refresh_slot_buttons()` after save/clear to create new empty slots |
-| Sound replays when switching tabs | Drag state not cleared on tab switch, or double-event race condition | Clear `drag_source_idx`/`is_dragging` FIRST in `_on_drag_end`, and also clear in `_switch_tab` |
-| Empty slot '+' button doesn't open dialog | For empty slots, `drag_source_idx=None` causes `_on_drag_end` to return early | Track empty slot clicks separately with `empty_slot_clicked` variable, check it in `_on_drag_end` |
-| Sound plays when clicking tab button | Slot's `ButtonRelease-1` fires even when releasing on a different widget (tab) | Check `winfo_containing()` to verify release is on same slot button; use `click_in_progress` flag and return `"break"` to stop event propagation |
-| Tab buttons unresponsive while sound plays | Slot drag handlers don't properly isolate their events from other widgets | Add `click_in_progress` flag set on `_on_drag_start`, check it in `_on_drag_end`; clear flag on tab switch; return `"break"` from all drag handlers |
-| Stop button needed double-click | CTkButton's internal canvas/label children get recreated on first pack, losing bindings. Also, `stop_button_clicked` flag was a `bool` blocking ALL slots for 100ms. | Multi-pronged fix: (1) `_show_stop_button()` helper packs, re-binds via CTkButton.bind() + command=, AND schedules deferred `after(50)` rebind directly to internal children. (2) `_on_drag_start` calls stop directly as backup. (3) `stop_button_clicked` changed to `Optional[int]` (slot-specific). |
+| Sound replays when switching tabs | Click/drag state not cleared on tab switch | `_switch_tab()` calls `_reset_click_state()` to atomically clear all interaction state. See "Tab Integration" in architecture section. |
+| Empty slot '+' button doesn't open dialog | Empty slot needs special handling since there's no sound to play | Empty slot `command=` callback opens the file dialog directly instead of calling `_play_slot` |
+| Sound plays when clicking tab button | Slot's release event fires even when releasing on a different widget | **CURRENT FIX:** Click-to-play uses `command=` (fires only on the bound widget). Drag uses `winfo_containing()` only for drop target detection. |
+| Tab buttons unresponsive while sound plays | Slot event handlers don't properly isolate from other widgets | **CURRENT FIX:** `command=` is widget-scoped; `_on_slot_release` only acts if `_click_active` was set by that slot's `_on_slot_press`. |
+| Stop button needed double-click | CTkButton's internal canvas/label children get recreated on first pack, losing bindings. `stop_button_clicked` was a `bool` blocking ALL slots. | **CURRENT FIX:** Stop button uses `command=` set once at creation (immune to `_draw()`). `_show_stop_button()` only packs/unpacks, no re-binding. `_just_stopped_slot` + `_just_stopped_at` for slot-specific, time-based replay prevention. |
 | Hotkey playback doesn't show stop button | `_play_slot_from_tab` didn't pack the stop button like `_play_slot` does | Add stop button packing logic to `_play_slot_from_tab` in the `update_ui` lambda |
-| Clicking other sounds while one plays needs double-click | `_on_drag_end` called `_reset_drag_highlights()` on EVERY click (not just drags), which reconfigured ALL slot buttons via `_update_slot_button()`. This mass `btn.configure()` during ButtonRelease could cause CTkButton to redraw internal widgets, breaking `winfo_containing()` and hover/cursor state. Also `stop_button_clicked` was a global bool. | (1) `_reset_drag_highlights()` and `root.configure(cursor="")` now only called when `was_dragging` is True. (2) `winfo_containing()` captured BEFORE any reconfiguration. (3) `_rebind_slot_internals()` directly binds to CTkButton internal children (bypassing CTkButton.bind()). (4) Deferred `after(20)` rebind scheduled after every `btn.configure()` in `_play_slot` and `_update_slot_button`. |
-| No hover cursor on slot buttons | CTkButton has no default cursor; slot buttons were created without `cursor=` | Added `cursor="hand2"` to slot button and stop button creation; also set on internal children via `_rebind_slot_internals()` |
+| Clicking other sounds while one plays needs double-click | Old approach used `ButtonRelease-1` for play, which `_draw()` wiped after any `btn.configure()`. Mass `_reset_drag_highlights()` on every release also triggered redraws. | **CURRENT FIX:** Play uses `command=` (immune to `_draw()`). Drag highlights only reset when `was_dragging` is True. See architecture section above. |
+| No hover cursor on slot buttons | CTkButton has no default cursor; slot buttons were created without `cursor=` | Added `cursor="hand2"` to slot and stop button creation in `_create_slot_widgets` |
 || Emoji picker freezes UI | Creating thousands of `CTkButton` widgets synchronously blocks the main thread | Use `after()` to load categories one at a time asynchronously; limit emojis per category (96 max) |
 || Emojis display as colorless/black | `CTkButton` doesn't render colored emojis properly on Windows | Use native `tk.Label` with "Segoe UI Emoji" font instead of `CTkButton`; add hover/click bindings manually |
 
@@ -443,10 +520,10 @@ When asked to add a feature:
 
 | Issue | Cause | Fix |
 |-------|-------|-----|
-| Sounds don't play when clicking slot | CTkButton has internal child widgets (canvas, label), so `winfo_containing()` returns internal widgets not the CTkButton itself. Additionally, `winfo_containing()` can return stale/mismatched widgets after CTkButton redraws. | For simple clicks (no drag): DON'T use `winfo_containing()` at all. Trust that the handler fired on the correct widget (it's directly bound to the slot's internal canvas). Only use `winfo_containing()` for drag-and-drop to find drop targets. `_is_widget_inside()` helper kept for drag-drop and stop button detection only. |
+| Sounds don't play when clicking slot | CTkButton's `_draw()` method re-binds `<Button-1>` on its internal canvas WITHOUT `add`, wiping any custom canvas bindings. `_draw()` runs on EVERY `btn.configure()` call. | **CURRENT FIX:** Use `command=` for click-to-play (stored as `_command` property, immune to `_draw()`). Use `CTkButton.bind()` for drag detection (CTkButton stores and re-applies these). NEVER bind directly to internal canvas children. See "Slot Button Click & Drag Architecture" section. |
 | Tab switching extremely slow | Creating new `CTkFont()` objects on every button update is expensive | Pre-create cached font objects (`_font_sm`, `_font_xl_bold`, etc.) once in `__init__` and reuse everywhere |
 | UI lag after tab switch | Image reloading from disk on every `_update_slot_button` call | Track `slot_image_paths` dict to cache already-loaded images; only reload if path changed |
-| CTkButton command= unreliable | CTkButton's `command=` callback sometimes doesn't fire on click | Add explicit `bind("<ButtonRelease-1>", handler)` in addition to `command=` for critical buttons like stop |
+| CTkButton `command=` is the ONLY reliable click handler | `command=` is stored as `_command` property and survives `_draw()` resets. Raw bindings on the internal canvas are wiped. | **Use `command=` for ALL click-to-play and stop-button actions.** Do NOT add redundant `ButtonRelease-1` bindings — they will be wiped and cause confusion. |
 | CTkProgressBar has no delete() | Tkinter Canvas `.delete("tag")` doesn't exist on CTkProgressBar | Use `.set(0)` to reset CTkProgressBar instead of `.delete("progress")` |
 | Animation loop causes lag | 60fps (16ms interval) animation loop with `.configure()` calls every frame | Reduce to 20fps (50ms); set progress bar color once when playback starts, not every frame |
 
@@ -471,10 +548,11 @@ When asked to add a feature:
 3. **Path handling must support both forward and backslashes on Windows**
 4. **Audio file format support varies** - always have pydub fallback ready
 5. **Atomic writes for all config/state files** - use `os.replace()` (never `os.remove()`+`os.rename()`)
-6. **Tkinter event handling** - return `"break"` to stop event propagation; use `winfo_containing()` to check actual widget under cursor on release; track click state with flags to prevent stray events
-7. **CTkButton widget hierarchy** - CTkButton contains internal canvas/label children; use `_is_widget_inside()` helper instead of direct widget comparison
+6. **CTkButton click handling** - ALWAYS use `command=` for click actions on CTkButton. NEVER rely on raw `<Button-1>` or `<ButtonRelease-1>` canvas bindings — `CTkButton._draw()` wipes them on every `btn.configure()`. Use `CTkButton.bind()` only for drag detection (`<B1-Motion>`, `<ButtonRelease-1>`) as CTkButton re-applies these internally. See "Slot Button Click & Drag Architecture" section.
+7. **CTkButton widget hierarchy** - CTkButton contains internal canvas/label children; `winfo_containing()` returns these internals, not the CTkButton. Use `_is_widget_inside()` helper for drag-drop target detection only. For click-to-play, trust `command=` — it always fires on the correct widget.
 8. **Font creation is expensive** - Pre-create `CTkFont` objects once and reuse them; never create fonts in animation loops or update functions
 9. **Use Python `logging` module** - Never use raw `open("debug.log", "a")` writes; configure logging once in `main.py`, use `logger = logging.getLogger(__name__)` in modules
 10. **Avoid unnecessary array copies** - When audio data is already a copy (from cache or speed adjustment), apply fade-out and other transforms in-place
 11. **Background-thread heavy I/O** - Sound preloading, file hashing, and other blocking I/O should run in daemon threads; update UI via `root.after(0, callback)`
 12. **Lazy-load expensive resources** - Emoji categories, large data structures should be built on first access, not at import time
+13. **NEVER bind directly to CTkButton internal children** - `canvas.bind()` on a CTkButton's internal canvas WILL be wiped by `_draw()`. This applies to both `add` and non-`add` variants. Use `command=` for clicks, `CTkButton.bind()` for motion/release. Read the "Slot Button Click & Drag Architecture" section before touching any slot event handling code.

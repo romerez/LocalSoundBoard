@@ -22,7 +22,7 @@
           "volume": 0.21,
           "emoji": null,
           "image_path": null,
-          "color": null,
+          "color": "#1ABC9C",
           "speed": 1.0,
           "preserve_pitch": false
         },
@@ -30,7 +30,7 @@
           "name": "ראש צבע עיפרון",
           "file_path": "sounds\\[appsgolem.com][00-03-40][00-03-45]__ (1)_78640441.wav",
           "hotkey": null,
-          "volume": 0.13,
+          "volume": 0.28,
           "emoji": "✔️",
           "image_path": null,
           "color": "#7289DA",
@@ -55,7 +55,7 @@
           "volume": 1.09,
           "emoji": null,
           "image_path": null,
-          "color": "#E91E63",
+          "color": "#FF355E",
           "speed": 1.0,
           "preserve_pitch": true
         },
@@ -92,9 +92,9 @@
           "speed": 1.0,
           "preserve_pitch": true
         },
-        "11": {
-          "name": "סתום ת'פה ש'ך כבר!!! (רמיקס) ",
-          "file_path": "sounds\\סתום ת'פה ש'ך כבר!!! (רמיקס) [ ezmp3.cc ]_90365669.wav",
+        "7": {
+          "name": "זה כתב\"ם",
+          "file_path": "sounds\\zv katbam (1)_90303935.wav",
           "hotkey": null,
           "volume": 1.0,
           "emoji": null,
@@ -103,9 +103,9 @@
           "speed": 1.0,
           "preserve_pitch": true
         },
-        "7": {
-          "name": "זה כתב\"ם",
-          "file_path": "sounds\\zv katbam (1)_90303935.wav",
+        "10": {
+          "name": "סתום ת'פה ש'ך כבר!!! (רמיקס) ",
+          "file_path": "sounds\\סתום ת'פה ש'ך כבר!!! (רמיקס) [ ezmp3.cc ]_90365669.wav",
           "hotkey": null,
           "volume": 1.0,
           "emoji": null,

@@ -4,7 +4,6 @@ GUI components for the Discord Soundboard.
 
 import hashlib
 import json
-import logging
 import os
 import shutil
 import threading
@@ -13,8 +12,6 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any, Dict, List, Optional
-
-_log = logging.getLogger("gui.click")
 
 import customtkinter as ctk
 import sounddevice as sd
@@ -99,16 +96,19 @@ class SoundboardApp:
         # Preview state tracking: slot_idx -> {start_time, duration}
         self.preview_slots: Dict[int, Dict] = {}
 
-        # Drag and drop state
-        self.drag_source_idx: Optional[int] = None
-        self.drag_source_tab: Optional[int] = None
-        self.drag_start_x: int = 0
-        self.drag_start_y: int = 0
-        self.is_dragging: bool = False
-        self.empty_slot_clicked: Optional[int] = None
-        self.last_play_time: float = 0.0  # Debounce for rapid clicks
-        self.click_in_progress: bool = False  # True only during active slot button press
-        self.stop_button_clicked: Optional[int] = None  # Slot idx that was just stopped (prevents re-play on same slot)
+        # Click / drag state machine  (IDLE → PRESSED → DRAGGING | click)
+        # All fields are reset together via _reset_click_state().
+        self._click_active: bool = False       # a press is being tracked
+        self._click_slot: Optional[int] = None  # slot that was pressed
+        self._click_tab: Optional[int] = None   # tab that was active at press
+        self._click_start_x: int = 0            # screen-x of press
+        self._click_start_y: int = 0            # screen-y of press
+        self._click_dragging: bool = False       # drag threshold exceeded
+
+        # Persistent across clicks (not reset per-click)
+        self._last_play_time: float = 0.0
+        self._just_stopped_slot: Optional[int] = None
+        self._just_stopped_at: float = 0.0
 
         # Ensure images directory exists
         Path(IMAGES_DIR).mkdir(exist_ok=True)
@@ -504,14 +504,11 @@ class SoundboardApp:
         if tab_idx == self.current_tab_idx:
             return
 
-        # Cancel any ongoing drag operation and clear all click state
-        self.drag_source_idx = None
-        self.drag_source_tab = None
-        self.is_dragging = False
-        self.empty_slot_clicked = None
-        self.click_in_progress = False
-        self.stop_button_clicked = None
-        self.root.configure(cursor="")
+        # Cancel any ongoing interaction
+        if self._click_dragging:
+            self.root.configure(cursor="")
+            self._reset_drag_highlights()
+        self._reset_click_state()
 
         # Clear progress bars before switching (sounds from other tabs shouldn't show here)
         for slot_idx in self.slot_progress:
@@ -1062,6 +1059,15 @@ class SoundboardApp:
             progress.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
 
             # Sound button - modern card-style button
+            #
+            # command= is the PRIMARY click mechanism.  It is the only callback
+            # that reliably survives CTkButton._draw() (which re-binds <Button-1>
+            # on the internal canvas, wiping any raw canvas.bind() we add).
+            # CTkButton stores _command as a property and calls it from _clicked().
+            #
+            # CTkButton.bind() is used ONLY for drag detection (motion/release).
+            # CTkButton stores these bindings internally and re-applies them after
+            # _draw(), so they also survive btn.configure() calls.
             btn = ctk.CTkButton(
                 slot_frame,
                 text="+",
@@ -1072,14 +1078,14 @@ class SoundboardApp:
                 corner_radius=UI["slot_corner_radius"],
                 anchor="center",
                 cursor="hand2",
+                command=lambda idx=i: self._on_slot_command(idx),
             )
             btn.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=4, pady=(4, 0))
-            btn.bind("<Button-3>", lambda e, idx=i: self._show_quick_popup(e, idx))
 
-            # Drag and drop bindings
-            btn.bind("<ButtonPress-1>", lambda e, idx=i: self._on_drag_start(e, idx))
-            btn.bind("<B1-Motion>", self._on_drag_motion)
-            btn.bind("<ButtonRelease-1>", self._on_drag_end)
+            btn.bind("<ButtonPress-1>", lambda e, idx=i: self._on_slot_press(e, idx))
+            btn.bind("<B1-Motion>", self._on_slot_motion)
+            btn.bind("<ButtonRelease-1>", self._on_slot_release)
+            btn.bind("<Button-3>", lambda e, idx=i: self._show_quick_popup(e, idx))
 
             self.slot_frames[i] = slot_frame
             self.slot_buttons[i] = btn
@@ -1283,15 +1289,13 @@ class SoundboardApp:
         self.status_var.set("Stopped")
 
     def _stop_slot_with_flag(self, slot_idx: int):
-        """Stop slot and set flag to prevent the same slot from re-playing."""
-        self.stop_button_clicked = slot_idx
+        """Stop a slot and record the time so _handle_slot_click ignores re-plays."""
+        self._just_stopped_slot = slot_idx
+        self._just_stopped_at = time.time()
         self._stop_slot(slot_idx)
-        # Clear flag after a short delay to allow any pending events to be ignored
-        self.root.after(100, self._clear_stop_flag)
-
-    def _clear_stop_flag(self):
-        """Clear the stop button clicked flag."""
-        self.stop_button_clicked = None
+        # If a press is active on this slot, cancel it
+        if self._click_active and self._click_slot == slot_idx:
+            self._reset_click_state()
 
     def _record_ptt_key(self):
         """Record a key or mouse button press to use as PTT key."""
@@ -1434,11 +1438,9 @@ class SoundboardApp:
         return self.tabs[self.current_tab_idx]
 
     def _show_stop_button(self, slot_idx: int):
-        """Pack the stop button for a slot and ensure click bindings are active.
+        """Show the stop button for a playing slot.
 
-        CTkButton may recreate its internal canvas/label children when packed
-        for the first time, losing bindings. We schedule a deferred re-bind to
-        the actual internal widgets AFTER layout completes.
+        command= was already set at creation time — just pack/unpack.
         """
         if slot_idx not in self.slot_stop_buttons or slot_idx not in self.slot_progress:
             return
@@ -1447,15 +1449,8 @@ class SoundboardApp:
         stop_btn.pack_forget()
         stop_btn.pack(side=tk.LEFT, padx=(0, 4), before=progress)
 
-        def stop_handler(event=None):
-            self._stop_slot_with_flag(slot_idx)
-            return "break"
-
-        stop_btn.configure(command=stop_handler)
-        stop_btn.bind("<Button-1>", stop_handler)
-
     def _is_widget_inside(self, widget, parent) -> bool:
-        """Check if widget is the same as parent or a descendant of parent."""
+        """Check if *widget* is *parent* or a descendant of *parent*."""
         if widget is None or parent is None:
             return False
         current = widget
@@ -1469,177 +1464,137 @@ class SoundboardApp:
         return False
 
     # ─────────────────────────────────────────────────────────
-    # Drag and Drop for slot reordering
+    # Slot click / drag state machine
+    #
+    # States:  IDLE  →  PRESSED  →  DRAGGING  (or click)
+    #
+    # Bindings are on the *internal canvas* of each CTkButton
+    # (set once at creation in _create_slot_widgets via add="+").
+    # Canvas widget-level bindings survive CTkButton._draw(),
+    # so they persist across btn.configure() calls with zero
+    # re-binding.
     # ─────────────────────────────────────────────────────────
 
-    def _on_drag_start(self, event, slot_idx: int):
-        """Start dragging a slot."""
-        # This handler is bound directly to the slot button's internal canvas,
-        # so we trust that the click IS on the slot button.  No winfo_containing
-        # verification is needed — that check was the source of "first click ignored"
-        # bugs because winfo_containing can return stale/mismatched widgets after
-        # CTkButton internal redraws.
+    _DRAG_THRESHOLD = 5  # pixels before a press becomes a drag
 
-        # Backup: if the click somehow lands on stop/preview/edit, route it
-        widget_under_cursor = self.root.winfo_containing(event.x_root, event.y_root)
-        stop_btn = self.slot_stop_buttons.get(slot_idx)
-        if stop_btn and self._is_widget_inside(widget_under_cursor, stop_btn):
-            self._stop_slot_with_flag(slot_idx)
-            return "break"
-        preview_btn = self.slot_preview_buttons.get(slot_idx)
-        edit_btn = self.slot_edit_buttons.get(slot_idx)
-        if (preview_btn and self._is_widget_inside(widget_under_cursor, preview_btn)) or \
-           (edit_btn and self._is_widget_inside(widget_under_cursor, edit_btn)):
-            return "break"
+    def _reset_click_state(self):
+        """Return to IDLE — cancel any press/drag in progress."""
+        self._click_active = False
+        self._click_slot = None
+        self._click_tab = None
+        self._click_start_x = 0
+        self._click_start_y = 0
+        self._click_dragging = False
 
-        self.click_in_progress = True  # Mark that a slot click is active
-        _log.debug("DRAG_START slot_idx=%s  widget=%s", slot_idx, event.widget)
-        tab = self._get_current_tab()
-        # Only start drag if slot has content
-        if slot_idx in tab.slots:
-            self.drag_source_idx = slot_idx
-            self.drag_source_tab = self.current_tab_idx
-            self.drag_start_x = event.x_root
-            self.drag_start_y = event.y_root
-            self.is_dragging = False  # Will become True on motion
-            self.empty_slot_clicked = None
-        else:
-            # For empty slots, trigger configure on release
-            self.drag_source_idx = None
-            self.drag_source_tab = None
-            self.empty_slot_clicked = slot_idx
-        return "break"  # Prevent event propagation
+    # ---------- command= callback (PRIMARY click mechanism) ----------
 
-    def _on_drag_motion(self, event):
-        """Handle drag motion - highlight drop targets."""
-        if self.drag_source_idx is None:
+    def _on_slot_command(self, slot_idx: int):
+        """CTkButton command= callback — fires on press, survives _draw().
+
+        This is the ONLY reliable click callback for CTkButton because
+        _draw() re-binds <Button-1> on the internal canvas, wiping any
+        raw canvas.bind() handlers.  command= is stored as a property
+        and is immune to _draw().
+        """
+        if self._click_dragging:
             return
+        self._handle_slot_click(slot_idx)
 
-        # Check if we've moved enough to start dragging
-        if not getattr(self, "is_dragging", False):
-            dx = abs(event.x_root - getattr(self, "drag_start_x", event.x_root))
-            dy = abs(event.y_root - getattr(self, "drag_start_y", event.y_root))
-            if dx > 5 or dy > 5:
-                self.is_dragging = True
-                # Change cursor to indicate dragging
+    # ---------- binding-based handlers (drag only) ----------
+
+    def _on_slot_press(self, event, slot_idx: int):
+        """Record press position for drag detection."""
+        self._click_active = True
+        self._click_slot = slot_idx
+        self._click_tab = self.current_tab_idx
+        self._click_start_x = event.x_root
+        self._click_start_y = event.y_root
+        self._click_dragging = False
+
+    def _on_slot_motion(self, event):
+        """Detect drag start and update drop-target highlights."""
+        if not self._click_active:
+            return
+        if self._click_dragging:
+            self._update_drag_target(event)
+            return
+        dx = abs(event.x_root - self._click_start_x)
+        dy = abs(event.y_root - self._click_start_y)
+        if dx > self._DRAG_THRESHOLD or dy > self._DRAG_THRESHOLD:
+            tab = self._get_current_tab()
+            if self._click_slot is not None and self._click_slot in tab.slots:
+                self._click_dragging = True
                 self.root.configure(cursor="fleur")
             else:
-                return
+                self._reset_click_state()
 
-        # Find which slot or tab we're hovering over
+    def _on_slot_release(self, event):
+        """Handle drag drop on release (clicks are handled by command=)."""
+        if not self._click_active:
+            return
+
+        slot_idx = self._click_slot
+        tab_idx = self._click_tab
+        was_dragging = self._click_dragging
+
+        self._reset_click_state()
+
+        if was_dragging:
+            self.root.configure(cursor="")
+            self._reset_drag_highlights()
+            if slot_idx is not None and tab_idx is not None:
+                self._handle_slot_drop(event, slot_idx, tab_idx)
+
+    # ---------- high-level action handlers ----------
+
+    def _handle_slot_click(self, slot_idx: int):
+        """A confirmed click on a slot — play or configure."""
+        now = time.time()
+
+        if now - self._last_play_time < 0.15:
+            return
+
+        if (self._just_stopped_slot == slot_idx
+                and now - self._just_stopped_at < 0.2):
+            self._just_stopped_slot = None
+            return
+        self._just_stopped_slot = None
+
+        self._last_play_time = now
+        self._play_slot(slot_idx)
+
+    def _handle_slot_drop(self, event, source_idx: int, source_tab: int):
+        """A confirmed drag-drop — swap slots or move across tabs."""
         widget = self.root.winfo_containing(event.x_root, event.y_root)
 
-        # Reset all highlights
-        self._reset_drag_highlights()
-
-        # Check if over a tab button
-        for idx, tab_btn in enumerate(self.tab_buttons):
-            if self._is_widget_inside(widget, tab_btn):
-                if idx != self.drag_source_tab:
-                    # Highlight this tab as drop target
-                    tab_btn.configure(fg_color=COLORS["drag_target"])
-                return
-
-        # Check if over a slot button
-        for slot_idx, btn in self.slot_buttons.items():
-            if self._is_widget_inside(widget, btn):
-                if slot_idx != self.drag_source_idx:
-                    # Highlight as drop target
-                    btn.configure(fg_color=COLORS["drag_target"])
-                return
-
-    def _on_drag_end(self, event):
-        """Handle drop - swap slots or move to different tab."""
-        # Only process if we started from a slot button press
-        if not getattr(self, "click_in_progress", False):
-            _log.debug("DRAG_END SKIPPED (click_in_progress=False)")
-            return "break"
-        self.click_in_progress = False
-        _log.debug(
-            "DRAG_END drag_source_idx=%s  is_dragging=%s  widget=%s",
-            self.drag_source_idx,
-            getattr(self, "is_dragging", False),
-            event.widget,
-        )
-
-        # Ignore if stop button was just clicked on THIS slot (prevents re-playing after stop)
-        stopped_slot = getattr(self, "stop_button_clicked", None)
-        if stopped_slot is not None:
-            source = self.drag_source_idx
-            if source is not None and source == stopped_slot:
-                self.drag_source_idx = None
-                self.drag_source_tab = None
-                self.is_dragging = False
-                self.empty_slot_clicked = None
-                return "break"
-            # Different slot — clear flag and proceed with the play
-            self.stop_button_clicked = None
-
-        # Debounce: ignore rapid clicks (within 150ms)
-        current_time = time.time()
-        dt = current_time - getattr(self, "last_play_time", 0)
-        if dt < 0.15:
-            _log.debug("DRAG_END DEBOUNCED dt=%.4f", dt)
-            self.drag_source_idx = None
-            self.drag_source_tab = None
-            self.is_dragging = False
-            self.empty_slot_clicked = None
-            return "break"
-
-        # Handle empty slot click - open configure dialog
-        if self.drag_source_idx is None:
-            if getattr(self, "empty_slot_clicked", None) is not None:
-                slot_idx = self.empty_slot_clicked
-                self.empty_slot_clicked = None
-                self.last_play_time = current_time
-                if slot_idx is not None:
-                    self._play_slot(slot_idx)
-            return "break"
-
-        # Store locally and IMMEDIATELY clear class state to prevent double-triggers
-        source_idx = self.drag_source_idx
-        source_tab = self.drag_source_tab or 0
-        was_dragging = getattr(self, "is_dragging", False)
-
-        # Clear state first (prevents double-play if event fires twice)
-        self.drag_source_idx = None
-        self.drag_source_tab = None
-        self.is_dragging = False
-
-        # If we weren't really dragging, treat as normal click.
-        # No winfo_containing check needed: _on_drag_start already confirmed
-        # the press was on a slot button, and tkinter's implicit grab ensures
-        # the release goes to the same widget.  The old _is_widget_inside check
-        # was the cause of "first click ignored" bugs.
-        if not was_dragging:
-            _log.debug("PLAY source_idx=%s", source_idx)
-            self.last_play_time = current_time
-            self._play_slot(source_idx)
-            return "break"
-
-        # Was an actual drag -- reset cursor and highlights now
-        self.root.configure(cursor="")
-        self._reset_drag_highlights()
-
-        # For drags, we need winfo_containing to find the drop target
-        widget = self.root.winfo_containing(event.x_root, event.y_root)
-
-        # Check if dropped on a tab button
         for idx, tab_btn in enumerate(self.tab_buttons):
             if self._is_widget_inside(widget, tab_btn):
                 if idx != source_tab:
                     self._move_slot_to_tab(source_idx, source_tab, idx)
-                return "break"
+                return
 
-        # Check if dropped on a slot button
         for slot_idx, btn in self.slot_buttons.items():
             if self._is_widget_inside(widget, btn):
                 if slot_idx != source_idx and source_tab == self.current_tab_idx:
                     self._swap_slots(source_idx, slot_idx)
-                return "break"
+                return
 
-        # Dropped elsewhere - already cancelled by state clearing above
-        return "break"
+    def _update_drag_target(self, event):
+        """Highlight the slot or tab under the cursor during a drag."""
+        widget = self.root.winfo_containing(event.x_root, event.y_root)
+        self._reset_drag_highlights()
+
+        for idx, tab_btn in enumerate(self.tab_buttons):
+            if self._is_widget_inside(widget, tab_btn):
+                if idx != self._click_tab:
+                    tab_btn.configure(fg_color=COLORS["drag_target"])
+                return
+
+        for slot_idx, btn in self.slot_buttons.items():
+            if self._is_widget_inside(widget, btn):
+                if slot_idx != self._click_slot:
+                    btn.configure(fg_color=COLORS["drag_target"])
+                return
 
     def _reset_drag_highlights(self):
         """Reset all drag highlight colors to proper state."""
