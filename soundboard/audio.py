@@ -5,6 +5,7 @@ Audio mixing and playback for the Discord Soundboard.
 import ctypes
 import hashlib
 import io
+import logging
 import os
 import queue
 import shutil
@@ -17,6 +18,8 @@ import soundfile as sf
 from typing import Optional, Dict, List, Tuple
 
 from .constants import AUDIO, SOUNDS_DIR
+
+logger = logging.getLogger(__name__)
 
 
 # Windows API for mouse button simulation
@@ -83,12 +86,10 @@ try:
     import librosa
 
     LIBROSA_AVAILABLE = True
-    with open("debug.log", "a") as f:
-        f.write(f"[IMPORT] librosa imported successfully: {librosa.__version__}\n")
+    logger.debug("librosa imported successfully: %s", librosa.__version__)
 except Exception as e:
     LIBROSA_AVAILABLE = False
-    with open("debug.log", "a") as f:
-        f.write(f"[IMPORT] librosa import FAILED: {type(e).__name__}: {e}\n")
+    logger.debug("librosa import FAILED: %s: %s", type(e).__name__, e)
 
 
 def read_audio_file(file_path: str) -> Tuple[np.ndarray, int]:
@@ -188,8 +189,7 @@ def _resample_audio(data: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarra
                     channels.append(resampled)
                 return np.column_stack(channels).astype(np.float32)
         except Exception as e:
-            with open("debug.log", "a") as f:
-                f.write(f"[RESAMPLE] librosa failed: {e}, falling back to interpolation\n")
+            logger.debug("Resample: librosa failed: %s, falling back to interpolation", e)
 
     # Fallback: scipy resample (still better than linear interpolation)
     try:
@@ -205,8 +205,7 @@ def _resample_audio(data: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarra
         pass
 
     # Last resort: linear interpolation (low quality but always works)
-    with open("debug.log", "a") as f:
-        f.write(f"[RESAMPLE] Using linear interpolation fallback (low quality)\n")
+    logger.debug("Resample: using linear interpolation fallback (low quality)")
     ratio = target_sr / orig_sr
     new_length = int(len(data) * ratio)
     old_indices = np.arange(len(data))
@@ -223,39 +222,25 @@ def _resample_audio(data: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarra
 
 def _apply_fade_out(data: np.ndarray, sample_rate: int, fade_ms: int = 30) -> np.ndarray:
     """
-    Apply a short fade-out to the end of audio to prevent abrupt cutoffs.
+    Apply a short fade-out to the end of audio IN-PLACE.
 
-    This helps prevent the "cut" sound that can occur when audio ends abruptly,
-    especially when transmitted through Discord's audio processing.
-
-    Args:
-        data: Audio data as numpy array
-        sample_rate: Sample rate of the audio
-        fade_ms: Fade duration in milliseconds (default 30ms)
-
-    Returns:
-        Audio data with fade-out applied
+    Caller must ensure data is already a copy if the original must be preserved
+    (e.g. get_sound_data() already returns copies, and _apply_speed creates new arrays).
     """
     fade_samples = int(sample_rate * fade_ms / 1000)
 
     if fade_samples <= 0 or len(data) < fade_samples:
         return data
 
-    # Create a copy to avoid modifying cached data
-    result = data.copy()
-
-    # Create fade curve (linear fade from 1.0 to 0.0)
     fade_curve = np.linspace(1.0, 0.0, fade_samples).astype(np.float32)
 
-    # Apply fade to the end of the audio
-    if result.ndim == 1:
-        result[-fade_samples:] *= fade_curve
+    if data.ndim == 1:
+        data[-fade_samples:] *= fade_curve
     else:
-        # Stereo: apply to all channels
-        for ch in range(result.shape[1]):
-            result[-fade_samples:, ch] *= fade_curve
+        for ch in range(data.shape[1]):
+            data[-fade_samples:, ch] *= fade_curve
 
-    return result
+    return data
 
 
 class SoundCache:
@@ -745,10 +730,10 @@ class AudioMixer:
                         {"data": data, "position": 0, "volume": volume, "sound_id": sound_id}
                     )
                     self._press_ptt()
-                    with open("debug.log", "a") as f:
-                        f.write(
-                            f"[PLAY] Queued from cache: {len(data)} samples (speed={speed}, preserve_pitch={preserve_pitch}, volume={volume}, id={sound_id})\n"
-                        )
+                    logger.debug(
+                        "Queued from cache: %d samples (speed=%s, preserve_pitch=%s, volume=%s, id=%s)",
+                        len(data), speed, preserve_pitch, volume, sound_id,
+                    )
                     return len(data) / self.sample_rate
 
             # Fallback: load from disk (slower) - uses pydub for OGG/M4A/etc
@@ -768,10 +753,10 @@ class AudioMixer:
             # Apply fade-out to prevent abrupt cutoff
             data = _apply_fade_out(data, self.sample_rate)
 
-            with open("debug.log", "a") as f:
-                f.write(
-                    f"[AUDIO] Playing from disk: {len(data)} samples (speed={speed}, preserve_pitch={preserve_pitch}, id={sound_id})\n"
-                )
+            logger.debug(
+                "Playing from disk: %d samples (speed=%s, preserve_pitch=%s, id=%s)",
+                len(data), speed, preserve_pitch, sound_id,
+            )
             # Queue sound FIRST, then press PTT
             self.sound_queue.put(
                 {"data": data, "position": 0, "volume": volume, "sound_id": sound_id}
@@ -779,8 +764,7 @@ class AudioMixer:
             self._press_ptt()
             return len(data) / self.sample_rate
         except Exception as e:
-            with open("debug.log", "a") as f:
-                f.write(f"[AUDIO] Error loading sound: {e}\n")
+            logger.error("Error loading sound: %s", e)
             return 0.0
 
     def _apply_speed(
@@ -796,46 +780,35 @@ class AudioMixer:
         Speed > 1.0 = faster (shorter duration)
         Speed < 1.0 = slower (longer duration)
         """
-        with open("debug.log", "a") as f:
-            f.write(
-                f"[SPEED] _apply_speed called: speed={speed}, preserve_pitch={preserve_pitch}, LIBROSA={LIBROSA_AVAILABLE}\n"
-            )
+        logger.debug(
+            "Speed: speed=%s, preserve_pitch=%s, LIBROSA=%s",
+            speed, preserve_pitch, LIBROSA_AVAILABLE,
+        )
 
         if speed == 1.0:
             return data
 
-        # Try pitch-preserving time-stretch if librosa is available and preserve_pitch is True
         if preserve_pitch and LIBROSA_AVAILABLE:
             try:
-                with open("debug.log", "a") as f:
-                    f.write(f"[SPEED] Attempting librosa time_stretch...\n")
-                # librosa.effects.time_stretch expects mono audio
-                # For stereo, we need to process each channel separately
+                logger.debug("Speed: attempting librosa time_stretch")
                 if data.ndim == 1:
-                    # Mono audio
                     result = librosa.effects.time_stretch(data, rate=speed)
                 else:
-                    # Stereo audio - process each channel
-                    with open("debug.log", "a") as f:
-                        f.write(f"[SPEED] Processing {data.shape[1]} stereo channels...\n")
+                    logger.debug("Speed: processing %d stereo channels", data.shape[1])
                     channels = []
                     for ch in range(data.shape[1]):
                         stretched = librosa.effects.time_stretch(data[:, ch], rate=speed)
                         channels.append(stretched)
-                    # Stack channels back together
                     result = np.column_stack(channels)
-                with open("debug.log", "a") as f:
-                    f.write(f"[SPEED] librosa SUCCESS: {len(data)} -> {len(result)} samples\n")
+                logger.debug("Speed: librosa SUCCESS: %d -> %d samples", len(data), len(result))
                 return result.astype(np.float32)
             except Exception as e:
-                # Fall back to simple resampling if librosa fails
-                with open("debug.log", "a") as f:
-                    f.write(f"[SPEED] librosa FAILED: {e}\n")
+                logger.debug("Speed: librosa FAILED: %s", e)
         else:
-            with open("debug.log", "a") as f:
-                f.write(
-                    f"[SPEED] Using simple resample (preserve_pitch={preserve_pitch}, LIBROSA={LIBROSA_AVAILABLE})\n"
-                )
+            logger.debug(
+                "Speed: using simple resample (preserve_pitch=%s, LIBROSA=%s)",
+                preserve_pitch, LIBROSA_AVAILABLE,
+            )
 
         # Resampling with pitch change (chipmunk/deep effect)
         # Calculate the new sample rate that produces the desired speed effect
@@ -890,12 +863,11 @@ class AudioMixer:
         Args:
             sound_id: The identifier of the sound to stop
         """
-        with open("debug.log", "a") as f:
-            f.write(f"[STOP] stop_sound called with id={sound_id}\n")
-            f.write(f"[STOP] currently_playing count: {len(self.currently_playing)}\n")
-            f.write(
-                f"[STOP] currently_playing ids: {[s.get('sound_id') for s in self.currently_playing]}\n"
-            )
+        logger.debug(
+            "Stop: id=%s, currently_playing=%d, ids=%s",
+            sound_id, len(self.currently_playing),
+            [s.get("sound_id") for s in self.currently_playing],
+        )
 
         with self.lock:
             # Remove sounds with matching ID from currently_playing
@@ -905,8 +877,7 @@ class AudioMixer:
             ]
             after_count = len(self.currently_playing)
 
-        with open("debug.log", "a") as f:
-            f.write(f"[STOP] Removed {before_count - after_count} sounds from currently_playing\n")
+        logger.debug("Stop: removed %d sounds from currently_playing", before_count - after_count)
 
         # Also drain matching sounds from queue
         remaining = []
@@ -945,8 +916,16 @@ class AudioMixer:
     def set_ptt_key(self, key: Optional[str]):
         """Set the Push-to-Talk key for Discord integration."""
         self.ptt_key = key if key and key.strip() else None
-        with open("debug.log", "a") as f:
-            f.write(f"[PTT] Key set to: {self.ptt_key}\n")
+        logger.debug("PTT key set to: %s", self.ptt_key)
+
+    # mouse button name → Windows API button name (matches Discord's labeling)
+    PTT_BUTTON_MAP = {
+        "mouse1": "left",
+        "mouse2": "right",
+        "mouse3": "middle",
+        "mouse4": "x2",
+        "mouse5": "x",
+    }
 
     def _press_ptt(self):
         """Press the PTT key if configured and not already pressed."""
@@ -956,35 +935,17 @@ class AudioMixer:
         with self._ptt_lock:
             if not self.ptt_active:
                 try:
-                    with open("debug.log", "a") as f:
-                        f.write(f"[PTT] Pressing: {self.ptt_key}\n")
-                    # Check if it's a mouse button
+                    logger.debug("PTT pressing: %s", self.ptt_key)
                     if self.ptt_key.startswith("mouse"):
-                        # Map mouse button names back to Windows button names
-                        # mouse4 = x2 (XBUTTON2), mouse5 = x (XBUTTON1) - matches Discord
-                        button_map = {
-                            "mouse1": "left",
-                            "mouse2": "right",
-                            "mouse3": "middle",
-                            "mouse4": "x2",
-                            "mouse5": "x",
-                        }
-                        button = button_map.get(self.ptt_key, "x2")
-                        with open("debug.log", "a") as f:
-                            f.write(f"[PTT] Using Windows API to press: {button}\n")
+                        button = self.PTT_BUTTON_MAP.get(self.ptt_key, "x2")
                         _simulate_mouse_button(button, press=True)
-                        with open("debug.log", "a") as f:
-                            f.write(f"[PTT] Windows API mouse press done\n")
                     else:
                         import keyboard
 
                         keyboard.press(self.ptt_key)
                     self.ptt_active = True
-                    with open("debug.log", "a") as f:
-                        f.write(f"[PTT] Active = True\n")
                 except Exception as e:
-                    with open("debug.log", "a") as f:
-                        f.write(f"Failed to press PTT key: {e}\n")
+                    logger.error("Failed to press PTT key: %s", e)
 
     def _release_ptt(self):
         """Release the PTT key if it's currently pressed."""
@@ -994,17 +955,8 @@ class AudioMixer:
         with self._ptt_lock:
             if self.ptt_active:
                 try:
-                    # Check if it's a mouse button
                     if self.ptt_key.startswith("mouse"):
-                        # Map mouse button names back to Windows button names
-                        button_map = {
-                            "mouse1": "left",
-                            "mouse2": "right",
-                            "mouse3": "middle",
-                            "mouse4": "x2",
-                            "mouse5": "x",
-                        }
-                        button = button_map.get(self.ptt_key, "x2")
+                        button = self.PTT_BUTTON_MAP.get(self.ptt_key, "x2")
                         _simulate_mouse_button(button, press=False)
                     else:
                         import keyboard
@@ -1012,8 +964,7 @@ class AudioMixer:
                         keyboard.release(self.ptt_key)
                     self.ptt_active = False
                 except Exception as e:
-                    with open("debug.log", "a") as f:
-                        f.write(f"Failed to release PTT key: {e}\n")
+                    logger.error("Failed to release PTT key: %s", e)
 
     def _check_ptt_release(self):
         """Check if all sounds finished and release PTT if so."""

@@ -13,29 +13,8 @@ import numpy as np
 import sounddevice as sd
 import soundfile as sf
 
-from .audio import read_audio_file
+from .audio import read_audio_file, _resample_audio
 from .constants import AUDIO, COLORS
-
-# Try to get ffmpeg path from imageio-ffmpeg (bundled ffmpeg)
-try:
-    import imageio_ffmpeg  # type: ignore[import-untyped]
-
-    FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
-except ImportError:
-    FFMPEG_PATH = None
-
-# Try to import pydub for extended format support (M4A, AAC, WMA, etc.)
-try:
-    from pydub import AudioSegment
-
-    # Configure pydub to use ffmpeg from imageio-ffmpeg if available
-    if FFMPEG_PATH:
-        AudioSegment.converter = FFMPEG_PATH
-        AudioSegment.ffmpeg = FFMPEG_PATH
-        AudioSegment.ffprobe = FFMPEG_PATH.replace("ffmpeg", "ffprobe")  # type: ignore[attr-defined]
-    PYDUB_AVAILABLE = True
-except ImportError:
-    PYDUB_AVAILABLE = False
 
 
 class SoundEditor:
@@ -101,12 +80,8 @@ class SoundEditor:
         try:
             data, sr = self._read_audio_file(self.file_path)
 
-            # Resample to target sample rate if needed
             if sr != self.sample_rate:
-                ratio = self.sample_rate / sr
-                new_length = int(len(data) * ratio)
-                indices = np.linspace(0, len(data) - 1, new_length).astype(int)
-                data = data[indices]
+                data = _resample_audio(data, sr, self.sample_rate)
 
             # Convert stereo to mono for visualization (keep original for playback)
             if data.ndim > 1:
@@ -772,9 +747,15 @@ class SoundEditor:
             messagebox.showerror("Playback Error", f"Failed to start playback:\n{e}")
 
     def _update_playhead(self):
-        """Update the playhead position during playback."""
+        """Update only the playhead position during playback (avoids full redraw)."""
         if self.is_playing:
-            self._draw_waveform()
+            self.canvas.delete("playhead")
+            total_samples = len(self.waveform_data)
+            visible_samples = int(total_samples / self.zoom_level)
+            view_start = int(self.view_start * (total_samples - visible_samples))
+            view_end = view_start + visible_samples
+            self._draw_playback_position(view_start, view_end)
+            self._update_info_labels()
             self.dialog.after(50, self._update_playhead)
 
     def _stop_playback(self):
@@ -807,11 +788,7 @@ class SoundEditor:
             self.dialog.destroy()
             return
 
-        # Get trimmed audio data
-        if self.audio_data.ndim > 1:
-            trimmed_audio = self.audio_data[self.trim_start : self.trim_end]
-        else:
-            trimmed_audio = self.audio_data[self.trim_start : self.trim_end]
+        trimmed_audio = self.audio_data[self.trim_start : self.trim_end]
 
         self.result = (trimmed_audio, self.sample_rate)
 

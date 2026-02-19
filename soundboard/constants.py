@@ -84,13 +84,17 @@ def _build_emoji_categories() -> Dict[str, List[str]]:
     return sorted_categories
 
 
-# Lazy-loaded emoji categories (built on first access)
-EMOJI_CATEGORIES = _build_emoji_categories()
+def get_emoji_categories() -> Dict[str, List[str]]:
+    """Get emoji categories (lazy-loaded on first call, then cached via lru_cache)."""
+    return _build_emoji_categories()
 
-# Flat list for backward compatibility
-DEFAULT_EMOJIS = []
-for emojis in EMOJI_CATEGORIES.values():
-    DEFAULT_EMOJIS.extend(emojis)
+
+def get_default_emojis() -> List[str]:
+    """Get flat list of all emojis (lazy-loaded)."""
+    result: List[str] = []
+    for emojis in get_emoji_categories().values():
+        result.extend(emojis)
+    return result
 
 
 # =============================================================================

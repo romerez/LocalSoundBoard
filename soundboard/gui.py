@@ -4,13 +4,17 @@ GUI components for the Discord Soundboard.
 
 import hashlib
 import json
+import logging
 import os
 import shutil
+import threading
 import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any, Dict, List, Optional
+
+_log = logging.getLogger("gui.click")
 
 import customtkinter as ctk
 import sounddevice as sd
@@ -20,8 +24,6 @@ from .constants import (
     ALL_SLOT_COLORS,
     COLORS,
     CONFIG_FILE,
-    DEFAULT_EMOJIS,
-    EMOJI_CATEGORIES,
     FONTS,
     IMAGES_DIR,
     SLOT_COLORS,
@@ -106,7 +108,7 @@ class SoundboardApp:
         self.empty_slot_clicked: Optional[int] = None
         self.last_play_time: float = 0.0  # Debounce for rapid clicks
         self.click_in_progress: bool = False  # True only during active slot button press
-        self.stop_button_clicked: bool = False  # Prevents slot reactions after stop click
+        self.stop_button_clicked: Optional[int] = None  # Slot idx that was just stopped (prevents re-play on same slot)
 
         # Ensure images directory exists
         Path(IMAGES_DIR).mkdir(exist_ok=True)
@@ -508,7 +510,7 @@ class SoundboardApp:
         self.is_dragging = False
         self.empty_slot_clicked = None
         self.click_in_progress = False
-        self.stop_button_clicked = False
+        self.stop_button_clicked = None
         self.root.configure(cursor="")
 
         # Clear progress bars before switching (sounds from other tabs shouldn't show here)
@@ -715,85 +717,114 @@ class SoundboardApp:
         ).pack(side=tk.LEFT, padx=5)
 
     def _show_emoji_picker(self, target_var: tk.StringVar, parent):
-        """Show emoji picker dialog with categories and scrolling."""
-        picker = ctk.CTkToplevel(parent)
+        """Show emoji picker dialog - minimal set with native tk for colored emojis."""
+        # Minimal emoji set for instant loading - only the most useful ones
+        EMOJIS = [
+            # Row 1: Faces
+            "😀", "😂", "🤣", "😊", "😍", "🤩", "😎", "🤓", "😜", "😏",
+            "😢", "😭", "😤", "😡", "🤬", "😱", "🤮", "🥵", "🥶", "😴",
+            # Row 2: More faces & creatures
+            "🤔", "🤫", "🤥", "😇", "🥰", "😈", "👿", "💀", "👻", "👽",
+            "🤖", "💩", "🤡", "👹", "👺", "🙄", "😬", "🥺", "😵", "🤯",
+            # Row 3: Gestures
+            "👍", "👎", "👊", "✊", "🤛", "🤜", "👏", "🙌", "👐", "🤝",
+            "🙏", "✌️", "🤟", "🤘", "👌", "🤌", "👈", "👉", "👆", "👇",
+            # Row 4: Music & Sound
+            "🎵", "🎶", "🎤", "🎧", "🎷", "🎸", "🎹", "🎺", "🥁", "🔔",
+            "🔊", "🔉", "🔈", "🔇", "📢", "📣", "💬", "💭", "🗯️", "💥",
+            # Row 5: Hearts & Stars
+            "❤️", "🧡", "💛", "💚", "💙", "💜", "🖤", "🤍", "💔", "❣️",
+            "💕", "💖", "💗", "💘", "💝", "⭐", "🌟", "✨", "💫", "🔥",
+            # Row 6: Activities & Games
+            "🎮", "🕹️", "🎲", "🎯", "🎳", "🏆", "🥇", "🥈", "🥉", "⚽",
+            "🏀", "🏈", "⚾", "🎾", "🏓", "🎱", "🎰", "🃏", "🀄", "🎴",
+            # Row 7: Animals
+            "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐯", "🦁",
+            "🐮", "🐷", "🐸", "🐵", "🐔", "🐧", "🦆", "🦅", "🦉", "🐺",
+            # Row 8: Signs & Symbols
+            "✅", "❌", "⚠️", "🚫", "⛔", "❓", "❗", "💯", "🔴", "🟢",
+            "🔵", "🟡", "🟠", "🟣", "⚫", "⚪", "▶️", "⏸️", "⏹️", "🔄",
+        ]
+
+        picker = tk.Toplevel(parent)
         picker.title("Choose Emoji")
-        picker.geometry("500x550")
+        picker.geometry("380x340")
         picker.transient(parent)
         picker.grab_set()
         picker.resizable(False, False)
+        picker.configure(bg=COLORS["bg_dark"])
         picker.after(10, lambda: picker.focus_force())
-
-        # Main container with CTkScrollableFrame
-        main_frame = ctk.CTkFrame(picker, fg_color=COLORS["bg_dark"], corner_radius=0)
-        main_frame.pack(fill=tk.BOTH, expand=True)
-
-        # Scrollable frame for emojis
-        scrollable_frame = ctk.CTkScrollableFrame(
-            main_frame,
-            fg_color=COLORS["bg_dark"],
-            scrollbar_button_color=COLORS["bg_light"],
-            scrollbar_button_hover_color=COLORS["bg_lighter"],
-        )
-        scrollable_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         def cleanup_and_select(emoji_val):
             target_var.set(emoji_val)
             picker.destroy()
 
-        # Create emoji grid by category
-        for category_name, emojis in EMOJI_CATEGORIES.items():
-            # Category header
-            header = ctk.CTkLabel(
-                scrollable_frame,
-                text=category_name,
-                font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
-                text_color=COLORS["text_primary"],
-                anchor="w",
+        # Title
+        title = tk.Label(
+            picker,
+            text="Select an Emoji",
+            font=("Segoe UI", 11, "bold"),
+            bg=COLORS["bg_dark"],
+            fg=COLORS["text_primary"],
+        )
+        title.pack(pady=(10, 5))
+
+        # Emoji grid frame
+        grid_frame = tk.Frame(picker, bg=COLORS["bg_dark"])
+        grid_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        # Create emoji buttons - native tk.Label renders colored emojis on Windows
+        for idx, emoji_char in enumerate(EMOJIS):
+            row = idx // 10
+            col = idx % 10
+            lbl = tk.Label(
+                grid_frame,
+                text=emoji_char,
+                font=("Segoe UI Emoji", 20),
+                bg=COLORS["bg_medium"],
+                cursor="hand2",
+                width=2,
+                height=1,
+                relief="flat",
             )
-            header.pack(fill=tk.X, padx=5, pady=(15, 8))
-
-            # Emoji grid for this category
-            emoji_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
-            emoji_frame.pack(fill=tk.X, padx=5)
-
-            for idx, emoji in enumerate(emojis):
-                col = idx % 12
-                row = idx // 12
-                btn = ctk.CTkButton(
-                    emoji_frame,
-                    text=emoji,
-                    font=ctk.CTkFont(family="Segoe UI Emoji", size=14),
-                    width=32,
-                    height=32,
-                    fg_color=COLORS["bg_medium"],
-                    hover_color=COLORS["bg_light"],
-                    corner_radius=6,
-                    command=lambda e=emoji: cleanup_and_select(e),
-                )
-                btn.grid(row=row, column=col, padx=2, pady=2)
+            lbl.grid(row=row, column=col, padx=2, pady=2)
+            lbl.bind("<Button-1>", lambda e, em=emoji_char: cleanup_and_select(em))
+            lbl.bind("<Enter>", lambda e, l=lbl: l.configure(bg=COLORS["bg_light"]))
+            lbl.bind("<Leave>", lambda e, l=lbl: l.configure(bg=COLORS["bg_medium"]))
 
         # Button frame at bottom
-        btn_frame = ctk.CTkFrame(main_frame, fg_color=COLORS["bg_dark"])
-        btn_frame.pack(fill=tk.X, pady=15, padx=10)
+        btn_frame = tk.Frame(picker, bg=COLORS["bg_dark"])
+        btn_frame.pack(fill=tk.X, pady=10, padx=10)
 
-        ctk.CTkButton(
+        clear_btn = tk.Button(
             btn_frame,
             text="Clear",
+            font=("Segoe UI", 10),
+            bg=COLORS["red"],
+            fg="white",
+            activebackground=COLORS["red_hover"],
+            activeforeground="white",
+            relief="flat",
+            cursor="hand2",
+            width=10,
             command=lambda: cleanup_and_select(""),
-            fg_color=COLORS["red"],
-            hover_color=COLORS["red_hover"],
-            width=100,
-        ).pack(side=tk.LEFT, padx=10)
+        )
+        clear_btn.pack(side=tk.LEFT, padx=5)
 
-        ctk.CTkButton(
+        cancel_btn = tk.Button(
             btn_frame,
             text="Cancel",
+            font=("Segoe UI", 10),
+            bg=COLORS["bg_medium"],
+            fg="white",
+            activebackground=COLORS["bg_light"],
+            activeforeground="white",
+            relief="flat",
+            cursor="hand2",
+            width=10,
             command=picker.destroy,
-            fg_color=COLORS["bg_medium"],
-            hover_color=COLORS["bg_light"],
-            width=100,
-        ).pack(side=tk.RIGHT, padx=10)
+        )
+        cancel_btn.pack(side=tk.RIGHT, padx=5)
 
     def _toggle_ptt_visibility(self):
         """Show or hide PTT settings based on checkbox."""
@@ -865,8 +896,9 @@ class SoundboardApp:
         self.grid_frame.bind("<Configure>", self._on_grid_configure)
         self.slots_canvas.bind("<Configure>", self._on_canvas_configure)
 
-        # Bind mouse wheel for scrolling
-        self.slots_canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        # Enable mousewheel scrolling only when hovering over the soundboard area
+        self.slots_canvas.bind("<Enter>", self._on_canvas_enter)
+        self.slots_canvas.bind("<Leave>", self._on_canvas_leave)
 
         # Create initial slots (will be populated in _refresh_slot_buttons)
         self._create_slot_widgets()
@@ -907,16 +939,19 @@ class SoundboardApp:
             if self.slots_scrollbar.winfo_ismapped():
                 self.slots_scrollbar.pack_forget()
 
+    def _on_canvas_enter(self, event):
+        """Enable scrolling when mouse enters the soundboard area."""
+        self.slots_canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+
+    def _on_canvas_leave(self, event):
+        """Disable scrolling when mouse leaves the soundboard area."""
+        self.slots_canvas.unbind_all("<MouseWheel>")
+
     def _on_mousewheel(self, event):
         """Handle mouse wheel scrolling."""
-        # Only scroll if scrollbar is visible (content exceeds canvas)
         if not self.slots_scrollbar.winfo_ismapped():
             return
-
-        # Only scroll if mouse is over the canvas area
-        widget = event.widget
-        if widget == self.slots_canvas or str(widget).startswith(str(self.slots_canvas)):
-            self.slots_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        self.slots_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
     def _create_slot_widgets(self):
         """Dynamically create slot widgets based on current tab content."""
@@ -976,11 +1011,13 @@ class SoundboardApp:
                 corner_radius=4,
                 width=28,
                 height=24,
+                cursor="hand2",
             )
             stop_handler = make_stop_handler(i)
             stop_btn.configure(command=stop_handler)
-            # Add direct binding for reliability (CTkButton command can be unreliable)
-            stop_btn.bind("<ButtonRelease-1>", stop_handler)
+            # Use CTkButton's bind() which stores bindings and reapplies them
+            # when internal canvas/label children are recreated on first display.
+            stop_btn.bind("<Button-1>", stop_handler)
             # Don't pack initially - only show when playing
 
             # Preview button (speaker icon) - pack RIGHT first
@@ -1034,6 +1071,7 @@ class SoundboardApp:
                 font=self._font_xl_bold,
                 corner_radius=UI["slot_corner_radius"],
                 anchor="center",
+                cursor="hand2",
             )
             btn.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=4, pady=(4, 0))
             btn.bind("<Button-3>", lambda e, idx=i: self._show_quick_popup(e, idx))
@@ -1245,15 +1283,15 @@ class SoundboardApp:
         self.status_var.set("Stopped")
 
     def _stop_slot_with_flag(self, slot_idx: int):
-        """Stop slot and set flag to prevent slot button from reacting."""
-        self.stop_button_clicked = True
+        """Stop slot and set flag to prevent the same slot from re-playing."""
+        self.stop_button_clicked = slot_idx
         self._stop_slot(slot_idx)
         # Clear flag after a short delay to allow any pending events to be ignored
         self.root.after(100, self._clear_stop_flag)
 
     def _clear_stop_flag(self):
         """Clear the stop button clicked flag."""
-        self.stop_button_clicked = False
+        self.stop_button_clicked = None
 
     def _record_ptt_key(self):
         """Record a key or mouse button press to use as PTT key."""
@@ -1309,7 +1347,10 @@ class SoundboardApp:
 
             # Cancel the timeout
             if self._ptt_timeout_id:
-                self.root.after_cancel(self._ptt_timeout_id)
+                try:
+                    self.root.after_cancel(self._ptt_timeout_id)
+                except RuntimeError:
+                    pass
 
             # Schedule UI updates on main thread (Tkinter is not thread-safe)
             def update_ui():
@@ -1326,7 +1367,10 @@ class SoundboardApp:
                 # Save config
                 self._save_config()
 
-            self.root.after(0, update_ui)
+            try:
+                self.root.after(0, update_ui)
+            except RuntimeError:
+                pass
 
         def on_key(event):
             set_ptt_key(event.name)
@@ -1389,6 +1433,27 @@ class SoundboardApp:
             self.tabs.append(SoundTab(name="Main", emoji="🎵"))
         return self.tabs[self.current_tab_idx]
 
+    def _show_stop_button(self, slot_idx: int):
+        """Pack the stop button for a slot and ensure click bindings are active.
+
+        CTkButton may recreate its internal canvas/label children when packed
+        for the first time, losing bindings. We schedule a deferred re-bind to
+        the actual internal widgets AFTER layout completes.
+        """
+        if slot_idx not in self.slot_stop_buttons or slot_idx not in self.slot_progress:
+            return
+        stop_btn = self.slot_stop_buttons[slot_idx]
+        progress = self.slot_progress[slot_idx]
+        stop_btn.pack_forget()
+        stop_btn.pack(side=tk.LEFT, padx=(0, 4), before=progress)
+
+        def stop_handler(event=None):
+            self._stop_slot_with_flag(slot_idx)
+            return "break"
+
+        stop_btn.configure(command=stop_handler)
+        stop_btn.bind("<Button-1>", stop_handler)
+
     def _is_widget_inside(self, widget, parent) -> bool:
         """Check if widget is the same as parent or a descendant of parent."""
         if widget is None or parent is None:
@@ -1409,31 +1474,26 @@ class SoundboardApp:
 
     def _on_drag_start(self, event, slot_idx: int):
         """Start dragging a slot."""
-        # Check if click was actually on the slot button, not on stop/preview/edit button
+        # This handler is bound directly to the slot button's internal canvas,
+        # so we trust that the click IS on the slot button.  No winfo_containing
+        # verification is needed — that check was the source of "first click ignored"
+        # bugs because winfo_containing can return stale/mismatched widgets after
+        # CTkButton internal redraws.
+
+        # Backup: if the click somehow lands on stop/preview/edit, route it
         widget_under_cursor = self.root.winfo_containing(event.x_root, event.y_root)
-        slot_btn = self.slot_buttons.get(slot_idx)
-
-        # Check if widget is inside the slot button (CTkButton has internal widgets)
-        is_on_slot_btn = self._is_widget_inside(widget_under_cursor, slot_btn)
-
-        # Also check if on stop/preview/edit buttons
         stop_btn = self.slot_stop_buttons.get(slot_idx)
+        if stop_btn and self._is_widget_inside(widget_under_cursor, stop_btn):
+            self._stop_slot_with_flag(slot_idx)
+            return "break"
         preview_btn = self.slot_preview_buttons.get(slot_idx)
         edit_btn = self.slot_edit_buttons.get(slot_idx)
-
-        is_on_stop = self._is_widget_inside(widget_under_cursor, stop_btn)
-        is_on_preview = self._is_widget_inside(widget_under_cursor, preview_btn)
-        is_on_edit = self._is_widget_inside(widget_under_cursor, edit_btn)
-
-        # If click is on stop/preview/edit buttons, just return - let them handle their own clicks
-        if is_on_stop or is_on_preview or is_on_edit:
-            return "break"  # Don't start drag, let the button's command= handle it
-
-        # If not on the main slot button, ignore
-        if not is_on_slot_btn:
-            return "break"  # Block propagation
+        if (preview_btn and self._is_widget_inside(widget_under_cursor, preview_btn)) or \
+           (edit_btn and self._is_widget_inside(widget_under_cursor, edit_btn)):
+            return "break"
 
         self.click_in_progress = True  # Mark that a slot click is active
+        _log.debug("DRAG_START slot_idx=%s  widget=%s", slot_idx, event.widget)
         tab = self._get_current_tab()
         # Only start drag if slot has content
         if slot_idx in tab.slots:
@@ -1492,21 +1552,34 @@ class SoundboardApp:
         """Handle drop - swap slots or move to different tab."""
         # Only process if we started from a slot button press
         if not getattr(self, "click_in_progress", False):
+            _log.debug("DRAG_END SKIPPED (click_in_progress=False)")
             return "break"
         self.click_in_progress = False
+        _log.debug(
+            "DRAG_END drag_source_idx=%s  is_dragging=%s  widget=%s",
+            self.drag_source_idx,
+            getattr(self, "is_dragging", False),
+            event.widget,
+        )
 
-        # Ignore if stop button was just clicked (prevents re-playing after stop)
-        if getattr(self, "stop_button_clicked", False):
-            self.drag_source_idx = None
-            self.drag_source_tab = None
-            self.is_dragging = False
-            self.empty_slot_clicked = None
-            return "break"
+        # Ignore if stop button was just clicked on THIS slot (prevents re-playing after stop)
+        stopped_slot = getattr(self, "stop_button_clicked", None)
+        if stopped_slot is not None:
+            source = self.drag_source_idx
+            if source is not None and source == stopped_slot:
+                self.drag_source_idx = None
+                self.drag_source_tab = None
+                self.is_dragging = False
+                self.empty_slot_clicked = None
+                return "break"
+            # Different slot — clear flag and proceed with the play
+            self.stop_button_clicked = None
 
         # Debounce: ignore rapid clicks (within 150ms)
         current_time = time.time()
-        if current_time - getattr(self, "last_play_time", 0) < 0.15:
-            # Clear state but don't play
+        dt = current_time - getattr(self, "last_play_time", 0)
+        if dt < 0.15:
+            _log.debug("DRAG_END DEBOUNCED dt=%.4f", dt)
             self.drag_source_idx = None
             self.drag_source_tab = None
             self.is_dragging = False
@@ -1533,23 +1606,23 @@ class SoundboardApp:
         self.drag_source_tab = None
         self.is_dragging = False
 
-        # Reset cursor and highlights
+        # If we weren't really dragging, treat as normal click.
+        # No winfo_containing check needed: _on_drag_start already confirmed
+        # the press was on a slot button, and tkinter's implicit grab ensures
+        # the release goes to the same widget.  The old _is_widget_inside check
+        # was the cause of "first click ignored" bugs.
+        if not was_dragging:
+            _log.debug("PLAY source_idx=%s", source_idx)
+            self.last_play_time = current_time
+            self._play_slot(source_idx)
+            return "break"
+
+        # Was an actual drag -- reset cursor and highlights now
         self.root.configure(cursor="")
         self._reset_drag_highlights()
 
-        # Find what widget we released on
+        # For drags, we need winfo_containing to find the drop target
         widget = self.root.winfo_containing(event.x_root, event.y_root)
-
-        # If we weren't really dragging, treat as normal click
-        # BUT only if we released on the same slot button (not on a tab or elsewhere)
-        if not was_dragging:
-            # Check if released on the original slot button (using helper for CTkButton)
-            source_btn = self.slot_buttons.get(source_idx)
-            if self._is_widget_inside(widget, source_btn):
-                self.last_play_time = current_time
-                self._play_slot(source_idx)
-            # Otherwise, user clicked slot but released elsewhere - ignore
-            return "break"
 
         # Check if dropped on a tab button
         for idx, tab_btn in enumerate(self.tab_buttons):
@@ -1674,11 +1747,7 @@ class SoundboardApp:
                 if slot_idx in self.slot_progress:
                     self.slot_progress[slot_idx].configure(progress_color=COLORS["playing"])
                 # Show stop button (on left side, before progress bar)
-                if slot_idx in self.slot_stop_buttons and slot_idx in self.slot_progress:
-                    stop_btn = self.slot_stop_buttons[slot_idx]
-                    progress = self.slot_progress[slot_idx]
-                    stop_btn.pack_forget()  # Ensure not already packed
-                    stop_btn.pack(side=tk.LEFT, padx=(0, 4), before=progress)
+                self._show_stop_button(slot_idx)
         else:
             self.status_var.set("Start the audio stream first!")
 
@@ -2199,6 +2268,7 @@ class SoundboardApp:
                 image_path=image_var.get() or None,
                 color=ALL_SLOT_COLORS.get(color_var.get()),
                 speed=speed_var.get() / 100.0,
+                preserve_pitch=existing.preserve_pitch if existing else True,
             )
             self._refresh_slot_buttons()  # Refresh to create new empty slots if needed
             self._register_hotkeys()
@@ -2258,7 +2328,7 @@ class SoundboardApp:
 
         # Generate unique filename using hash
         with open(source_path, "rb") as f:
-            file_hash = hashlib.md5(f.read()[:4096]).hexdigest()[:8]
+            file_hash = hashlib.md5(f.read(4096)).hexdigest()[:8]
 
         original_name = Path(source_path).stem
         extension = Path(source_path).suffix
@@ -2448,6 +2518,7 @@ class SoundboardApp:
                     text_color=COLORS["text_muted"],
                 )
 
+
     def _register_hotkeys(self):
         """Register global hotkeys for all slots across all tabs."""
         if not HOTKEYS_AVAILABLE:
@@ -2492,30 +2563,30 @@ class SoundboardApp:
                 slot.file_path, slot.volume, slot.speed, slot.preserve_pitch, sound_id
             )
 
-            # Start progress tracking (only visible if on current tab)
-            if duration > 0 and tab_idx == self.current_tab_idx:
+            # Always track playing state so progress shows when switching tabs
+            if duration > 0:
                 self.playing_slots[slot_idx] = {
                     "start_time": time.time(),
                     "duration": duration,
                     "tab_idx": tab_idx,
                 }
 
-                # Update UI on main thread
                 def update_ui():
                     self.status_var.set(f"Playing: {slot.name}")
-                    if slot_idx in self.slot_buttons:
-                        self.slot_buttons[slot_idx].configure(fg_color=COLORS["playing"])
-                    # Show stop button
-                    if slot_idx in self.slot_stop_buttons and slot_idx in self.slot_progress:
-                        stop_btn = self.slot_stop_buttons[slot_idx]
-                        progress = self.slot_progress[slot_idx]
-                        stop_btn.pack_forget()  # Ensure not already packed
-                        stop_btn.pack(side=tk.LEFT, padx=(0, 4), before=progress)
+                    if tab_idx == self.current_tab_idx:
+                        if slot_idx in self.slot_buttons:
+                            self.slot_buttons[slot_idx].configure(fg_color=COLORS["playing"])
+                        self._show_stop_button(slot_idx)
 
-                self.root.after(0, update_ui)
+                try:
+                    self.root.after(0, update_ui)
+                except RuntimeError:
+                    pass
             else:
-                # Update status on main thread
-                self.root.after(0, lambda: self.status_var.set(f"Playing: {slot.name}"))
+                try:
+                    self.root.after(0, lambda: self.status_var.set(f"Playing: {slot.name}"))
+                except RuntimeError:
+                    pass
 
     def _save_config(self):
         """Save configuration to JSON file using atomic write to prevent corruption."""
@@ -2536,10 +2607,7 @@ class SoundboardApp:
             with open(temp_file, "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
 
-            # On Windows, need to remove target first if it exists
-            if os.path.exists(CONFIG_FILE):
-                os.remove(CONFIG_FILE)
-            os.rename(temp_file, CONFIG_FILE)
+            os.replace(temp_file, CONFIG_FILE)
         except Exception as e:
             print(f"Error saving config: {e}")
             # Clean up temp file if it exists
@@ -2640,7 +2708,7 @@ class SoundboardApp:
                 self.mixer.set_monitor_enabled(self.monitor_var.get())
 
     def _preload_sounds(self):
-        """Preload all configured sounds into memory cache for fast playback."""
+        """Preload all configured sounds into memory cache in a background thread."""
         sound_paths = []
         for tab in self.tabs:
             for slot in tab.slots.values():
@@ -2648,8 +2716,20 @@ class SoundboardApp:
                     sound_paths.append(slot.file_path)
 
         if sound_paths:
-            self.sound_cache.preload_sounds(sound_paths)
-            self.status_var.set(f"Ready - {len(sound_paths)} sounds cached")
+            self.status_var.set(f"Loading {len(sound_paths)} sounds...")
+
+            def _do_preload():
+                self.sound_cache.preload_sounds(sound_paths)
+                try:
+                    self.root.after(
+                        0, lambda: self.status_var.set(f"Ready - {len(sound_paths)} sounds cached")
+                    )
+                except RuntimeError:
+                    pass  # Main loop not running (app closing or not started yet)
+
+            threading.Thread(target=_do_preload, daemon=True).start()
+        else:
+            self.status_var.set("Ready")
 
     def _on_close(self):
         """Handle application close."""
