@@ -223,6 +223,28 @@
           "color": "#5865F2",
           "speed": 1.0,
           "preserve_pitch": true
+        },
+        "21": {
+          "name": "ASD",
+          "file_path": "sounds\\הפרלמנט - נטיל מטבע  #הפרלמנט_21437166.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": "🥳",
+          "image_path": null,
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true
+        },
+        "3": {
+          "name": "ssstik.io_1771513335081",
+          "file_path": "sounds\\ssstik.io_1771513335081_44846737.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true
         }
       }
     },

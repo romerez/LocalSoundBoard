@@ -349,6 +349,8 @@ Example: `airhorn_8f3a2b1c.mp3`
 
 ### High Priority
 - [ ] Fix volume above 100% not making sounds louder (soft clipping needs work)
+- [ ] Fix emoji picker (PyQt6 subprocess approach has issues - freezing, venv conflicts, etc.)
+- [ ] Emoji display on slot buttons (Tkinter can't render colored emojis - need alternative approach)
 
 ### Medium Priority
 - [ ] Drag-and-drop sound file import (from file explorer)
@@ -1012,6 +1014,7 @@ The application writes debug info to `debug.log` for troubleshooting audio issue
 | Audio crackling | Close other audio apps, check CPU usage |
 | "No module named X" | Run `pip install <module>` |
 | Virtual cable not showing | Reinstall VB-Audio, restart PC |
+| "PyQt6 Required" message even after installing | You're running with system Python instead of venv. Use `run.bat` or `.venv\Scripts\python.exe main.py` |
 
 ---
 
@@ -1090,6 +1093,14 @@ When asked to add a feature:
 | Stop button needs double-click | Stop button used `<Button-1>` binding, hides itself mid-click causing release event to land on slot button | Use standard `command=` attribute for tk.Button; add `stop_button_clicked` flag to block slot reactions for 100ms after stop; bind both `<ButtonPress-1>` and `<ButtonRelease-1>` to return `"break"` |
 | Hotkey playback doesn't show stop button | `_play_slot_from_tab` didn't pack the stop button like `_play_slot` does | Add stop button packing logic to `_play_slot_from_tab` in the `update_ui` lambda |
 
+### Environment & Python
+
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| "PyQt6 Required" dialog appears | Running with system Python instead of venv Python | Always use `run.bat` or `.venv\Scripts\python.exe main.py`. PyQt6 is installed in venv only. |
+| Subprocess can't find PyQt6 | `sys.executable` returns wrong Python | The emoji picker runs as subprocess using `sys.executable` - if main app uses wrong Python, subprocess will too |
+| Tkinter + PyQt6 event loop freeze | Running PyQt6 dialog directly in Tkinter process | Run PyQt6 dialogs as **subprocess** to avoid event loop conflicts. Use `subprocess.run()` to launch picker. |
+
 ### General Rules
 
 1. **Always test after adding new UI elements** - layout issues are common with Tkinter
@@ -1098,3 +1109,5 @@ When asked to add a feature:
 4. **Audio file format support varies** - always have pydub fallback ready
 5. **Atomic writes for all config/state files** - prevents corruption on crash
 6. **Tkinter event handling** - return `"break"` to stop event propagation; use `winfo_containing()` to check actual widget under cursor on release; track click state with flags to prevent stray events
+7. **ALWAYS use venv Python** - run with `run.bat` or `.venv\Scripts\python.exe main.py`, never bare `python main.py`
+8. **PyQt6 + Tkinter coexistence** - PyQt6 dialogs must run as subprocess to avoid event loop conflicts

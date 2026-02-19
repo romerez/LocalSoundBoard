@@ -3,7 +3,7 @@
 > **Last Updated:** 2026-02-19 (major: Refactored to phone-like edit mode for slot rearrangement)
 > **Status:** Active Development
 > **Language:** Python 3.x
-
+ALWAYS EDIT THIS FILE FIRST when adding features or making changes. This is the source of truth for the project and helps maintain consistency.
 ---
 
 ## Project Overview
@@ -261,6 +261,11 @@ Persistent (NOT reset per-click):
 - [x] Hotkey playback progress tracked across all tabs (not just current tab)
 - [x] Performance optimization: tab bar updates existing buttons instead of recreating (faster tab switching)
 - [x] Performance optimization: slot filled-state cache skips redundant preview/edit button updates
+- [x] Emoji picker with scrolling support and 200+ categorized emojis
+- [x] Hebrew/Arabic RTL text display support (Unicode RTL embedding markers)
+- [x] Sound editor pause/stop without UI freeze (background thread stream cleanup)
+- [x] Zoom centered on cursor position (mouse wheel zooms to cursor location)
+- [x] Improved sound editor UI (larger window, modern styling, better layout)
 
 ---
 
@@ -530,8 +535,18 @@ When asked to add a feature:
 | Clicking other sounds while one plays needs double-click | Old approach used `ButtonRelease-1` for play, which `_draw()` wiped after any `btn.configure()`. Mass `_reset_drag_highlights()` on every release also triggered redraws. | **CURRENT FIX:** Play uses `command=` (immune to `_draw()`). Drag highlights only reset when `was_dragging` is True. See architecture section above. |
 | No hover cursor on slot buttons | CTkButton has no default cursor; slot buttons were created without `cursor=` | Added `cursor="hand2"` to slot and stop button creation in `_create_slot_widgets` |
 | Dragging plays sound accidentally | Previous drag used main button with 5px threshold — sound played on every drag start | **CURRENT FIX:** Use separate "↔ Move" edit mode. In edit mode, clicks select/swap; in normal mode, clicks play sounds. |
-|| Emoji picker freezes UI | Creating thousands of `CTkButton` widgets synchronously blocks the main thread | Use `after()` to load categories one at a time asynchronously; limit emojis per category (96 max) |
-|| Emojis display as colorless/black | `CTkButton` doesn't render colored emojis properly on Windows | Use native `tk.Label` with "Segoe UI Emoji" font instead of `CTkButton`; add hover/click bindings manually |
+| Emoji picker freezes UI | Creating thousands of `CTkButton` widgets synchronously blocks the main thread | Use `after()` to load categories one at a time asynchronously; limit emojis per category (96 max) |
+| Emojis display as colorless/black | `CTkButton` doesn't render colored emojis properly on Windows | Use native `tk.Label` with "Segoe UI Emoji" font instead of `CTkButton`; add hover/click bindings manually |
+| Hebrew/Arabic text displays backwards | Tkinter doesn't handle RTL (Right-to-Left) text properly | Wrap RTL text with Unicode RLE marker `\u202B` at start and PDF marker `\u202C` at end; use `_fix_rtl_text()` helper function |
+| Emoji picker can't scroll | Simple grid layout doesn't support scrolling | Use `tk.Canvas` with scrollbar and `create_window()` to embed scrollable frame; bind mousewheel to canvas |
+
+### Sound Editor Issues
+
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| Editor pause causes UI freeze | `stream.abort()` and `stream.close()` block the main thread | Set `is_playing = False` first, then close stream in a background thread: `threading.Thread(target=close_stream, daemon=True).start()` |
+| Zoom resets to beginning | `_zoom_in()` and `_zoom_out()` didn't preserve cursor position | Track cursor X position in `_on_mouse_wheel()`, calculate sample under cursor, adjust `view_start` after zoom to keep same sample under cursor |
+| Editor window looks unprofessional | Mix of ttk.Frame and tk widgets with inconsistent styling | Use consistent tk.Frame with explicit bg colors, flat relief buttons, cursor="hand2", proper padding and spacing |
 
 ### CustomTkinter-Specific Issues
 

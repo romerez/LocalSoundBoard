@@ -5,16 +5,19 @@ GUI components for the Discord Soundboard.
 import hashlib
 import json
 import os
+import re
 import shutil
 import threading
 import time
 import tkinter as tk
+import unicodedata
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any, Dict, List, Optional
 
 import customtkinter as ctk
 import sounddevice as sd
+from PIL import Image, ImageDraw, ImageFont, ImageTk
 
 from .audio import AudioMixer, SoundCache
 from .constants import (
@@ -32,6 +35,48 @@ from .constants import (
 )
 from .editor import SoundEditor
 from .models import SoundSlot, SoundTab
+
+
+def _fix_rtl_text(text: str) -> str:
+    """
+    Fix RTL (Right-to-Left) text display for Hebrew, Arabic, etc.
+
+    Tkinter displays text left-to-right, but Hebrew/Arabic should be
+    read right-to-left. This function reverses the word order so that
+    when displayed LTR, it reads correctly in RTL.
+
+    Args:
+        text: The text to fix
+
+    Returns:
+        Text with word order reversed for RTL languages
+    """
+    if not text:
+        return text
+
+    # Check if text contains RTL characters (Hebrew, Arabic, Persian, etc.)
+    rtl_pattern = re.compile(r"[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F]")
+
+    if not rtl_pattern.search(text):
+        return text
+
+    # Split into lines
+    lines = text.split("\n")
+    fixed_lines = []
+
+    for line in lines:
+        if not rtl_pattern.search(line):
+            fixed_lines.append(line)
+            continue
+
+        # Reverse word order for RTL text
+        # This makes "word1 word2 word3" display as "word3 word2 word1"
+        # which reads correctly right-to-left
+        words = line.split(" ")
+        fixed_lines.append(" ".join(reversed(words)))
+
+    return "\n".join(fixed_lines)
+
 
 # Configure CustomTkinter appearance
 ctk.set_appearance_mode("dark")
@@ -77,7 +122,10 @@ class SoundboardApp:
         self.slot_bottom_frames: Dict[int, Any] = {}  # CTkFrame instances
         self.slot_images: Dict[int, Any] = {}  # Keep references to images
         self.slot_image_paths: Dict[int, str] = {}  # Track loaded image paths
-        self._slot_filled_cache: Dict[int, bool] = {}  # Track filled state to skip redundant updates
+        self.slot_emoji_labels: Dict[int, Any] = {}  # CTkLabel for emoji overlay
+        self._slot_filled_cache: Dict[int, bool] = (
+            {}
+        )  # Track filled state to skip redundant updates
         self._last_active_tab_idx: int = 0  # Track last active tab for tab bar optimization
         self.registered_hotkeys: list = []
 
@@ -100,12 +148,12 @@ class SoundboardApp:
 
         # Click / drag state machine  (IDLE → PRESSED → DRAGGING | click)
         # All fields are reset together via _reset_click_state().
-        self._click_active: bool = False       # a press is being tracked
+        self._click_active: bool = False  # a press is being tracked
         self._click_slot: Optional[int] = None  # slot that was pressed
-        self._click_tab: Optional[int] = None   # tab that was active at press
-        self._click_start_x: int = 0            # screen-x of press
-        self._click_start_y: int = 0            # screen-y of press
-        self._click_dragging: bool = False       # drag threshold exceeded
+        self._click_tab: Optional[int] = None  # tab that was active at press
+        self._click_start_x: int = 0  # screen-x of press
+        self._click_start_y: int = 0  # screen-y of press
+        self._click_dragging: bool = False  # drag threshold exceeded
 
         # Edit mode state (rearrange mode)
         self._edit_mode: bool = False
@@ -476,7 +524,7 @@ class SoundboardApp:
 
     def _refresh_tab_bar(self):
         """Refresh the tab bar buttons.
-        
+
         Optimization: If the number of tabs hasn't changed, just update existing
         button properties instead of destroying and recreating all buttons.
         This significantly reduces lag when switching tabs.
@@ -511,8 +559,8 @@ class SoundboardApp:
             # Only update the tabs that need visual changes (previously active and newly active)
             for idx, (btn, tab) in enumerate(zip(self.tab_buttons, self.tabs)):
                 is_active = idx == self.current_tab_idx
-                was_active = getattr(self, '_last_active_tab_idx', -1) == idx
-                
+                was_active = getattr(self, "_last_active_tab_idx", -1) == idx
+
                 # Only reconfigure if this tab's active state changed
                 if is_active or was_active:
                     display_name = f"{tab.emoji} {tab.name}" if tab.emoji else tab.name
@@ -522,7 +570,7 @@ class SoundboardApp:
                         hover_color=COLORS["blurple_hover"] if is_active else COLORS["bg_light"],
                         font=self._font_sm_bold if is_active else self._font_sm,
                     )
-            
+
             # Track which tab was active for next comparison
             self._last_active_tab_idx = self.current_tab_idx
 
@@ -754,114 +802,22 @@ class SoundboardApp:
         ).pack(side=tk.LEFT, padx=5)
 
     def _show_emoji_picker(self, target_var: tk.StringVar, parent):
-        """Show emoji picker dialog - minimal set with native tk for colored emojis."""
-        # Minimal emoji set for instant loading - only the most useful ones
-        EMOJIS = [
-            # Row 1: Faces
-            "😀", "😂", "🤣", "😊", "😍", "🤩", "😎", "🤓", "😜", "😏",
-            "😢", "😭", "😤", "😡", "🤬", "😱", "🤮", "🥵", "🥶", "😴",
-            # Row 2: More faces & creatures
-            "🤔", "🤫", "🤥", "😇", "🥰", "😈", "👿", "💀", "👻", "👽",
-            "🤖", "💩", "🤡", "👹", "👺", "🙄", "😬", "🥺", "😵", "🤯",
-            # Row 3: Gestures
-            "👍", "👎", "👊", "✊", "🤛", "🤜", "👏", "🙌", "👐", "🤝",
-            "🙏", "✌️", "🤟", "🤘", "👌", "🤌", "👈", "👉", "👆", "👇",
-            # Row 4: Music & Sound
-            "🎵", "🎶", "🎤", "🎧", "🎷", "🎸", "🎹", "🎺", "🥁", "🔔",
-            "🔊", "🔉", "🔈", "🔇", "📢", "📣", "💬", "💭", "🗯️", "💥",
-            # Row 5: Hearts & Stars
-            "❤️", "🧡", "💛", "💚", "💙", "💜", "🖤", "🤍", "💔", "❣️",
-            "💕", "💖", "💗", "💘", "💝", "⭐", "🌟", "✨", "💫", "🔥",
-            # Row 6: Activities & Games
-            "🎮", "🕹️", "🎲", "🎯", "🎳", "🏆", "🥇", "🥈", "🥉", "⚽",
-            "🏀", "🏈", "⚾", "🎾", "🏓", "🎱", "🎰", "🃏", "🀄", "🎴",
-            # Row 7: Animals
-            "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐯", "🦁",
-            "🐮", "🐷", "🐸", "🐵", "🐔", "🐧", "🦆", "🦅", "🦉", "🐺",
-            # Row 8: Signs & Symbols
-            "✅", "❌", "⚠️", "🚫", "⛔", "❓", "❗", "💯", "🔴", "🟢",
-            "🔵", "🟡", "🟠", "🟣", "⚫", "⚪", "▶️", "⏸️", "⏹️", "🔄",
-        ]
+        """Show emoji picker dialog with colored emojis using PyQt6."""
+        # Import the PyQt6-based emoji picker
+        from .emoji_picker import pick_emoji, PYQT_AVAILABLE
 
-        picker = tk.Toplevel(parent)
-        picker.title("Choose Emoji")
-        picker.geometry("380x340")
-        picker.transient(parent)
-        picker.grab_set()
-        picker.resizable(False, False)
-        picker.configure(bg=COLORS["bg_dark"])
-        picker.after(10, lambda: picker.focus_force())
-
-        def cleanup_and_select(emoji_val):
-            target_var.set(emoji_val)
-            picker.destroy()
-
-        # Title
-        title = tk.Label(
-            picker,
-            text="Select an Emoji",
-            font=("Segoe UI", 11, "bold"),
-            bg=COLORS["bg_dark"],
-            fg=COLORS["text_primary"],
-        )
-        title.pack(pady=(10, 5))
-
-        # Emoji grid frame
-        grid_frame = tk.Frame(picker, bg=COLORS["bg_dark"])
-        grid_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
-
-        # Create emoji buttons - native tk.Label renders colored emojis on Windows
-        for idx, emoji_char in enumerate(EMOJIS):
-            row = idx // 10
-            col = idx % 10
-            lbl = tk.Label(
-                grid_frame,
-                text=emoji_char,
-                font=("Segoe UI Emoji", 20),
-                bg=COLORS["bg_medium"],
-                cursor="hand2",
-                width=2,
-                height=1,
-                relief="flat",
+        if not PYQT_AVAILABLE:
+            # Fallback: show a message that PyQt6 is required
+            messagebox.showinfo(
+                "PyQt6 Required", "For colored emojis, install PyQt6:\npip install PyQt6"
             )
-            lbl.grid(row=row, column=col, padx=2, pady=2)
-            lbl.bind("<Button-1>", lambda e, em=emoji_char: cleanup_and_select(em))
-            lbl.bind("<Enter>", lambda e, l=lbl: l.configure(bg=COLORS["bg_light"]))
-            lbl.bind("<Leave>", lambda e, l=lbl: l.configure(bg=COLORS["bg_medium"]))
+            return
 
-        # Button frame at bottom
-        btn_frame = tk.Frame(picker, bg=COLORS["bg_dark"])
-        btn_frame.pack(fill=tk.X, pady=10, padx=10)
+        # Run the PyQt6 picker
+        result = pick_emoji()
 
-        clear_btn = tk.Button(
-            btn_frame,
-            text="Clear",
-            font=("Segoe UI", 10),
-            bg=COLORS["red"],
-            fg="white",
-            activebackground=COLORS["red_hover"],
-            activeforeground="white",
-            relief="flat",
-            cursor="hand2",
-            width=10,
-            command=lambda: cleanup_and_select(""),
-        )
-        clear_btn.pack(side=tk.LEFT, padx=5)
-
-        cancel_btn = tk.Button(
-            btn_frame,
-            text="Cancel",
-            font=("Segoe UI", 10),
-            bg=COLORS["bg_medium"],
-            fg="white",
-            activebackground=COLORS["bg_light"],
-            activeforeground="white",
-            relief="flat",
-            cursor="hand2",
-            width=10,
-            command=picker.destroy,
-        )
-        cancel_btn.pack(side=tk.RIGHT, padx=5)
+        if result is not None:
+            target_var.set(result)
 
     def _toggle_ptt_visibility(self):
         """Show or hide PTT settings based on checkbox."""
@@ -1020,6 +976,7 @@ class SoundboardApp:
         self.slot_edit_buttons.clear()
         self.slot_stop_buttons.clear()
         self.slot_bottom_frames.clear()
+        self.slot_emoji_labels.clear()  # Clear emoji labels
         self._slot_filled_cache.clear()  # Reset filled state cache when recreating widgets
 
         # Calculate how many slots we need: max slot index + 1 extra empty, minimum 12
@@ -1142,6 +1099,20 @@ class SoundboardApp:
             # Right-click context menu binding (drag removed from main button)
             btn.bind("<Button-3>", lambda e, idx=i: self._show_quick_popup(e, idx))
 
+            # Emoji label overlay (top-left corner of slot)
+            emoji_label = ctk.CTkLabel(
+                slot_frame,
+                text="",
+                font=ctk.CTkFont(family="Segoe UI Emoji", size=18),
+                text_color=COLORS["text_primary"],
+                fg_color="transparent",
+                width=24,
+                height=24,
+            )
+            # Place in top-left corner using place geometry manager
+            emoji_label.place(x=6, y=4)
+            emoji_label.lower()  # Place behind button initially
+
             self.slot_frames[i] = slot_frame
             self.slot_buttons[i] = btn
             self.slot_progress[i] = progress
@@ -1149,6 +1120,7 @@ class SoundboardApp:
             self.slot_edit_buttons[i] = edit_btn
             self.slot_stop_buttons[i] = stop_btn
             self.slot_bottom_frames[i] = bottom_frame
+            self.slot_emoji_labels[i] = emoji_label
 
         # Schedule scrollbar visibility update after layout is complete
         self.root.after(10, self._update_scrollbar_visibility)
@@ -1555,7 +1527,7 @@ class SoundboardApp:
         self._edit_mode_frames: set = set()  # Track which frames have edit indicator
 
         # Update edit mode button
-        if hasattr(self, 'edit_mode_btn'):
+        if hasattr(self, "edit_mode_btn"):
             self.edit_mode_btn.configure(
                 text="✓ Done",
                 fg_color=COLORS["green"],
@@ -1581,7 +1553,7 @@ class SoundboardApp:
         self._dragging_slot = None
 
         # Update edit mode button
-        if hasattr(self, 'edit_mode_btn'):
+        if hasattr(self, "edit_mode_btn"):
             self.edit_mode_btn.configure(
                 text="↔ Move",
                 fg_color=COLORS["bg_light"],
@@ -1591,7 +1563,7 @@ class SoundboardApp:
         self.root.configure(cursor="")
 
         # Reset only frames that had edit indicator (optimization)
-        frames_to_reset = getattr(self, '_edit_mode_frames', set())
+        frames_to_reset = getattr(self, "_edit_mode_frames", set())
         for slot_idx in frames_to_reset:
             if slot_idx in self.slot_frames:
                 self.slot_frames[slot_idx].configure(
@@ -1646,8 +1618,7 @@ class SoundboardApp:
         if now - self._last_play_time < 0.15:
             return
 
-        if (self._just_stopped_slot == slot_idx
-                and now - self._just_stopped_at < 0.2):
+        if self._just_stopped_slot == slot_idx and now - self._just_stopped_at < 0.2:
             self._just_stopped_slot = None
             return
         self._just_stopped_slot = None
@@ -1978,13 +1949,13 @@ class SoundboardApp:
 
         dialog = ctk.CTkToplevel(self.root)
         dialog.title(f"Configure Slot {slot_idx + 1}")
-        dialog.geometry("550x480")
+        dialog.geometry("550x580")
         dialog.transient(self.root)
         dialog.grab_set()
         dialog.after(10, lambda: dialog.focus_force())
 
         frame = ctk.CTkFrame(dialog, fg_color=COLORS["bg_dark"], corner_radius=0)
-        frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=15)
 
         existing = tab.slots.get(slot_idx)
 
@@ -2395,7 +2366,7 @@ class SoundboardApp:
 
     def _update_slot_button(self, slot_idx: int):
         """Update the appearance of a slot button.
-        
+
         Optimization: Preview/edit buttons only change appearance based on whether
         the slot is filled or empty. We cache this state and skip their configure()
         calls when the filled state hasn't changed, reducing redundant redraws.
@@ -2447,13 +2418,24 @@ class SoundboardApp:
                 slot.name[:max_name_len] + "…" if len(slot.name) > max_name_len else slot.name
             )
 
-            # Build display text with emoji
-            emoji_prefix = f"{slot.emoji} " if slot.emoji else ""
-            display_text = f"{emoji_prefix}{display_name}{hk}"
+            # Build display text (no emoji - it's shown separately) and fix RTL text (Hebrew, Arabic)
+            display_text = _fix_rtl_text(f"{display_name}{hk}")
+
+            # Update emoji label (separate from button text for proper rendering)
+            if slot_idx in self.slot_emoji_labels:
+                emoji_label = self.slot_emoji_labels[slot_idx]
+                if slot.emoji:
+                    emoji_label.configure(text=slot.emoji)
+                    emoji_label.lift()  # Bring to front when there's an emoji
+                else:
+                    emoji_label.configure(text="")
+                    emoji_label.lower()  # Hide when no emoji
 
             # Use cached image if available and path hasn't changed
             photo = None
-            image_path = slot.image_path if slot.image_path and os.path.exists(slot.image_path) else None
+            image_path = (
+                slot.image_path if slot.image_path and os.path.exists(slot.image_path) else None
+            )
             if image_path:
                 # Check if we already have this image cached for this slot
                 if (
@@ -2469,7 +2451,7 @@ class SoundboardApp:
                         self.slot_image_paths[slot_idx] = image_path
 
             hover_color = COLORS["bg_lighter"] if not is_playing and not is_previewing else bg_color
-            
+
             btn.configure(
                 text=display_text,
                 image=photo,
@@ -2497,6 +2479,11 @@ class SoundboardApp:
                 del self.slot_images[slot_idx]
             if slot_idx in self.slot_image_paths:
                 del self.slot_image_paths[slot_idx]
+
+            # Clear emoji label for empty slots
+            if slot_idx in self.slot_emoji_labels:
+                self.slot_emoji_labels[slot_idx].configure(text="")
+                self.slot_emoji_labels[slot_idx].lower()
 
             btn.configure(
                 text="+",

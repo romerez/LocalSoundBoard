@@ -110,27 +110,51 @@ class SoundEditor:
         """Create the editor dialog window."""
         self.dialog = tk.Toplevel(self.parent)
         self.dialog.title(f"Edit Sound - {Path(self.file_path).name}")
-        self.dialog.geometry("800x500")
-        self.dialog.configure(bg=COLORS["bg_dark"])
+
+        # Calculate screen-relative size for dynamic sizing
+        screen_w = self.parent.winfo_screenwidth()
+        screen_h = self.parent.winfo_screenheight()
+        dialog_w = min(950, int(screen_w * 0.7))
+        dialog_h = min(680, int(screen_h * 0.75))
+
+        self.dialog.geometry(f"{dialog_w}x{dialog_h}")
+        self.dialog.minsize(700, 500)
+        self.dialog.configure(
+            bg=COLORS["bg_darkest"] if "bg_darkest" in COLORS else COLORS["bg_dark"]
+        )
         self.dialog.transient(self.parent)
         self.dialog.grab_set()
+
+        # Center the dialog on the parent window
+        self.dialog.update_idletasks()
+        parent_x = self.parent.winfo_x()
+        parent_y = self.parent.winfo_y()
+        parent_w = self.parent.winfo_width()
+        parent_h = self.parent.winfo_height()
+        x = parent_x + (parent_w - dialog_w) // 2
+        y = parent_y + (parent_h - dialog_h) // 2
+        # Ensure dialog stays on screen
+        x = max(0, min(x, screen_w - dialog_w))
+        y = max(0, min(y, screen_h - dialog_h))
+        self.dialog.geometry(f"{dialog_w}x{dialog_h}+{x}+{y}")
 
         # Make dialog modal
         self.dialog.protocol("WM_DELETE_WINDOW", self._on_cancel)
 
-        main_frame = ttk.Frame(self.dialog, padding=15)
+        # Main container with padding
+        main_frame = tk.Frame(self.dialog, bg=COLORS["bg_dark"], padx=20, pady=15)
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # Duration warning
+        # Duration warning (if applicable)
         if self.duration > self.MAX_DURATION_WARNING:
-            warning_frame = tk.Frame(main_frame, bg=COLORS["red"], padx=10, pady=5)
-            warning_frame.pack(fill=tk.X, pady=(0, 10))
+            warning_frame = tk.Frame(main_frame, bg="#DA373C", padx=12, pady=8)
+            warning_frame.pack(fill=tk.X, pady=(0, 12))
             tk.Label(
                 warning_frame,
-                text=f"⚠ Warning: This sound is {self.duration:.1f}s long (recommended: ≤{self.MAX_DURATION_WARNING}s). Consider trimming it.",
-                bg=COLORS["red"],
+                text=f"⚠️ This sound is {self.duration:.1f}s long. Consider trimming to ≤{self.MAX_DURATION_WARNING}s for best results.",
+                bg="#DA373C",
                 fg="white",
-                font=("Segoe UI", 9, "bold"),
+                font=("Segoe UI", 10, "bold"),
             ).pack()
 
         # Info bar
@@ -142,13 +166,17 @@ class SoundEditor:
         # Timeline
         self._create_timeline(main_frame)
 
-        # Zoom and navigation controls
-        self._create_zoom_controls(main_frame)
+        # Controls container (zoom + playback in one row)
+        controls_frame = tk.Frame(main_frame, bg=COLORS["bg_dark"])
+        controls_frame.pack(fill=tk.X, pady=10)
 
-        # Playback controls
-        self._create_playback_controls(main_frame)
+        # Zoom controls on left
+        self._create_zoom_controls(controls_frame)
 
-        # Trim info and buttons
+        # Playback controls on right
+        self._create_playback_controls(controls_frame)
+
+        # Action buttons at bottom
         self._create_action_buttons(main_frame)
 
         # Initial draw
@@ -156,21 +184,21 @@ class SoundEditor:
 
     def _create_info_bar(self, parent):
         """Create the info bar showing duration and selection."""
-        info_frame = ttk.Frame(parent)
-        info_frame.pack(fill=tk.X, pady=(0, 10))
+        info_frame = tk.Frame(parent, bg=COLORS["bg_dark"])
+        info_frame.pack(fill=tk.X, pady=(0, 12))
 
         self.info_label = tk.Label(
             info_frame,
-            text=f"Total: {self.duration:.2f}s | Selected: {self.duration:.2f}s",
+            text=f"📊 Total: {self.duration:.2f}s | Selected: {self.duration:.2f}s",
             bg=COLORS["bg_dark"],
             fg=COLORS["text_primary"],
-            font=("Segoe UI", 10),
+            font=("Segoe UI", 11, "bold"),
         )
         self.info_label.pack(side=tk.LEFT)
 
         self.trim_info_label = tk.Label(
             info_frame,
-            text="Drag the green/red markers to trim",
+            text="💡 Drag the green (start) and red (end) markers to trim",
             bg=COLORS["bg_dark"],
             fg=COLORS["text_muted"],
             font=("Segoe UI", 9),
@@ -179,14 +207,15 @@ class SoundEditor:
 
     def _create_waveform_canvas(self, parent):
         """Create the waveform visualization canvas."""
-        canvas_frame = tk.Frame(parent, bg=COLORS["bg_medium"], padx=2, pady=2)
-        canvas_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+        # Container with border
+        canvas_container = tk.Frame(parent, bg=COLORS["bg_light"], padx=2, pady=2)
+        canvas_container.pack(fill=tk.BOTH, expand=True, pady=8)
 
         self.canvas = tk.Canvas(
-            canvas_frame,
+            canvas_container,
             width=self.canvas_width,
             height=self.canvas_height,
-            bg="#1a1d21",
+            bg="#12141a",  # Darker background for better contrast
             highlightthickness=0,
         )
         self.canvas.pack(fill=tk.BOTH, expand=True)
@@ -202,24 +231,25 @@ class SoundEditor:
         """Create the timeline below the waveform."""
         self.timeline_canvas = tk.Canvas(
             parent,
-            height=25,
+            height=28,
             bg=COLORS["bg_dark"],
             highlightthickness=0,
         )
-        self.timeline_canvas.pack(fill=tk.X, pady=(0, 5))
+        self.timeline_canvas.pack(fill=tk.X, pady=(0, 8))
 
     def _create_zoom_controls(self, parent):
         """Create zoom and navigation controls."""
-        zoom_frame = ttk.Frame(parent)
-        zoom_frame.pack(fill=tk.X, pady=5)
+        zoom_frame = tk.Frame(parent, bg=COLORS["bg_dark"])
+        zoom_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        # Zoom buttons
+        # Zoom label
         tk.Label(
             zoom_frame,
-            text="Zoom:",
+            text="🔍 Zoom:",
             bg=COLORS["bg_dark"],
             fg=COLORS["text_primary"],
-        ).pack(side=tk.LEFT, padx=(0, 5))
+            font=("Segoe UI", 10),
+        ).pack(side=tk.LEFT, padx=(0, 8))
 
         tk.Button(
             zoom_frame,
@@ -227,8 +257,12 @@ class SoundEditor:
             command=self._zoom_out,
             bg=COLORS["bg_medium"],
             fg="white",
+            activebackground=COLORS["bg_light"],
+            activeforeground="white",
             width=3,
-            font=("Segoe UI", 10, "bold"),
+            font=("Segoe UI", 12, "bold"),
+            relief="flat",
+            cursor="hand2",
         ).pack(side=tk.LEFT, padx=2)
 
         self.zoom_label = tk.Label(
@@ -236,6 +270,7 @@ class SoundEditor:
             text="1.0x",
             bg=COLORS["bg_dark"],
             fg=COLORS["text_primary"],
+            font=("Segoe UI", 10, "bold"),
             width=6,
         )
         self.zoom_label.pack(side=tk.LEFT, padx=5)
@@ -246,18 +281,36 @@ class SoundEditor:
             command=self._zoom_in,
             bg=COLORS["bg_medium"],
             fg="white",
+            activebackground=COLORS["bg_light"],
+            activeforeground="white",
             width=3,
-            font=("Segoe UI", 10, "bold"),
+            font=("Segoe UI", 12, "bold"),
+            relief="flat",
+            cursor="hand2",
         ).pack(side=tk.LEFT, padx=2)
 
         tk.Button(
             zoom_frame,
-            text="Fit All",
+            text="⟲ Fit All",
             command=self._zoom_fit,
             bg=COLORS["bg_medium"],
             fg="white",
-            width=8,
-        ).pack(side=tk.LEFT, padx=10)
+            activebackground=COLORS["bg_light"],
+            activeforeground="white",
+            font=("Segoe UI", 9),
+            width=9,
+            relief="flat",
+            cursor="hand2",
+        ).pack(side=tk.LEFT, padx=12)
+
+        # Navigation label and scroll
+        tk.Label(
+            zoom_frame,
+            text="📍 Navigate:",
+            bg=COLORS["bg_dark"],
+            fg=COLORS["text_primary"],
+            font=("Segoe UI", 10),
+        ).pack(side=tk.LEFT, padx=(10, 5))
 
         # Horizontal scrollbar for navigation when zoomed
         self.h_scroll = ttk.Scale(
@@ -266,22 +319,15 @@ class SoundEditor:
             to=1,
             orient=tk.HORIZONTAL,
             command=self._on_scroll,
-            length=200,
+            length=180,
         )
-        self.h_scroll.pack(side=tk.RIGHT, padx=10)
+        self.h_scroll.pack(side=tk.LEFT, padx=5)
         self.h_scroll.set(0)
-
-        tk.Label(
-            zoom_frame,
-            text="Navigate:",
-            bg=COLORS["bg_dark"],
-            fg=COLORS["text_primary"],
-        ).pack(side=tk.RIGHT)
 
     def _create_playback_controls(self, parent):
         """Create playback preview controls."""
-        play_frame = ttk.Frame(parent)
-        play_frame.pack(fill=tk.X, pady=10)
+        play_frame = tk.Frame(parent, bg=COLORS["bg_dark"])
+        play_frame.pack(side=tk.RIGHT)
 
         self.play_btn = tk.Button(
             play_frame,
@@ -289,8 +335,13 @@ class SoundEditor:
             command=self._toggle_playback,
             bg=COLORS["green"],
             fg="white",
+            activebackground="#1E8E4D",
+            activeforeground="white",
             font=("Segoe UI", 10, "bold"),
             width=15,
+            relief="flat",
+            cursor="hand2",
+            pady=4,
         )
         self.play_btn.pack(side=tk.LEFT, padx=5)
 
@@ -300,33 +351,48 @@ class SoundEditor:
             command=self._stop_playback,
             bg=COLORS["red"],
             fg="white",
+            activebackground="#B52F33",
+            activeforeground="white",
             width=8,
+            relief="flat",
+            cursor="hand2",
+            pady=4,
         ).pack(side=tk.LEFT, padx=5)
 
         # Selection time display
         self.selection_label = tk.Label(
             play_frame,
-            text="Selection: 0.00s - 0.00s",
+            text="📍 0.00s - 0.00s",
             bg=COLORS["bg_dark"],
             fg=COLORS["text_primary"],
             font=("Segoe UI", 10),
         )
-        self.selection_label.pack(side=tk.LEFT, padx=20)
+        self.selection_label.pack(side=tk.LEFT, padx=15)
 
     def _create_action_buttons(self, parent):
         """Create the save/cancel action buttons."""
-        btn_frame = ttk.Frame(parent)
-        btn_frame.pack(fill=tk.X, pady=(10, 0))
+        # Separator line
+        separator = tk.Frame(parent, bg=COLORS["bg_light"], height=1)
+        separator.pack(fill=tk.X, pady=(15, 12))
 
-        # Reset button
+        btn_frame = tk.Frame(parent, bg=COLORS["bg_dark"])
+        btn_frame.pack(fill=tk.X)
+
+        # Reset button on left
         tk.Button(
             btn_frame,
-            text="Reset Selection",
+            text="🔄 Reset Selection",
             command=self._reset_selection,
             bg=COLORS["bg_medium"],
             fg="white",
-            width=15,
-        ).pack(side=tk.LEFT, padx=5)
+            activebackground=COLORS["bg_light"],
+            activeforeground="white",
+            font=("Segoe UI", 10),
+            width=16,
+            relief="flat",
+            cursor="hand2",
+            pady=5,
+        ).pack(side=tk.LEFT)
 
         # Action buttons on right
         tk.Button(
@@ -335,18 +401,29 @@ class SoundEditor:
             command=self._on_cancel,
             bg=COLORS["bg_medium"],
             fg="white",
+            activebackground=COLORS["bg_light"],
+            activeforeground="white",
+            font=("Segoe UI", 10),
             width=10,
-        ).pack(side=tk.RIGHT, padx=5)
+            relief="flat",
+            cursor="hand2",
+            pady=5,
+        ).pack(side=tk.RIGHT, padx=(8, 0))
 
         tk.Button(
             btn_frame,
-            text="Save & Use",
+            text="✅ Save & Use",
             command=self._on_save,
             bg=COLORS["blurple"],
             fg="white",
+            activebackground=COLORS.get("blurple_hover", "#4752C4"),
+            activeforeground="white",
             font=("Segoe UI", 10, "bold"),
-            width=12,
-        ).pack(side=tk.RIGHT, padx=5)
+            width=14,
+            relief="flat",
+            cursor="hand2",
+            pady=5,
+        ).pack(side=tk.RIGHT)
 
     def _draw_waveform(self):
         """Draw the waveform visualization."""
@@ -520,14 +597,14 @@ class SoundEditor:
         selected_duration = (self.trim_end - self.trim_start) / self.sample_rate
 
         self.info_label.config(
-            text=f"Total: {total_duration:.2f}s | Selected: {selected_duration:.2f}s"
+            text=f"📊 Total: {total_duration:.2f}s | Selected: {selected_duration:.2f}s"
         )
 
         # selection_label may not exist during initial UI construction
         if hasattr(self, "selection_label"):
             start_time = self.trim_start / self.sample_rate
             end_time = self.trim_end / self.sample_rate
-            self.selection_label.config(text=f"Selection: {start_time:.2f}s - {end_time:.2f}s")
+            self.selection_label.config(text=f"📍 {start_time:.2f}s - {end_time:.2f}s")
 
     def _on_canvas_click(self, event):
         """Handle click on the canvas to select trim markers."""
@@ -597,25 +674,110 @@ class SoundEditor:
         self._draw_waveform()
 
     def _on_mouse_wheel(self, event):
-        """Handle mouse wheel for zooming."""
+        """Handle mouse wheel for zooming - zoom centered on cursor position."""
+        # Get cursor X position relative to canvas
+        cursor_x = event.x
+
         if event.delta > 0:
-            self._zoom_in()
+            self._zoom_in_at(cursor_x)
         else:
-            self._zoom_out()
+            self._zoom_out_at(cursor_x)
+
+    def _zoom_in_at(self, cursor_x: int):
+        """Zoom in centered on the given X position."""
+        if self.zoom_level >= 50.0:
+            return
+
+        total_samples = len(self.waveform_data)
+        if total_samples == 0:
+            return
+
+        # Calculate which sample is under the cursor before zoom
+        visible_samples = int(total_samples / self.zoom_level)
+        view_start_sample = int(self.view_start * max(1, total_samples - visible_samples))
+        cursor_ratio = cursor_x / max(1, self.canvas_width)
+        cursor_sample = view_start_sample + int(cursor_ratio * visible_samples)
+
+        # Apply zoom
+        old_zoom = self.zoom_level
+        self.zoom_level = min(self.zoom_level * 1.5, 50.0)
+
+        # Calculate new visible samples after zoom
+        new_visible_samples = int(total_samples / self.zoom_level)
+
+        # Adjust view_start so cursor_sample stays at the same relative position
+        new_view_start_sample = cursor_sample - int(cursor_ratio * new_visible_samples)
+        new_view_start_sample = max(
+            0, min(new_view_start_sample, total_samples - new_visible_samples)
+        )
+
+        # Convert to normalized position (0.0 to 1.0)
+        if total_samples > new_visible_samples:
+            self.view_start = new_view_start_sample / (total_samples - new_visible_samples)
+        else:
+            self.view_start = 0.0
+
+        self.view_start = max(0.0, min(1.0, self.view_start))
+        self.h_scroll.set(self.view_start)
+        self.zoom_label.config(text=f"{self.zoom_level:.1f}x")
+        self._draw_waveform()
+
+    def _zoom_out_at(self, cursor_x: int):
+        """Zoom out centered on the given X position."""
+        if self.zoom_level <= 1.0:
+            return
+
+        total_samples = len(self.waveform_data)
+        if total_samples == 0:
+            return
+
+        # Calculate which sample is under the cursor before zoom
+        visible_samples = int(total_samples / self.zoom_level)
+        view_start_sample = int(self.view_start * max(1, total_samples - visible_samples))
+        cursor_ratio = cursor_x / max(1, self.canvas_width)
+        cursor_sample = view_start_sample + int(cursor_ratio * visible_samples)
+
+        # Apply zoom
+        old_zoom = self.zoom_level
+        self.zoom_level = max(self.zoom_level / 1.5, 1.0)
+
+        # Calculate new visible samples after zoom
+        new_visible_samples = int(total_samples / self.zoom_level)
+
+        # If zoom is 1.0 (fit all), reset view
+        if self.zoom_level <= 1.0:
+            self.view_start = 0.0
+            self.h_scroll.set(0)
+            self.zoom_label.config(text="1.0x")
+            self._draw_waveform()
+            return
+
+        # Adjust view_start so cursor_sample stays at the same relative position
+        new_view_start_sample = cursor_sample - int(cursor_ratio * new_visible_samples)
+        new_view_start_sample = max(
+            0, min(new_view_start_sample, total_samples - new_visible_samples)
+        )
+
+        # Convert to normalized position (0.0 to 1.0)
+        if total_samples > new_visible_samples:
+            self.view_start = new_view_start_sample / (total_samples - new_visible_samples)
+        else:
+            self.view_start = 0.0
+
+        self.view_start = max(0.0, min(1.0, self.view_start))
+        self.h_scroll.set(self.view_start)
+        self.zoom_label.config(text=f"{self.zoom_level:.1f}x")
+        self._draw_waveform()
 
     def _zoom_in(self):
-        """Zoom in on the waveform."""
-        self.zoom_level = min(self.zoom_level * 1.5, 50.0)
-        self.zoom_label.config(text=f"{self.zoom_level:.1f}x")
-        self._update_scroll_range()
-        self._draw_waveform()
+        """Zoom in on the waveform (centered on view)."""
+        # Use center of canvas as cursor position
+        self._zoom_in_at(self.canvas_width // 2)
 
     def _zoom_out(self):
-        """Zoom out on the waveform."""
-        self.zoom_level = max(self.zoom_level / 1.5, 1.0)
-        self.zoom_label.config(text=f"{self.zoom_level:.1f}x")
-        self._update_scroll_range()
-        self._draw_waveform()
+        """Zoom out on the waveform (centered on view)."""
+        # Use center of canvas as cursor position
+        self._zoom_out_at(self.canvas_width // 2)
 
     def _zoom_fit(self):
         """Reset zoom to fit all."""
@@ -645,16 +807,27 @@ class SoundEditor:
 
     def _pause_playback(self):
         """Pause playback (keep position for resume)."""
+        # Set flags first - callback will stop producing audio immediately
         self.is_playing = False
         self.is_paused = True
-        if self.play_stream:
-            try:
-                self.play_stream.abort()  # Use abort for immediate stop
-                self.play_stream.close()
-            except Exception:
-                pass
-            self.play_stream = None
+
+        # Update button immediately for responsive UI
         self.play_btn.config(text="▶ Resume", bg=COLORS["green"])
+
+        # Close stream in background thread to avoid UI freeze
+        stream = self.play_stream
+        self.play_stream = None
+
+        if stream:
+
+            def close_stream():
+                try:
+                    stream.abort()
+                    stream.close()
+                except Exception:
+                    pass
+
+            threading.Thread(target=close_stream, daemon=True).start()
 
     def _prepare_audio_for_playback(self):
         """Prepare the selected audio data for playback."""
@@ -760,18 +933,29 @@ class SoundEditor:
 
     def _stop_playback(self):
         """Stop playback and reset position."""
+        # Set flags first - callback will stop producing audio immediately
         self.is_playing = False
         self.is_paused = False
         self.play_position = 0
-        if self.play_stream:
-            try:
-                self.play_stream.abort()  # Use abort for immediate stop
-                self.play_stream.close()
-            except Exception:
-                pass
-            self.play_stream = None
+
+        # Update button and waveform immediately for responsive UI
         self.play_btn.config(text="▶ Play Selection", bg=COLORS["green"])
         self._draw_waveform()
+
+        # Close stream in background thread to avoid UI freeze
+        stream = self.play_stream
+        self.play_stream = None
+
+        if stream:
+
+            def close_stream():
+                try:
+                    stream.abort()
+                    stream.close()
+                except Exception:
+                    pass
+
+            threading.Thread(target=close_stream, daemon=True).start()
 
     def _reset_selection(self):
         """Reset trim selection to full audio."""
