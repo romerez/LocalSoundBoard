@@ -4,17 +4,6 @@
       "name": "Main",
       "emoji": "🎵",
       "slots": {
-        "3": {
-          "name": "aint-nobody-got-time-for-that_1",
-          "file_path": "sounds\\aint-nobody-got-time-for-that_1_98957508.wav",
-          "hotkey": null,
-          "volume": 1.0,
-          "emoji": null,
-          "image_path": null,
-          "color": null,
-          "speed": 1.0,
-          "preserve_pitch": true
-        },
         "1": {
           "name": "bloody-fuck-you-bloody_Jzdok0G",
           "file_path": "sounds\\bloody-fuck-you-bloody_Jzdok0G_15502481.wav",
@@ -82,17 +71,6 @@
           "preserve_pitch": true
         },
         "6": {
-          "name": "icecream so good",
-          "file_path": "sounds\\pinkydoll-icecream_90098579.wav",
-          "hotkey": null,
-          "volume": 1.0,
-          "emoji": null,
-          "image_path": null,
-          "color": "#7289DA",
-          "speed": 1.0,
-          "preserve_pitch": true
-        },
-        "7": {
           "name": "זה כתב\"ם",
           "file_path": "sounds\\zv katbam (1)_90303935.wav",
           "hotkey": null,
@@ -103,7 +81,29 @@
           "speed": 1.0,
           "preserve_pitch": true
         },
+        "7": {
+          "name": "aint-nobody-got-time-for-that_1",
+          "file_path": "sounds\\aint-nobody-got-time-for-that_1_98957508.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true
+        },
         "10": {
+          "name": "gotcha-bitch_1",
+          "file_path": "sounds\\gotcha-bitch_1_12097840.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true
+        },
+        "11": {
           "name": "סתום ת'פה ש'ך כבר!!! (רמיקס) ",
           "file_path": "sounds\\סתום ת'פה ש'ך כבר!!! (רמיקס) [ ezmp3.cc ]_90365669.wav",
           "hotkey": null,
@@ -111,6 +111,116 @@
           "emoji": null,
           "image_path": null,
           "color": "#7289DA",
+          "speed": 1.0,
+          "preserve_pitch": true
+        },
+        "8": {
+          "name": "Bye Nigga",
+          "file_path": "sounds\\lil-jon-bye-n_12115811.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": "images\\c24861d7-f9fe-43ba-a471-aa3dcbc6c85e_thumb_0502c9be.jpg",
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true
+        },
+        "12": {
+          "name": "Im rich bitch",
+          "file_path": "sounds\\im-rich-bitch_12419926.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true
+        },
+        "13": {
+          "name": "Risitas lol",
+          "file_path": "sounds\\el-risitas_12541495.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": "images\\artworks-LLzlLY4CmKZwd6Hf-bx6Fww-t500x500_0f792a19.jpg",
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true
+        },
+        "14": {
+          "name": "Risitas Etu",
+          "file_path": "sounds\\issou_6xYAXwo_12585012.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": "images\\artworks-LLzlLY4CmKZwd6Hf-bx6Fww-t500x500_0f792a19.jpg",
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true
+        },
+        "15": {
+          "name": "את לא בן",
+          "file_path": "sounds\\FBDownloader.to_AQPLlv4DRz9fm6bErkgJ9ermxBW3dDcdvoeuhWhTPn3RiWsmTod0PRf3mQ4EUGk2e2oMSQD7DJrH9fqFW8vxf7aW_360p_(SD)_13678271.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true
+        },
+        "16": {
+          "name": "אני עובדת עם אמא",
+          "file_path": "sounds\\ssstik.io_1771513335081_13734385.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true
+        },
+        "17": {
+          "name": "בוא נטיל מטבע מה שיצא יצא ",
+          "file_path": "sounds\\הפרלמנט - נטיל מטבע  #הפרלמנט_13768713.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true
+        },
+        "18": {
+          "name": "נגמור אותו",
+          "file_path": "sounds\\הפרלמנט - נטיל מטבע  #הפרלמנט_13837626.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true
+        },
+        "19": {
+          "name": "יצא פלי",
+          "file_path": "sounds\\הפרלמנט - נטיל מטבע  #הפרלמנט_13876550.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true
+        },
+        "20": {
+          "name": "תבוא אלי הבייתה ותביא לי ביד",
+          "file_path": "sounds\\הזמנה ביד #שאולי הזמנה לחתונה#מצחיק #בדיחות #שאולי וראובן# (1)_14680962.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#5865F2",
           "speed": 1.0,
           "preserve_pitch": true
         }
@@ -128,6 +238,23 @@
           "emoji": null,
           "image_path": "images\\First-time-james-franco-hanging-meme_6287e7cc.jpg",
           "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true
+        }
+      }
+    },
+    {
+      "name": "Random",
+      "emoji": "😱",
+      "slots": {
+        "0": {
+          "name": "icecream so good",
+          "file_path": "sounds\\pinkydoll-icecream_90098579.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#7289DA",
           "speed": 1.0,
           "preserve_pitch": true
         }

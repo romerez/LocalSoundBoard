@@ -77,6 +77,8 @@ class SoundboardApp:
         self.slot_bottom_frames: Dict[int, Any] = {}  # CTkFrame instances
         self.slot_images: Dict[int, Any] = {}  # Keep references to images
         self.slot_image_paths: Dict[int, str] = {}  # Track loaded image paths
+        self._slot_filled_cache: Dict[int, bool] = {}  # Track filled state to skip redundant updates
+        self._last_active_tab_idx: int = 0  # Track last active tab for tab bar optimization
         self.registered_hotkeys: list = []
 
         # Pre-create cached fonts for performance
@@ -104,6 +106,10 @@ class SoundboardApp:
         self._click_start_x: int = 0            # screen-x of press
         self._click_start_y: int = 0            # screen-y of press
         self._click_dragging: bool = False       # drag threshold exceeded
+
+        # Edit mode state (rearrange mode)
+        self._edit_mode: bool = False
+        self._dragging_slot: Optional[int] = None
 
         # Persistent across clicks (not reset per-click)
         self._last_play_time: float = 0.0
@@ -469,35 +475,70 @@ class SoundboardApp:
         self.add_tab_btn.pack(side=tk.RIGHT, padx=(8, 0))
 
     def _refresh_tab_bar(self):
-        """Refresh the tab bar buttons."""
-        # Clear existing tab buttons
-        for btn in self.tab_buttons:
-            btn.destroy()
-        self.tab_buttons.clear()
+        """Refresh the tab bar buttons.
+        
+        Optimization: If the number of tabs hasn't changed, just update existing
+        button properties instead of destroying and recreating all buttons.
+        This significantly reduces lag when switching tabs.
+        """
+        # Check if we need to recreate buttons (tab count changed)
+        if len(self.tab_buttons) != len(self.tabs):
+            # Tab count changed - must recreate all buttons
+            for btn in self.tab_buttons:
+                btn.destroy()
+            self.tab_buttons.clear()
 
-        # Create buttons for each tab
-        for idx, tab in enumerate(self.tabs):
-            display_name = f"{tab.emoji} {tab.name}" if tab.emoji else tab.name
-            is_active = idx == self.current_tab_idx
+            for idx, tab in enumerate(self.tabs):
+                display_name = f"{tab.emoji} {tab.name}" if tab.emoji else tab.name
+                is_active = idx == self.current_tab_idx
 
-            btn = ctk.CTkButton(
-                self.tabs_container,
-                text=display_name,
-                command=lambda i=idx: self._switch_tab(i),
-                fg_color=COLORS["blurple"] if is_active else COLORS["bg_medium"],
-                hover_color=COLORS["blurple_hover"] if is_active else COLORS["bg_light"],
-                text_color=COLORS["text_primary"],
-                font=self._font_sm_bold if is_active else self._font_sm,
-                corner_radius=UI["button_corner_radius"],
-                height=32,
-            )
-            btn.pack(side=tk.LEFT, padx=(0, 4))
-            btn.bind("<Button-3>", lambda e, i=idx: self._configure_tab(i))
-            self.tab_buttons.append(btn)
+                btn = ctk.CTkButton(
+                    self.tabs_container,
+                    text=display_name,
+                    command=lambda i=idx: self._switch_tab(i),
+                    fg_color=COLORS["blurple"] if is_active else COLORS["bg_medium"],
+                    hover_color=COLORS["blurple_hover"] if is_active else COLORS["bg_light"],
+                    text_color=COLORS["text_primary"],
+                    font=self._font_sm_bold if is_active else self._font_sm,
+                    corner_radius=UI["button_corner_radius"],
+                    height=32,
+                )
+                btn.pack(side=tk.LEFT, padx=(0, 4))
+                btn.bind("<Button-3>", lambda e, i=idx: self._configure_tab(i))
+                self.tab_buttons.append(btn)
+        else:
+            # Same tab count - just update existing buttons (much faster)
+            # Only update the tabs that need visual changes (previously active and newly active)
+            for idx, (btn, tab) in enumerate(zip(self.tab_buttons, self.tabs)):
+                is_active = idx == self.current_tab_idx
+                was_active = getattr(self, '_last_active_tab_idx', -1) == idx
+                
+                # Only reconfigure if this tab's active state changed
+                if is_active or was_active:
+                    display_name = f"{tab.emoji} {tab.name}" if tab.emoji else tab.name
+                    btn.configure(
+                        text=display_name,
+                        fg_color=COLORS["blurple"] if is_active else COLORS["bg_medium"],
+                        hover_color=COLORS["blurple_hover"] if is_active else COLORS["bg_light"],
+                        font=self._font_sm_bold if is_active else self._font_sm,
+                    )
+            
+            # Track which tab was active for next comparison
+            self._last_active_tab_idx = self.current_tab_idx
 
     def _switch_tab(self, tab_idx: int):
-        """Switch to a different tab."""
+        """Switch to a different tab, or move slot if in edit mode."""
         if tab_idx < 0 or tab_idx >= len(self.tabs):
+            return
+
+        # Check if we're in edit mode with a selected slot - move it to this tab
+        if self._edit_mode and self._dragging_slot is not None and tab_idx != self.current_tab_idx:
+            source_idx = self._dragging_slot
+            source_tab = self._click_tab
+            self._dragging_slot = None
+
+            if source_idx is not None and source_tab is not None:
+                self._move_slot_to_tab(source_idx, source_tab, tab_idx)
             return
 
         # Don't switch to current tab
@@ -505,10 +546,9 @@ class SoundboardApp:
             return
 
         # Cancel any ongoing interaction
-        if self._click_dragging:
-            self.root.configure(cursor="")
-            self._reset_drag_highlights()
         self._reset_click_state()
+        if self._edit_mode:
+            self._exit_edit_mode(skip_refresh=True)  # Skip refresh, we'll do it below
 
         # Clear progress bars before switching (sounds from other tabs shouldn't show here)
         for slot_idx in self.slot_progress:
@@ -851,14 +891,32 @@ class SoundboardApp:
         )
         board_frame.pack(fill=tk.BOTH, expand=True)
 
-        # Header label
+        # Header with label and edit mode button
+        header_frame = ctk.CTkFrame(board_frame, fg_color="transparent")
+        header_frame.pack(fill=tk.X, padx=12, pady=(8, 4))
+
         header_label = ctk.CTkLabel(
-            board_frame,
+            header_frame,
             text="Soundboard",
             font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"], weight="bold"),
             text_color=COLORS["text_secondary"],
         )
-        header_label.pack(anchor="w", padx=12, pady=(8, 4))
+        header_label.pack(side=tk.LEFT)
+
+        # Edit/Move mode button
+        self.edit_mode_btn = ctk.CTkButton(
+            header_frame,
+            text="↔ Move",
+            font=self._font_xs,
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_lighter"],
+            text_color=COLORS["text_muted"],
+            corner_radius=4,
+            width=70,
+            height=22,
+            command=self._toggle_edit_mode,
+        )
+        self.edit_mode_btn.pack(side=tk.RIGHT)
 
         # Create scrollable canvas (using tk.Canvas for scroll support)
         canvas_frame = ctk.CTkFrame(board_frame, fg_color="transparent")
@@ -952,14 +1010,17 @@ class SoundboardApp:
 
     def _create_slot_widgets(self):
         """Dynamically create slot widgets based on current tab content."""
-        # Clear existing slots
+        # Clear existing slots and all associated state
         for frame in self.slot_frames.values():
             frame.destroy()
         self.slot_frames.clear()
         self.slot_buttons.clear()
         self.slot_progress.clear()
         self.slot_preview_buttons.clear()
+        self.slot_edit_buttons.clear()
+        self.slot_stop_buttons.clear()
         self.slot_bottom_frames.clear()
+        self._slot_filled_cache.clear()  # Reset filled state cache when recreating widgets
 
         # Calculate how many slots we need: max slot index + 1 extra empty, minimum 12
         tab = self._get_current_tab()
@@ -1064,10 +1125,6 @@ class SoundboardApp:
             # that reliably survives CTkButton._draw() (which re-binds <Button-1>
             # on the internal canvas, wiping any raw canvas.bind() we add).
             # CTkButton stores _command as a property and calls it from _clicked().
-            #
-            # CTkButton.bind() is used ONLY for drag detection (motion/release).
-            # CTkButton stores these bindings internally and re-applies them after
-            # _draw(), so they also survive btn.configure() calls.
             btn = ctk.CTkButton(
                 slot_frame,
                 text="+",
@@ -1080,11 +1137,9 @@ class SoundboardApp:
                 cursor="hand2",
                 command=lambda idx=i: self._on_slot_command(idx),
             )
-            btn.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=4, pady=(4, 0))
+            btn.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=4, pady=(0, 0))
 
-            btn.bind("<ButtonPress-1>", lambda e, idx=i: self._on_slot_press(e, idx))
-            btn.bind("<B1-Motion>", self._on_slot_motion)
-            btn.bind("<ButtonRelease-1>", self._on_slot_release)
+            # Right-click context menu binding (drag removed from main button)
             btn.bind("<Button-3>", lambda e, idx=i: self._show_quick_popup(e, idx))
 
             self.slot_frames[i] = slot_frame
@@ -1466,16 +1521,14 @@ class SoundboardApp:
     # ─────────────────────────────────────────────────────────
     # Slot click / drag state machine
     #
-    # States:  IDLE  →  PRESSED  →  DRAGGING  (or click)
+    # Click-to-play: via command= callback (survives CTkButton._draw())
+    # Drag: via drag handle at top of slot (hold 2 seconds to enable)
     #
-    # Bindings are on the *internal canvas* of each CTkButton
-    # (set once at creation in _create_slot_widgets via add="+").
-    # Canvas widget-level bindings survive CTkButton._draw(),
-    # so they persist across btn.configure() calls with zero
-    # re-binding.
+    # The drag handle approach separates click-to-play from drag,
+    # making it clear that holding the grip icon enables reordering.
     # ─────────────────────────────────────────────────────────
 
-    _DRAG_THRESHOLD = 5  # pixels before a press becomes a drag
+    _DRAG_THRESHOLD = 5  # pixels before actual drag movement starts
 
     def _reset_click_state(self):
         """Return to IDLE — cancel any press/drag in progress."""
@@ -1485,6 +1538,71 @@ class SoundboardApp:
         self._click_start_x = 0
         self._click_start_y = 0
         self._click_dragging = False
+
+    # ---------- Edit Mode (phone-like rearrange with wiggle animation) ----------
+
+    def _toggle_edit_mode(self):
+        """Toggle edit/rearrange mode - slots wiggle and can be dragged."""
+        if self._edit_mode:
+            self._exit_edit_mode()
+        else:
+            self._enter_edit_mode()
+
+    def _enter_edit_mode(self):
+        """Enter edit mode - show edit indicators on slots."""
+        self._edit_mode = True
+        self._dragging_slot = None
+        self._edit_mode_frames: set = set()  # Track which frames have edit indicator
+
+        # Update edit mode button
+        if hasattr(self, 'edit_mode_btn'):
+            self.edit_mode_btn.configure(
+                text="✓ Done",
+                fg_color=COLORS["green"],
+            )
+
+        # Change cursor
+        self.root.configure(cursor="fleur")
+
+        # Show edit mode indicator on all filled slots
+        tab = self._get_current_tab()
+        for slot_idx, frame in self.slot_frames.items():
+            if slot_idx in tab.slots:
+                frame.configure(
+                    fg_color=COLORS["blurple"],
+                    border_width=2,
+                    border_color=COLORS["text_muted"],
+                )
+                self._edit_mode_frames.add(slot_idx)
+
+    def _exit_edit_mode(self, skip_refresh: bool = False):
+        """Exit edit mode - reset visuals."""
+        self._edit_mode = False
+        self._dragging_slot = None
+
+        # Update edit mode button
+        if hasattr(self, 'edit_mode_btn'):
+            self.edit_mode_btn.configure(
+                text="↔ Move",
+                fg_color=COLORS["bg_light"],
+            )
+
+        # Reset cursor
+        self.root.configure(cursor="")
+
+        # Reset only frames that had edit indicator (optimization)
+        frames_to_reset = getattr(self, '_edit_mode_frames', set())
+        for slot_idx in frames_to_reset:
+            if slot_idx in self.slot_frames:
+                self.slot_frames[slot_idx].configure(
+                    fg_color=COLORS["bg_medium"],
+                    border_width=0,
+                )
+        self._edit_mode_frames = set()
+
+        # Reset slot appearances (skip if caller will refresh anyway)
+        if not skip_refresh:
+            self._refresh_slot_buttons()
 
     # ---------- command= callback (PRIMARY click mechanism) ----------
 
@@ -1496,54 +1614,28 @@ class SoundboardApp:
         raw canvas.bind() handlers.  command= is stored as a property
         and is immune to _draw().
         """
-        if self._click_dragging:
-            return
-        self._handle_slot_click(slot_idx)
-
-    # ---------- binding-based handlers (drag only) ----------
-
-    def _on_slot_press(self, event, slot_idx: int):
-        """Record press position for drag detection."""
-        self._click_active = True
-        self._click_slot = slot_idx
-        self._click_tab = self.current_tab_idx
-        self._click_start_x = event.x_root
-        self._click_start_y = event.y_root
-        self._click_dragging = False
-
-    def _on_slot_motion(self, event):
-        """Detect drag start and update drop-target highlights."""
-        if not self._click_active:
-            return
-        if self._click_dragging:
-            self._update_drag_target(event)
-            return
-        dx = abs(event.x_root - self._click_start_x)
-        dy = abs(event.y_root - self._click_start_y)
-        if dx > self._DRAG_THRESHOLD or dy > self._DRAG_THRESHOLD:
-            tab = self._get_current_tab()
-            if self._click_slot is not None and self._click_slot in tab.slots:
-                self._click_dragging = True
-                self.root.configure(cursor="fleur")
+        # In edit mode, clicking a slot selects it for dragging
+        if self._edit_mode:
+            if self._dragging_slot is None:
+                # Select this slot for dragging
+                tab = self._get_current_tab()
+                if slot_idx in tab.slots:
+                    self._dragging_slot = slot_idx
+                    self._click_tab = self.current_tab_idx
+                    # Highlight the selected slot
+                    self.slot_buttons[slot_idx].configure(fg_color=COLORS["green"])
+            elif self._dragging_slot == slot_idx:
+                # Clicking same slot - deselect
+                self._dragging_slot = None
+                self._refresh_slot_buttons()
             else:
-                self._reset_click_state()
-
-    def _on_slot_release(self, event):
-        """Handle drag drop on release (clicks are handled by command=)."""
-        if not self._click_active:
+                # Clicking different slot - swap them
+                source_idx = self._dragging_slot
+                self._dragging_slot = None
+                self._swap_slots(source_idx, slot_idx)
             return
 
-        slot_idx = self._click_slot
-        tab_idx = self._click_tab
-        was_dragging = self._click_dragging
-
-        self._reset_click_state()
-
-        if was_dragging:
-            self.root.configure(cursor="")
-            self._reset_drag_highlights()
-            if slot_idx is not None and tab_idx is not None:
-                self._handle_slot_drop(event, slot_idx, tab_idx)
+        self._handle_slot_click(slot_idx)
 
     # ---------- high-level action handlers ----------
 
@@ -1578,51 +1670,6 @@ class SoundboardApp:
                 if slot_idx != source_idx and source_tab == self.current_tab_idx:
                     self._swap_slots(source_idx, slot_idx)
                 return
-
-    def _update_drag_target(self, event):
-        """Highlight the slot or tab under the cursor during a drag."""
-        widget = self.root.winfo_containing(event.x_root, event.y_root)
-        self._reset_drag_highlights()
-
-        for idx, tab_btn in enumerate(self.tab_buttons):
-            if self._is_widget_inside(widget, tab_btn):
-                if idx != self._click_tab:
-                    tab_btn.configure(fg_color=COLORS["drag_target"])
-                return
-
-        for slot_idx, btn in self.slot_buttons.items():
-            if self._is_widget_inside(widget, btn):
-                if slot_idx != self._click_slot:
-                    btn.configure(fg_color=COLORS["drag_target"])
-                return
-
-    def _reset_drag_highlights(self):
-        """Reset all drag highlight colors to proper state."""
-        # Restore all slot buttons to their proper appearance
-        for slot_idx in self.slot_buttons.keys():
-            # Check if this slot is playing/previewing ON THE CURRENT TAB
-            is_playing = (
-                slot_idx in self.playing_slots
-                and self.playing_slots[slot_idx].get("tab_idx") == self.current_tab_idx
-            )
-            is_previewing = (
-                slot_idx in self.preview_slots
-                and self.preview_slots[slot_idx].get("tab_idx") == self.current_tab_idx
-            )
-
-            if is_playing:
-                self.slot_buttons[slot_idx].configure(fg_color=COLORS["playing"])
-            elif is_previewing:
-                self.slot_buttons[slot_idx].configure(fg_color=COLORS["preview"])
-            else:
-                self._update_slot_button(slot_idx)
-
-        # Reset tab buttons
-        for idx, tab_btn in enumerate(self.tab_buttons):
-            if idx == self.current_tab_idx:
-                tab_btn.configure(fg_color=COLORS["blurple"])
-            else:
-                tab_btn.configure(fg_color=COLORS["bg_medium"])
 
     def _swap_slots(self, idx1: int, idx2: int):
         """Swap two slots within the current tab."""
@@ -2347,7 +2394,12 @@ class SoundboardApp:
             return None
 
     def _update_slot_button(self, slot_idx: int):
-        """Update the appearance of a slot button."""
+        """Update the appearance of a slot button.
+        
+        Optimization: Preview/edit buttons only change appearance based on whether
+        the slot is filled or empty. We cache this state and skip their configure()
+        calls when the filled state hasn't changed, reducing redundant redraws.
+        """
         btn = self.slot_buttons[slot_idx]
         slot_frame = self.slot_frames[slot_idx]
         tab = self._get_current_tab()
@@ -2379,7 +2431,13 @@ class SoundboardApp:
         # Update frame color
         slot_frame.configure(fg_color=frame_color)
 
-        if slot_idx in tab.slots:
+        # Check if filled state changed (for preview/edit button optimization)
+        is_filled = slot_idx in tab.slots
+        was_filled = self._slot_filled_cache.get(slot_idx)
+        filled_state_changed = was_filled != is_filled
+        self._slot_filled_cache[slot_idx] = is_filled
+
+        if is_filled:
             slot = tab.slots[slot_idx]
             hk = f"\n[{slot.hotkey}]" if slot.hotkey else ""
 
@@ -2395,55 +2453,44 @@ class SoundboardApp:
 
             # Use cached image if available and path hasn't changed
             photo = None
-            if slot.image_path and os.path.exists(slot.image_path):
+            image_path = slot.image_path if slot.image_path and os.path.exists(slot.image_path) else None
+            if image_path:
                 # Check if we already have this image cached for this slot
                 if (
                     slot_idx in self.slot_images
-                    and self.slot_image_paths.get(slot_idx) == slot.image_path
+                    and self.slot_image_paths.get(slot_idx) == image_path
                 ):
                     photo = self.slot_images[slot_idx]
                 else:
                     # Load and cache the image
-                    photo = self._load_slot_image(slot.image_path)
+                    photo = self._load_slot_image(image_path)
                     if photo:
                         self.slot_images[slot_idx] = photo
-                        self.slot_image_paths[slot_idx] = slot.image_path
+                        self.slot_image_paths[slot_idx] = image_path
 
-            if photo:
-                btn.configure(
-                    text=display_text,
-                    image=photo,
-                    fg_color=bg_color,
-                    hover_color=(
-                        COLORS["bg_lighter"] if not is_playing and not is_previewing else bg_color
-                    ),
-                    text_color=COLORS["text_primary"],
-                    font=self._font_sm,
-                )
-            else:
-                btn.configure(
-                    text=display_text,
-                    image=None,
-                    fg_color=bg_color,
-                    hover_color=(
-                        COLORS["bg_lighter"] if not is_playing and not is_previewing else bg_color
-                    ),
-                    text_color=COLORS["text_primary"],
-                    font=self._font_sm,
-                )
+            hover_color = COLORS["bg_lighter"] if not is_playing and not is_previewing else bg_color
+            
+            btn.configure(
+                text=display_text,
+                image=photo,
+                fg_color=bg_color,
+                hover_color=hover_color,
+                text_color=COLORS["text_primary"],
+                font=self._font_sm,
+            )
 
-            # Enable preview button when slot has a sound
-            if slot_idx in self.slot_preview_buttons:
-                self.slot_preview_buttons[slot_idx].configure(
-                    fg_color=COLORS["bg_light"],
-                    text_color=COLORS["text_primary"],
-                )
-            # Enable edit button when slot has a sound
-            if slot_idx in self.slot_edit_buttons:
-                self.slot_edit_buttons[slot_idx].configure(
-                    fg_color=COLORS["bg_light"],
-                    text_color=COLORS["text_primary"],
-                )
+            # Only update preview/edit buttons if filled state changed (optimization)
+            if filled_state_changed:
+                if slot_idx in self.slot_preview_buttons:
+                    self.slot_preview_buttons[slot_idx].configure(
+                        fg_color=COLORS["bg_light"],
+                        text_color=COLORS["text_primary"],
+                    )
+                if slot_idx in self.slot_edit_buttons:
+                    self.slot_edit_buttons[slot_idx].configure(
+                        fg_color=COLORS["bg_light"],
+                        text_color=COLORS["text_primary"],
+                    )
         else:
             # Clear image reference if exists
             if slot_idx in self.slot_images:
@@ -2460,19 +2507,18 @@ class SoundboardApp:
                 font=self._font_xl_bold,
             )
 
-            # Dim preview button when slot is empty
-            if slot_idx in self.slot_preview_buttons:
-                self.slot_preview_buttons[slot_idx].configure(
-                    fg_color=COLORS["bg_light"],
-                    text_color=COLORS["text_muted"],
-                )
-            # Dim edit button when slot is empty
-            if slot_idx in self.slot_edit_buttons:
-                self.slot_edit_buttons[slot_idx].configure(
-                    fg_color=COLORS["bg_light"],
-                    text_color=COLORS["text_muted"],
-                )
-
+            # Only update preview/edit buttons if filled state changed (optimization)
+            if filled_state_changed:
+                if slot_idx in self.slot_preview_buttons:
+                    self.slot_preview_buttons[slot_idx].configure(
+                        fg_color=COLORS["bg_light"],
+                        text_color=COLORS["text_muted"],
+                    )
+                if slot_idx in self.slot_edit_buttons:
+                    self.slot_edit_buttons[slot_idx].configure(
+                        fg_color=COLORS["bg_light"],
+                        text_color=COLORS["text_muted"],
+                    )
 
     def _register_hotkeys(self):
         """Register global hotkeys for all slots across all tabs."""
