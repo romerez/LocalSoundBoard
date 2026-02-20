@@ -15,17 +15,6 @@
           "speed": 1.0,
           "preserve_pitch": true
         },
-        "2": {
-          "name": "bloody-fuck-you-bloody_Jzdok0G",
-          "file_path": "sounds\\bloody-fuck-you-bloody_Jzdok0G_15502481.wav",
-          "hotkey": null,
-          "volume": 0.21,
-          "emoji": null,
-          "image_path": null,
-          "color": "#1ABC9C",
-          "speed": 1.0,
-          "preserve_pitch": false
-        },
         "5": {
           "name": "ביבי זיינתי את אשתך",
           "file_path": "sounds\\1291763884000018594 - פלט_89842547.wav",
@@ -168,6 +157,17 @@
           "color": "#5865F2",
           "speed": 1.0,
           "preserve_pitch": true
+        },
+        "1": {
+          "name": "bloody-fuck-you-bloody_Jzdok0G",
+          "file_path": "sounds\\bloody-fuck-you-bloody_Jzdok0G_15502481.wav",
+          "hotkey": null,
+          "volume": 0.21,
+          "emoji": null,
+          "image_path": null,
+          "color": "#1ABC9C",
+          "speed": 1.0,
+          "preserve_pitch": false
         }
       }
     },
@@ -295,7 +295,7 @@
       }
     }
   ],
-  "current_tab": 0,
+  "current_tab": 3,
   "ptt_enabled": true,
   "ptt_key": "mouse4",
   "input_device": "5: Microphone (HyperX Quadcast)",

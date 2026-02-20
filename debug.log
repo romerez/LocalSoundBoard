@@ -44880,3 +44880,18 @@ AdaptBlockInfo(insts=((0, {}), (2, {}), (4, {'res': '$x4.0'}), (6, {'res': '$con
 [soundboard.audio] Stop: removed 0 sounds from currently_playing
 [soundboard.audio] librosa imported successfully: 0.11.0
 [soundboard.audio] PTT key set to: mouse4
+[soundboard.audio] librosa imported successfully: 0.11.0
+[soundboard.audio] PTT key set to: mouse4
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 107595 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_15)
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 71026 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_7)
+[soundboard.audio] Queued from cache: 2546825 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_3)
+[soundboard.audio] Stop: id=0_3, currently_playing=1, ids=['0_3']
+[soundboard.audio] Stop: removed 1 sounds from currently_playing
+[soundboard.audio] Stop: id=0_3, currently_playing=0, ids=[]
+[soundboard.audio] Stop: removed 0 sounds from currently_playing
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 28754 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_8)
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 48214 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_9)

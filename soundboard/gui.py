@@ -502,16 +502,26 @@ class SoundboardApp:
             self.audio_options_expanded.set(True)
 
     def _create_tab_bar(self, parent):
-        """Create the tab bar with tabs and + button."""
+        """Create the tab bar with horizontal scrolling for unlimited tabs."""
         self.tab_bar_frame = ctk.CTkFrame(parent, fg_color="transparent", height=40)
         self.tab_bar_frame.pack(fill=tk.X, pady=(0, 8))
         self.tab_bar_frame.pack_propagate(False)
 
-        # Container for tab buttons
-        self.tabs_container = ctk.CTkFrame(self.tab_bar_frame, fg_color="transparent")
-        self.tabs_container.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        # Edit/Move mode button (left side)
+        self.edit_mode_btn = ctk.CTkButton(
+            self.tab_bar_frame,
+            text="↔ Move",
+            command=self._toggle_edit_mode,
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_lighter"],
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            corner_radius=UI["button_corner_radius"],
+            height=32,
+            width=70,
+        )
+        self.edit_mode_btn.pack(side=tk.LEFT, padx=(0, 8))
 
-        # Stop All button (always visible)
+        # Stop All button (right side)
         self.stop_all_btn = ctk.CTkButton(
             self.tab_bar_frame,
             text="⏹ Stop All",
@@ -525,7 +535,7 @@ class SoundboardApp:
         )
         self.stop_all_btn.pack(side=tk.RIGHT, padx=(8, 0))
 
-        # Add tab button
+        # Add tab button (right side)
         self.add_tab_btn = ctk.CTkButton(
             self.tab_bar_frame,
             text="+",
@@ -538,6 +548,106 @@ class SoundboardApp:
             width=36,
         )
         self.add_tab_btn.pack(side=tk.RIGHT, padx=(8, 0))
+
+        # Scroll buttons for tabs (hidden until needed)
+        self.tab_scroll_left_btn = ctk.CTkButton(
+            self.tab_bar_frame,
+            text="◀",
+            command=lambda: self._scroll_tabs(-1),
+            fg_color=COLORS["bg_medium"],
+            hover_color=COLORS["bg_light"],
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            corner_radius=4,
+            height=32,
+            width=24,
+        )
+        # Don't pack yet - will be shown when needed
+
+        self.tab_scroll_right_btn = ctk.CTkButton(
+            self.tab_bar_frame,
+            text="▶",
+            command=lambda: self._scroll_tabs(1),
+            fg_color=COLORS["bg_medium"],
+            hover_color=COLORS["bg_light"],
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            corner_radius=4,
+            height=32,
+            width=24,
+        )
+        # Don't pack yet - will be shown when needed
+
+        # Scrollable canvas for tab buttons
+        self.tabs_canvas = tk.Canvas(
+            self.tab_bar_frame,
+            bg=COLORS["bg_dark"],
+            highlightthickness=0,
+            height=36,
+        )
+        self.tabs_canvas.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 4))
+
+        # Frame inside canvas to hold tab buttons
+        self.tabs_container = ctk.CTkFrame(self.tabs_canvas, fg_color="transparent")
+        self.tabs_canvas_window = self.tabs_canvas.create_window(
+            (0, 2), window=self.tabs_container, anchor="nw"
+        )
+
+        # Bind canvas resize to update scroll region
+        self.tabs_canvas.bind("<Configure>", self._on_tabs_canvas_configure)
+        self.tabs_container.bind("<Configure>", self._on_tabs_container_configure)
+
+        # Bind mousewheel for horizontal scrolling on tabs
+        self.tabs_canvas.bind("<Enter>", self._bind_tabs_mousewheel)
+        self.tabs_canvas.bind("<Leave>", self._unbind_tabs_mousewheel)
+
+    def _bind_tabs_mousewheel(self, event=None):
+        """Bind mousewheel to tabs scrolling when hovering over tabs area."""
+        self.tabs_canvas.bind_all("<MouseWheel>", self._on_tabs_mousewheel)
+
+    def _unbind_tabs_mousewheel(self, event=None):
+        """Unbind mousewheel from tabs scrolling."""
+        self.tabs_canvas.unbind_all("<MouseWheel>")
+
+    def _on_tabs_mousewheel(self, event):
+        """Handle mousewheel scrolling on tabs canvas."""
+        # Only scroll if there's overflow
+        canvas_width = self.tabs_canvas.winfo_width()
+        content_width = self.tabs_container.winfo_reqwidth()
+        if content_width <= canvas_width:
+            return
+        # Scroll horizontally
+        self.tabs_canvas.xview_scroll(-1 if event.delta > 0 else 1, "units")
+
+    def _scroll_tabs(self, direction: int):
+        """Scroll tabs left (-1) or right (1)."""
+        self.tabs_canvas.xview_scroll(direction * 3, "units")
+
+    def _on_tabs_canvas_configure(self, event=None):
+        """Handle tabs canvas resize."""
+        self._update_tabs_scroll_buttons()
+
+    def _on_tabs_container_configure(self, event=None):
+        """Handle tabs container content change."""
+        # Update scroll region to encompass all tabs
+        self.tabs_canvas.configure(scrollregion=self.tabs_canvas.bbox("all"))
+        self._update_tabs_scroll_buttons()
+
+    def _update_tabs_scroll_buttons(self):
+        """Show/hide scroll buttons based on whether tabs overflow."""
+        canvas_width = self.tabs_canvas.winfo_width()
+        content_width = self.tabs_container.winfo_reqwidth()
+
+        if content_width > canvas_width and canvas_width > 1:
+            # Show scroll buttons
+            if not self.tab_scroll_left_btn.winfo_ismapped():
+                self.tab_scroll_left_btn.pack(side=tk.LEFT, padx=(0, 2), before=self.tabs_canvas)
+            if not self.tab_scroll_right_btn.winfo_ismapped():
+                self.tab_scroll_right_btn.pack(side=tk.LEFT, padx=(2, 0), after=self.tabs_canvas)
+        else:
+            # Hide scroll buttons
+            if self.tab_scroll_left_btn.winfo_ismapped():
+                self.tab_scroll_left_btn.pack_forget()
+            if self.tab_scroll_right_btn.winfo_ismapped():
+                self.tab_scroll_right_btn.pack_forget()
 
     def _refresh_tab_bar(self):
         """Refresh the tab bar buttons.
@@ -591,6 +701,9 @@ class SoundboardApp:
             # Track which tab was active for next comparison
             self._last_active_tab_idx = self.current_tab_idx
 
+        # Update scroll region and buttons after tab bar changes
+        self.root.after(10, self._on_tabs_container_configure)
+
     def _switch_tab(self, tab_idx: int):
         """Switch to a different tab using tkraise() for instant switching."""
         if tab_idx < 0 or tab_idx >= len(self.tabs):
@@ -637,8 +750,46 @@ class SoundboardApp:
         # Update tab bar appearance (already optimized)
         self._refresh_tab_bar()
 
+        # Scroll the new active tab into view
+        self._scroll_tab_into_view(tab_idx)
+
         # Update scrollbar visibility for new tab's content
         self.root.after(10, self._update_scrollbar_visibility)
+
+    def _scroll_tab_into_view(self, tab_idx: int):
+        """Scroll the tabs canvas to make the specified tab visible."""
+        if tab_idx < 0 or tab_idx >= len(self.tab_buttons):
+            return
+
+        btn = self.tab_buttons[tab_idx]
+
+        # Get the button position relative to the tabs_container
+        btn_x = btn.winfo_x()
+        btn_width = btn.winfo_width()
+
+        # Get canvas viewport
+        canvas_width = self.tabs_canvas.winfo_width()
+        content_width = self.tabs_container.winfo_reqwidth()
+
+        # If content fits, no scrolling needed
+        if content_width <= canvas_width:
+            return
+
+        # Get current scroll position
+        scroll_pos = self.tabs_canvas.xview()
+        visible_left = scroll_pos[0] * content_width
+        visible_right = scroll_pos[1] * content_width
+
+        # Check if button is already fully visible
+        if btn_x >= visible_left and (btn_x + btn_width) <= visible_right:
+            return
+
+        # Calculate scroll position to center the button (or at least make it visible)
+        target_x = max(0, btn_x - (canvas_width / 2) + (btn_width / 2))
+        scroll_fraction = target_x / content_width
+        scroll_fraction = max(0, min(1, scroll_fraction))
+
+        self.tabs_canvas.xview_moveto(scroll_fraction)
 
     def _add_new_tab(self):
         """Add a new tab."""
@@ -898,7 +1049,7 @@ class SoundboardApp:
         )
         board_frame.pack(fill=tk.BOTH, expand=True)
 
-        # Header with label and edit mode button
+        # Header with label
         header_frame = ctk.CTkFrame(board_frame, fg_color="transparent")
         header_frame.pack(fill=tk.X, padx=12, pady=(8, 4))
 
@@ -909,21 +1060,6 @@ class SoundboardApp:
             text_color=COLORS["text_secondary"],
         )
         header_label.pack(side=tk.LEFT)
-
-        # Edit/Move mode button
-        self.edit_mode_btn = ctk.CTkButton(
-            header_frame,
-            text="↔ Move",
-            font=self._font_xs,
-            fg_color=COLORS["bg_light"],
-            hover_color=COLORS["bg_lighter"],
-            text_color=COLORS["text_muted"],
-            corner_radius=4,
-            width=70,
-            height=22,
-            command=self._toggle_edit_mode,
-        )
-        self.edit_mode_btn.pack(side=tk.RIGHT)
 
         # Create scrollable canvas (using tk.Canvas for scroll support)
         canvas_frame = ctk.CTkFrame(board_frame, fg_color="transparent")
@@ -2533,14 +2669,14 @@ class SoundboardApp:
             if not slot_to_delete:
                 dialog.destroy()
                 return
-            
+
             if not messagebox.askyesno(
                 "Delete Sound",
                 f"Are you sure you want to delete '{slot_to_delete.name}'?",
                 icon="warning",
             ):
                 return
-            
+
             # Check if any other slot uses this sound before removing from cache
             other_uses = any(
                 s.file_path == slot_to_delete.file_path
