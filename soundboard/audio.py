@@ -626,12 +626,44 @@ class AudioMixer:
         with self.lock:
             finished = []
             for i, sound in enumerate(self.currently_playing):
+                # Handle loop delay phase
+                if sound.get("in_delay", False):
+                    delay_remaining = sound["loop_delay_samples"] - sound["delay_position"]
+                    if delay_remaining <= 0:
+                        # Delay finished, reset for next loop iteration
+                        sound["in_delay"] = False
+                        sound["position"] = 0
+                        sound["delay_position"] = 0
+                        # Decrement loops_remaining if not infinite
+                        if sound.get("loops_remaining", 0) > 0:
+                            sound["loops_remaining"] -= 1
+                    else:
+                        # Still in delay - add silence
+                        sound["delay_position"] += frames
+                        continue
+                
                 pos = sound["position"]
                 data = sound["data"]
                 volume = sound["volume"]
                 remaining = len(data) - pos
 
                 if remaining <= 0:
+                    # Sound finished this iteration
+                    if sound.get("loop", False):
+                        # Check if more loops remain
+                        loops_remaining = sound.get("loops_remaining", -1)
+                        if loops_remaining != 0:  # -1 = infinite, >0 = more loops
+                            # Start delay phase if configured
+                            if sound.get("loop_delay_samples", 0) > 0:
+                                sound["in_delay"] = True
+                                sound["delay_position"] = 0
+                            else:
+                                # No delay, reset immediately
+                                sound["position"] = 0
+                                if loops_remaining > 0:
+                                    sound["loops_remaining"] -= 1
+                            continue
+                    # Not looping or no more loops - mark as finished
                     finished.append(i)
                     continue
 
@@ -695,6 +727,9 @@ class AudioMixer:
         speed: float = 1.0,
         preserve_pitch: bool = True,
         sound_id: Optional[str] = None,
+        loop: bool = False,
+        loop_count: int = 0,
+        loop_delay: float = 0.0,
     ) -> float:
         """Queue a sound for playback. Uses cache if available for better performance.
 
@@ -704,6 +739,9 @@ class AudioMixer:
             speed: Playback speed (0.5 to 2.0, where 1.0 is normal)
             preserve_pitch: If True, use time-stretch to preserve pitch; if False, simple resample
             sound_id: Optional identifier for this sound (used to stop individual sounds)
+            loop: If True, sound will loop
+            loop_count: Number of times to loop (0 = infinite)
+            loop_delay: Delay between loops in seconds
 
         Returns the duration of the sound in seconds (0.0 if failed to play).
         """
@@ -722,17 +760,33 @@ class AudioMixer:
                     # Apply speed adjustment
                     if speed != 1.0:
                         data = self._apply_speed(data, speed, preserve_pitch)
-                    # Apply fade-out to prevent abrupt cutoff
-                    data = _apply_fade_out(data, self.sample_rate)
+                    # Apply fade-out to prevent abrupt cutoff (skip for looping sounds)
+                    if not loop:
+                        data = _apply_fade_out(data, self.sample_rate)
                     # Queue sound FIRST, then press PTT (prevents race condition where
                     # output callback sees empty queue and releases PTT immediately)
-                    self.sound_queue.put(
-                        {"data": data, "position": 0, "volume": volume, "sound_id": sound_id}
-                    )
+                    sound_entry = {
+                        "data": data,
+                        "position": 0,
+                        "volume": volume,
+                        "sound_id": sound_id,
+                        "loop": loop,
+                        "loop_count": loop_count,
+                        "loops_remaining": loop_count if loop_count > 0 else -1,
+                        "loop_delay": loop_delay,
+                        "loop_delay_samples": int(loop_delay * self.sample_rate),
+                        "in_delay": False,
+                        "delay_position": 0,
+                        "file_path": file_path,
+                        "speed": speed,
+                        "preserve_pitch": preserve_pitch,
+                        "name": Path(file_path).stem if file_path else "Unknown",
+                    }
+                    self.sound_queue.put(sound_entry)
                     self._press_ptt()
                     logger.debug(
-                        "Queued from cache: %d samples (speed=%s, preserve_pitch=%s, volume=%s, id=%s)",
-                        len(data), speed, preserve_pitch, volume, sound_id,
+                        "Queued from cache: %d samples (speed=%s, preserve_pitch=%s, volume=%s, id=%s, loop=%s)",
+                        len(data), speed, preserve_pitch, volume, sound_id, loop,
                     )
                     return len(data) / self.sample_rate
 
@@ -750,17 +804,33 @@ class AudioMixer:
             if speed != 1.0:
                 data = self._apply_speed(data, speed, preserve_pitch)
 
-            # Apply fade-out to prevent abrupt cutoff
-            data = _apply_fade_out(data, self.sample_rate)
+            # Apply fade-out to prevent abrupt cutoff (skip for looping sounds)
+            if not loop:
+                data = _apply_fade_out(data, self.sample_rate)
 
             logger.debug(
-                "Playing from disk: %d samples (speed=%s, preserve_pitch=%s, id=%s)",
-                len(data), speed, preserve_pitch, sound_id,
+                "Playing from disk: %d samples (speed=%s, preserve_pitch=%s, id=%s, loop=%s)",
+                len(data), speed, preserve_pitch, sound_id, loop,
             )
             # Queue sound FIRST, then press PTT
-            self.sound_queue.put(
-                {"data": data, "position": 0, "volume": volume, "sound_id": sound_id}
-            )
+            sound_entry = {
+                "data": data,
+                "position": 0,
+                "volume": volume,
+                "sound_id": sound_id,
+                "loop": loop,
+                "loop_count": loop_count,
+                "loops_remaining": loop_count if loop_count > 0 else -1,
+                "loop_delay": loop_delay,
+                "loop_delay_samples": int(loop_delay * self.sample_rate),
+                "in_delay": False,
+                "delay_position": 0,
+                "file_path": file_path,
+                "speed": speed,
+                "preserve_pitch": preserve_pitch,
+                "name": Path(file_path).stem if file_path else "Unknown",
+            }
+            self.sound_queue.put(sound_entry)
             self._press_ptt()
             return len(data) / self.sample_rate
         except Exception as e:
@@ -912,6 +982,37 @@ class AudioMixer:
 
         # Release PTT key
         self._release_ptt()
+
+    def get_playing_sounds(self) -> List[Dict]:
+        """Get a snapshot of currently playing sounds for UI display.
+        
+        Returns a list of dicts with:
+            - sound_id: Unique identifier
+            - name: Display name
+            - progress: Progress ratio (0.0-1.0)
+            - volume: Volume level
+            - loop: Whether looping
+            - loops_remaining: Remaining loops (-1 for infinite)
+            - in_delay: Whether in loop delay phase
+        """
+        result = []
+        with self.lock:
+            for sound in self.currently_playing:
+                data_len = len(sound.get("data", []))
+                pos = sound.get("position", 0)
+                progress = pos / data_len if data_len > 0 else 0.0
+                
+                result.append({
+                    "sound_id": sound.get("sound_id"),
+                    "name": sound.get("name", "Unknown"),
+                    "progress": progress,
+                    "volume": sound.get("volume", 1.0),
+                    "loop": sound.get("loop", False),
+                    "loops_remaining": sound.get("loops_remaining", 0),
+                    "in_delay": sound.get("in_delay", False),
+                    "file_path": sound.get("file_path"),
+                })
+        return result
 
     def set_ptt_key(self, key: Optional[str]):
         """Set the Push-to-Talk key for Discord integration."""

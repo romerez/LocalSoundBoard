@@ -11,9 +11,12 @@
           "volume": 0.28,
           "emoji": "✔️",
           "image_path": null,
-          "color": "#7289DA",
+          "color": "#5865F2",
           "speed": 1.0,
-          "preserve_pitch": true
+          "preserve_pitch": true,
+          "loop": true,
+          "loop_count": 0,
+          "loop_delay": 0.0
         },
         "5": {
           "name": "ביבי זיינתי את אשתך",
@@ -24,7 +27,10 @@
           "image_path": null,
           "color": "#7289DA",
           "speed": 1.0,
-          "preserve_pitch": true
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0
         },
         "9": {
           "name": "ראש מגנזיום",
@@ -35,7 +41,10 @@
           "image_path": null,
           "color": "#7289DA",
           "speed": 1.0,
-          "preserve_pitch": true
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0
         },
         "6": {
           "name": "זה כתב\"ם",
@@ -46,7 +55,10 @@
           "image_path": null,
           "color": "#7289DA",
           "speed": 1.0,
-          "preserve_pitch": true
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0
         },
         "7": {
           "name": "aint-nobody-got-time-for-that_1",
@@ -57,7 +69,10 @@
           "image_path": null,
           "color": null,
           "speed": 1.0,
-          "preserve_pitch": true
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0
         },
         "10": {
           "name": "gotcha-bitch_1",
@@ -68,7 +83,10 @@
           "image_path": null,
           "color": "#5865F2",
           "speed": 1.0,
-          "preserve_pitch": true
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0
         },
         "11": {
           "name": "סתום ת'פה ש'ך כבר!!! (רמיקס) ",
@@ -79,7 +97,10 @@
           "image_path": null,
           "color": "#7289DA",
           "speed": 1.0,
-          "preserve_pitch": true
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0
         },
         "8": {
           "name": "Bye Nigga",
@@ -90,7 +111,10 @@
           "image_path": "images\\c24861d7-f9fe-43ba-a471-aa3dcbc6c85e_thumb_0502c9be.jpg",
           "color": "#5865F2",
           "speed": 1.0,
-          "preserve_pitch": true
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0
         },
         "12": {
           "name": "Im rich bitch",
@@ -101,7 +125,10 @@
           "image_path": null,
           "color": "#5865F2",
           "speed": 1.0,
-          "preserve_pitch": true
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0
         },
         "13": {
           "name": "Risitas lol",
@@ -112,7 +139,10 @@
           "image_path": "images\\artworks-LLzlLY4CmKZwd6Hf-bx6Fww-t500x500_0f792a19.jpg",
           "color": "#5865F2",
           "speed": 1.0,
-          "preserve_pitch": true
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0
         },
         "14": {
           "name": "Risitas Etu",
@@ -123,7 +153,10 @@
           "image_path": "images\\artworks-LLzlLY4CmKZwd6Hf-bx6Fww-t500x500_0f792a19.jpg",
           "color": "#5865F2",
           "speed": 1.0,
-          "preserve_pitch": true
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0
         },
         "3": {
           "name": "ssstik.io_1771513335081",
@@ -134,7 +167,10 @@
           "image_path": null,
           "color": "#5865F2",
           "speed": 1.0,
-          "preserve_pitch": true
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0
         },
         "0": {
           "name": "Arakara",
@@ -145,7 +181,10 @@
           "image_path": null,
           "color": "#9B59B6",
           "speed": 1.0,
-          "preserve_pitch": true
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0
         },
         "15": {
           "name": "anita",
@@ -156,7 +195,10 @@
           "image_path": null,
           "color": "#5865F2",
           "speed": 1.0,
-          "preserve_pitch": true
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0
         },
         "1": {
           "name": "bloody-fuck-you-bloody_Jzdok0G",
@@ -167,7 +209,10 @@
           "image_path": null,
           "color": "#1ABC9C",
           "speed": 1.0,
-          "preserve_pitch": false
+          "preserve_pitch": false,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0
         }
       }
     },
@@ -184,7 +229,10 @@
           "image_path": "images\\First-time-james-franco-hanging-meme_6287e7cc.jpg",
           "color": null,
           "speed": 1.0,
-          "preserve_pitch": true
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0
         },
         "1": {
           "name": "1291763884000018594 - פלט",
@@ -195,7 +243,10 @@
           "image_path": null,
           "color": "#FF355E",
           "speed": 1.0,
-          "preserve_pitch": true
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0
         }
       }
     },
@@ -212,7 +263,10 @@
           "image_path": null,
           "color": "#7289DA",
           "speed": 1.0,
-          "preserve_pitch": true
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0
         }
       }
     },
@@ -229,7 +283,10 @@
           "image_path": null,
           "color": "#5865F2",
           "speed": 1.0,
-          "preserve_pitch": true
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0
         }
       }
     },
@@ -246,7 +303,10 @@
           "image_path": null,
           "color": "#5865F2",
           "speed": 1.0,
-          "preserve_pitch": true
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0
         },
         "1": {
           "name": "בוא נטיל מטבע מה שיצא יצא ",
@@ -257,7 +317,10 @@
           "image_path": null,
           "color": "#5865F2",
           "speed": 1.0,
-          "preserve_pitch": true
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0
         },
         "2": {
           "name": "נגמור אותו",
@@ -268,7 +331,10 @@
           "image_path": null,
           "color": "#5865F2",
           "speed": 1.0,
-          "preserve_pitch": true
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0
         },
         "3": {
           "name": "יצא פלי",
@@ -279,7 +345,10 @@
           "image_path": null,
           "color": "#5865F2",
           "speed": 1.0,
-          "preserve_pitch": true
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0
         },
         "4": {
           "name": "את לא בן",
@@ -290,7 +359,10 @@
           "image_path": null,
           "color": "#5865F2",
           "speed": 1.0,
-          "preserve_pitch": true
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0
         }
       }
     }
@@ -301,5 +373,7 @@
   "input_device": "5: Microphone (HyperX Quadcast)",
   "output_device": "16: CABLE In 16ch (VB-Audio Virtual",
   "auto_start": true,
-  "monitor_enabled": true
+  "monitor_enabled": true,
+  "now_playing_visible": true,
+  "now_playing_side": "right"
 }

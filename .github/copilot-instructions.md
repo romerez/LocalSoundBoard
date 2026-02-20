@@ -342,6 +342,11 @@ Example: `airhorn_8f3a2b1c.mp3`
 - [x] Global "Stop All Sounds" button in audio options
 - [x] Pitch preservation option for speed changes (uses librosa time-stretch)
 - [x] Modern UI with CustomTkinter (rounded corners, modern styling)
+- [x] Looping sounds option (configurable loop count and delay between loops)
+- [x] Now Playing side panel (shows currently playing sounds with progress)
+- [x] Loop indicator (🔁) on slot buttons for looping sounds
+- [x] Per-sound stop button in Now Playing panel
+- [x] Configurable panel position (left or right side)
 
 ---
 
@@ -356,9 +361,9 @@ Example: `airhorn_8f3a2b1c.mp3`
 - [ ] Drag-and-drop sound file import (from file explorer)
 - [ ] Search/filter sounds
 - [ ] Add a sound group/type so we can later filter it or search
-- [ ] Looping sounds option
 - [ ] Fade in/out effects
 - [ ] Add stream deck integration
+- [ ] Sound scheduler (queue sounds to play in sequence)
 
 ### Low Priority
 - [ ] Import/export config profiles (sounds, images, tabs)
@@ -419,6 +424,9 @@ Example: `airhorn_8f3a2b1c.mp3`
 | `color` | `str \| None` | `None` | Custom background color (hex, e.g., "#7289DA") |
 | `speed` | `float` | `1.0` | Playback speed multiplier (0.5x to 2.0x) |
 | `preserve_pitch` | `bool` | `True` | If True, use time-stretch; if False, chipmunk/deep voice |
+| `loop` | `bool` | `False` | If True, sound loops until stopped |
+| `loop_count` | `int` | `0` | Number of times to loop (0 = infinite) |
+| `loop_delay` | `float` | `0.0` | Delay between loops in seconds |
 
 #### Methods
 | Method | Returns | Description |
@@ -659,6 +667,49 @@ SoundEditor(
 
 ---
 
+### Class: `NowPlayingPanel`
+**File:** `gui.py`  
+**Purpose:** Side panel showing currently playing sounds with progress and stop controls.
+
+**Key Features:**
+- List of currently playing sounds with progress bars
+- Loop indicator for looping sounds (∞ for infinite, or count)
+- Stop button for each individual sound
+- Toggle between left/right side positioning
+- Yellow progress color during loop delay phase
+
+#### Constructor
+```python
+NowPlayingPanel(
+    parent,
+    mixer_ref,      # Callable returning AudioMixer or AudioMixer directly
+    on_stop_callback=None  # Called with sound_id when stop clicked
+)
+```
+
+#### Instance Variables
+| Variable | Type | Description |
+|----------|------|-------------|
+| `parent` | `widget` | Parent widget (outer frame) |
+| `mixer_ref` | `Callable` | Reference to get mixer instance |
+| `on_stop_callback` | `Callable` | Stop button handler |
+| `is_visible` | `bool` | Panel visibility state |
+| `panel_side` | `str` | "left" or "right" |
+| `frame` | `CTkFrame` | Main panel frame |
+| `items_frame` | `CTkFrame` | Container for sound items |
+| `sound_items` | `Dict` | sound_id → widget references |
+
+#### Public Methods
+| Method | Description |
+|--------|-------------|
+| `show()` | Show the panel |
+| `hide()` | Hide the panel |
+| `toggle()` | Toggle panel visibility |
+| `set_side(side)` | Set panel position ("left" or "right") |
+| `update(playing_sounds, playing_slots)` | Update with current sounds |
+
+---
+
 ### Class: `SoundboardApp`
 **File:** `gui.py`  
 **Purpose:** Main GUI application with all user interface components.
@@ -854,7 +905,10 @@ edit_sound_file(
           "image_path": null,
           "color": "#7289DA",
           "speed": 1.0,
-          "preserve_pitch": true
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0
         }
       }
     }
@@ -865,7 +919,9 @@ edit_sound_file(
   "mic_muted": false,
   "ptt_key": "mouse4",
   "monitor_enabled": false,
-  "auto_start": true
+  "auto_start": true,
+  "now_playing_visible": false,
+  "now_playing_side": "right"
 }
 ```
 
@@ -881,6 +937,8 @@ edit_sound_file(
 | `ptt_key` | `string \| null` | `null` | Push-to-Talk key (e.g., "ctrl", "mouse4", "F1") |
 | `monitor_enabled` | `bool` | `false` | Local speaker monitoring enabled |
 | `auto_start` | `bool` | `true` | Auto-start audio stream on launch |
+| `now_playing_visible` | `bool` | `false` | Now Playing side panel visible |
+| `now_playing_side` | `string` | `"right"` | Panel position ("left" or "right") |
 
 ### SoundTab Schema
 
@@ -903,6 +961,9 @@ edit_sound_file(
 | `color` | `string \| null` | `null` | Background color (hex) |
 | `speed` | `float` | `1.0` | Playback speed (0.5 to 2.0) |
 | `preserve_pitch` | `bool` | `true` | Pitch preservation for speed changes |
+| `loop` | `bool` | `false` | If true, sound loops until stopped |
+| `loop_count` | `int` | `0` | Number of times to loop (0 = infinite) |
+| `loop_delay` | `float` | `0.0` | Delay between loops in seconds |
 
 ### Migration Notes
 
@@ -910,6 +971,7 @@ The config format has evolved. Old configs are auto-migrated:
 - **v1.0 → v1.1:** Added `tabs` array (old `slots` dict moved into default tab)
 - **v1.1 → v1.2:** Added `speed` and `color` to SoundSlot
 - **v1.2 → v1.3:** Added `preserve_pitch` to SoundSlot
+- **v1.3 → v1.4:** Added `loop`, `loop_count`, `loop_delay` to SoundSlot; added `now_playing_visible`, `now_playing_side` to root config
 ```
 
 ---

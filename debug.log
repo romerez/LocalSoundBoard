@@ -44912,3 +44912,27 @@ AdaptBlockInfo(insts=((0, {}), (2, {}), (4, {'res': '$x4.0'}), (6, {'res': '$con
 [soundboard.audio] Queued from cache: 112848 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=2_0)
 [soundboard.audio] Queued from cache: 109612 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=1_0)
 [soundboard.audio] Queued from cache: 84060 samples (speed=1.0, preserve_pitch=True, volume=1.09, id=1_1)
+[soundboard.audio] librosa imported successfully: 0.11.0
+[soundboard.audio] PTT key set to: mouse4
+[soundboard.audio] librosa imported successfully: 0.11.0
+[soundboard.audio] librosa imported successfully: 0.11.0
+[soundboard.audio] PTT key set to: mouse4
+[soundboard.audio] librosa imported successfully: 0.11.0
+[soundboard.audio] PTT key set to: mouse4
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 2546825 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_3, loop=False)
+[soundboard.audio] Queued from cache: 71026 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_7, loop=False)
+[soundboard.audio] Queued from cache: 2546825 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_3, loop=False)
+[soundboard.audio] Stop: id=0_3, currently_playing=2, ids=['0_3', '0_3']
+[soundboard.audio] Stop: removed 2 sounds from currently_playing
+[soundboard.audio] Stop: id=0_3, currently_playing=0, ids=[]
+[soundboard.audio] Stop: removed 0 sounds from currently_playing
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 182354 samples (speed=1.0, preserve_pitch=True, volume=0.28, id=0_4, loop=False)
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 182354 samples (speed=1.0, preserve_pitch=True, volume=0.28, id=0_4, loop=True)
+[soundboard.audio] Queued from cache: 182354 samples (speed=1.0, preserve_pitch=True, volume=0.28, id=0_4, loop=True)
+[soundboard.audio] Stop: id=0_4, currently_playing=2, ids=['0_4', '0_4']
+[soundboard.audio] Stop: removed 2 sounds from currently_playing
+[soundboard.audio] Stop: id=0_4, currently_playing=0, ids=[]
+[soundboard.audio] Stop: removed 0 sounds from currently_playing

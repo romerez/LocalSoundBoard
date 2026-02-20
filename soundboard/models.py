@@ -19,6 +19,9 @@ class SoundSlot:
     color: Optional[str] = None  # Custom background color (hex)
     speed: float = 1.0  # Playback speed (0.5 to 2.0)
     preserve_pitch: bool = True  # If True, use time-stretch; if False, simple resample (chipmunk effect)
+    loop: bool = False  # If True, sound loops until stopped
+    loop_count: int = 0  # Number of times to loop (0 = infinite)
+    loop_delay: float = 0.0  # Delay between loops in seconds
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -32,6 +35,9 @@ class SoundSlot:
             "color": self.color,
             "speed": self.speed,
             "preserve_pitch": self.preserve_pitch,
+            "loop": self.loop,
+            "loop_count": self.loop_count,
+            "loop_delay": self.loop_delay,
         }
 
     @classmethod
@@ -47,6 +53,9 @@ class SoundSlot:
             color=data.get("color"),
             speed=data.get("speed", 1.0),
             preserve_pitch=data.get("preserve_pitch", True),
+            loop=data.get("loop", False),
+            loop_count=data.get("loop_count", 0),
+            loop_delay=data.get("loop_delay", 0.0),
         )
 
 
