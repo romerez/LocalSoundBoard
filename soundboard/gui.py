@@ -802,12 +802,23 @@ class SoundboardApp:
                 "Delete Tab",
                 f"Are you sure you want to delete '{tab.name}'?\nAll sounds in this tab will be lost.",
             ):
+                # Clean up the deleted tab's widgets
+                self._cleanup_tab_widgets(tab_idx)
+
                 self.tabs.pop(tab_idx)
+
+                # Reindex per-tab storage to fill the gap
+                self._reindex_tab_storage(tab_idx)
+
                 # Adjust current tab index if needed
                 if self.current_tab_idx >= len(self.tabs):
                     self.current_tab_idx = len(self.tabs) - 1
+
                 self._refresh_tab_bar()
-                self._refresh_slot_buttons()
+                self._ensure_tab_built(self.current_tab_idx)
+                if self.current_tab_idx in self.tab_grid_frames:
+                    self.tab_grid_frames[self.current_tab_idx].tkraise()
+                self._update_current_tab_aliases()
                 self._register_hotkeys()
                 self._save_config()
                 dialog.destroy()
@@ -1194,6 +1205,62 @@ class SoundboardApp:
         self.slot_emoji_labels = self.tab_slot_emoji_labels.get(tab_idx, {})
         self._slot_filled_cache = self._tab_slot_filled_cache.get(tab_idx, {})
 
+    def _cleanup_tab_widgets(self, tab_idx: int):
+        """Clean up all widget storage for a tab that's being deleted."""
+        # Destroy the grid frame (destroys all child widgets)
+        if tab_idx in self.tab_grid_frames:
+            self.tab_grid_frames[tab_idx].destroy()
+            del self.tab_grid_frames[tab_idx]
+
+        # Clean up per-tab storage
+        for storage in [
+            self.tab_slot_buttons,
+            self.tab_slot_frames,
+            self.tab_slot_progress,
+            self.tab_slot_preview_buttons,
+            self.tab_slot_edit_buttons,
+            self.tab_slot_stop_buttons,
+            self.tab_slot_bottom_frames,
+            self.tab_slot_emoji_labels,
+            self.tab_slot_images,
+            self.tab_slot_image_paths,
+            self._tab_slot_filled_cache,
+        ]:
+            if tab_idx in storage:
+                del storage[tab_idx]
+
+        if tab_idx in self._tab_built:
+            del self._tab_built[tab_idx]
+
+    def _reindex_tab_storage(self, deleted_idx: int):
+        """Reindex per-tab storage after a tab is deleted.
+
+        Shifts all tab indices > deleted_idx down by 1.
+        """
+        storages = [
+            self.tab_grid_frames,
+            self.tab_slot_buttons,
+            self.tab_slot_frames,
+            self.tab_slot_progress,
+            self.tab_slot_preview_buttons,
+            self.tab_slot_edit_buttons,
+            self.tab_slot_stop_buttons,
+            self.tab_slot_bottom_frames,
+            self.tab_slot_emoji_labels,
+            self.tab_slot_images,
+            self.tab_slot_image_paths,
+            self._tab_slot_filled_cache,
+            self._tab_built,
+        ]
+
+        for storage in storages:
+            # Find all keys greater than deleted_idx and shift them down
+            keys_to_shift = [k for k in storage.keys() if isinstance(k, int) and k > deleted_idx]
+            keys_to_shift.sort()  # Process in order
+            for old_key in keys_to_shift:
+                storage[old_key - 1] = storage[old_key]
+                del storage[old_key]
+
     def _build_all_tab_widgets(self):
         """Build widgets for all tabs upfront for instant switching."""
         for tab_idx in range(len(self.tabs)):
@@ -1303,6 +1370,36 @@ class SoundboardApp:
             return
         for slot_idx in self.tab_slot_buttons[tab_idx]:
             self._update_slot_button_for_tab(tab_idx, slot_idx)
+
+    def _ensure_slots_for_tab(self, tab_idx: int):
+        """Ensure a tab has enough slot widgets for its content + empty slots.
+
+        Rebuilds the tab if needed (e.g., after adding content to the last empty slot).
+        """
+        if tab_idx < 0 or tab_idx >= len(self.tabs):
+            return
+
+        tab = self.tabs[tab_idx]
+        needed_slots = self._calculate_slots_for_tab(tab)
+
+        # Check if we have enough widgets
+        current_slots = len(self.tab_slot_buttons.get(tab_idx, {}))
+
+        if current_slots < needed_slots:
+            # Need more slots - rebuild this tab
+            self._tab_built[tab_idx] = False
+            if tab_idx in self.tab_grid_frames:
+                self.tab_grid_frames[tab_idx].destroy()
+                del self.tab_grid_frames[tab_idx]
+            self._build_tab_widgets(tab_idx)
+
+            # Re-raise current tab's frame to keep it on top
+            if self.current_tab_idx in self.tab_grid_frames:
+                self.tab_grid_frames[self.current_tab_idx].tkraise()
+
+            # Update aliases if this is the current tab
+            if tab_idx == self.current_tab_idx:
+                self._update_current_tab_aliases()
 
     def _create_status_bar(self, parent):
         """Create the status bar at the bottom."""
@@ -1421,6 +1518,30 @@ class SoundboardApp:
         # If a press is active on this slot, cancel it
         if self._click_active and self._click_slot == slot_idx:
             self._reset_click_state()
+
+    def _delete_slot(self, slot_idx: int):
+        """Delete a sound from a slot (assumes confirmation already done)."""
+        tab = self._get_current_tab()
+        if slot_idx not in tab.slots:
+            return
+
+        slot = tab.slots[slot_idx]
+
+        # Check if any other slot uses this sound before removing from cache
+        other_uses = any(
+            s.file_path == slot.file_path
+            for t in self.tabs
+            for idx, s in t.slots.items()
+            if not (t == tab and idx == slot_idx)
+        )
+        if not other_uses:
+            self.sound_cache.remove_sound(slot.file_path, delete_file=True)
+
+        del tab.slots[slot_idx]
+        self._update_slot_button_for_tab(self.current_tab_idx, slot_idx)
+        self._register_hotkeys()
+        self._save_config()
+        self.status_var.set(f"Deleted: {slot.name}")
 
     def _record_ptt_key(self):
         """Record a key or mouse button press to use as PTT key."""
@@ -1672,7 +1793,7 @@ class SoundboardApp:
 
         # Reset slot appearances (skip if caller will refresh anyway)
         if not skip_refresh:
-            self._refresh_slot_buttons()
+            self._refresh_current_tab_slots()
 
     # ---------- Per-tab callback wrappers ----------
     # These are used by per-tab widgets. They delegate to the main methods
@@ -1722,7 +1843,7 @@ class SoundboardApp:
             elif self._dragging_slot == slot_idx:
                 # Clicking same slot - deselect
                 self._dragging_slot = None
-                self._refresh_slot_buttons()
+                self._refresh_current_tab_slots()
             else:
                 # Clicking different slot - swap them
                 source_idx = self._dragging_slot
@@ -1782,7 +1903,10 @@ class SoundboardApp:
         # else: slot1 is empty, nothing to move
 
         self._save_config()
-        self._refresh_slot_buttons()
+        # Update the two affected slots' appearances (per-tab architecture)
+        tab_idx = self.current_tab_idx
+        self._update_slot_button_for_tab(tab_idx, idx1)
+        self._update_slot_button_for_tab(tab_idx, idx2)
 
     def _move_slot_to_tab(self, slot_idx: int, from_tab_idx: int, to_tab_idx: int):
         """Move a slot from one tab to another."""
@@ -1807,7 +1931,16 @@ class SoundboardApp:
         del from_tab.slots[slot_idx]
 
         self._save_config()
-        self._refresh_slot_buttons()
+
+        # Update the source tab's old slot (now empty) - per-tab architecture
+        self._ensure_tab_built(from_tab_idx)
+        self._update_slot_button_for_tab(from_tab_idx, slot_idx)
+
+        # Update the destination tab's new slot - per-tab architecture
+        # Ensure destination tab has enough slots for the new content
+        self._ensure_slots_for_tab(to_tab_idx)
+        self._update_slot_button_for_tab(to_tab_idx, target_idx)
+
         self.status_var.set(f"Moved '{slot.name}' to {to_tab.emoji or ''} {to_tab.name}")
 
     def _play_slot(self, slot_idx: int):
@@ -2028,6 +2161,16 @@ class SoundboardApp:
             popup.destroy()
             self._configure_slot(slot_idx)
 
+        def delete_sound():
+            """Delete the sound with confirmation."""
+            popup.destroy()
+            if messagebox.askyesno(
+                "Delete Sound",
+                f"Are you sure you want to delete '{slot.name}'?",
+                icon="warning",
+            ):
+                self._delete_slot(slot_idx)
+
         ctk.CTkButton(
             btn_frame,
             text="Apply",
@@ -2044,6 +2187,15 @@ class SoundboardApp:
             fg_color=COLORS["blurple"],
             hover_color=COLORS["blurple_hover"],
             width=70,
+        ).pack(side=tk.LEFT, padx=2)
+
+        ctk.CTkButton(
+            btn_frame,
+            text="🗑️",
+            command=delete_sound,
+            fg_color=COLORS["red"],
+            hover_color=COLORS["red_hover"],
+            width=32,
         ).pack(side=tk.LEFT, padx=2)
 
         ctk.CTkButton(
@@ -2366,25 +2518,42 @@ class SoundboardApp:
                 speed=speed_var.get() / 100.0,
                 preserve_pitch=existing.preserve_pitch if existing else True,
             )
-            self._refresh_slot_buttons()  # Refresh to create new empty slots if needed
+            self._update_slot_button_for_tab(
+                self.current_tab_idx, slot_idx
+            )  # Update the slot appearance
+            # Ensure we have enough empty slots after adding this one
+            self._ensure_slots_for_tab(self.current_tab_idx)
             self._register_hotkeys()
             self._save_config()
             dialog.destroy()
 
         def clear():
-            if slot_idx in tab.slots:
-                slot = tab.slots[slot_idx]
-                # Check if any other slot uses this sound before removing from cache
-                other_uses = any(
-                    s.file_path == slot.file_path
-                    for t in self.tabs
-                    for idx, s in t.slots.items()
-                    if not (t == tab and idx == slot_idx)
-                )
-                if not other_uses:
-                    self.sound_cache.remove_sound(slot.file_path, delete_file=True)
-                del tab.slots[slot_idx]
-            self._refresh_slot_buttons()  # Refresh to adjust slot count
+            """Delete the sound with confirmation."""
+            slot_to_delete = tab.slots.get(slot_idx)
+            if not slot_to_delete:
+                dialog.destroy()
+                return
+            
+            if not messagebox.askyesno(
+                "Delete Sound",
+                f"Are you sure you want to delete '{slot_to_delete.name}'?",
+                icon="warning",
+            ):
+                return
+            
+            # Check if any other slot uses this sound before removing from cache
+            other_uses = any(
+                s.file_path == slot_to_delete.file_path
+                for t in self.tabs
+                for idx, s in t.slots.items()
+                if not (t == tab and idx == slot_idx)
+            )
+            if not other_uses:
+                self.sound_cache.remove_sound(slot_to_delete.file_path, delete_file=True)
+            del tab.slots[slot_idx]
+            self._update_slot_button_for_tab(
+                self.current_tab_idx, slot_idx
+            )  # Update the slot appearance
             self._register_hotkeys()
             self._save_config()
             dialog.destroy()

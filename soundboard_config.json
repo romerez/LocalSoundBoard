@@ -4,17 +4,6 @@
       "name": "Main",
       "emoji": "🎵",
       "slots": {
-        "1": {
-          "name": "bloody-fuck-you-bloody_Jzdok0G",
-          "file_path": "sounds\\bloody-fuck-you-bloody_Jzdok0G_15502481.wav",
-          "hotkey": null,
-          "volume": 0.21,
-          "emoji": null,
-          "image_path": null,
-          "color": "#1ABC9C",
-          "speed": 1.0,
-          "preserve_pitch": false
-        },
         "4": {
           "name": "ראש צבע עיפרון",
           "file_path": "sounds\\[appsgolem.com][00-03-40][00-03-45]__ (1)_78640441.wav",
@@ -27,15 +16,15 @@
           "preserve_pitch": true
         },
         "2": {
-          "name": "Arakara",
-          "file_path": "sounds\\ALL You Need To Know On Ara-Kara Dungeon _ The War Within [ ezmp3.cc ]_14976165.wav",
+          "name": "bloody-fuck-you-bloody_Jzdok0G",
+          "file_path": "sounds\\bloody-fuck-you-bloody_Jzdok0G_15502481.wav",
           "hotkey": null,
-          "volume": 1.0,
+          "volume": 0.21,
           "emoji": null,
           "image_path": null,
-          "color": "#9B59B6",
+          "color": "#1ABC9C",
           "speed": 1.0,
-          "preserve_pitch": true
+          "preserve_pitch": false
         },
         "5": {
           "name": "ביבי זיינתי את אשתך",
@@ -147,72 +136,6 @@
           "speed": 1.0,
           "preserve_pitch": true
         },
-        "15": {
-          "name": "את לא בן",
-          "file_path": "sounds\\FBDownloader.to_AQPLlv4DRz9fm6bErkgJ9ermxBW3dDcdvoeuhWhTPn3RiWsmTod0PRf3mQ4EUGk2e2oMSQD7DJrH9fqFW8vxf7aW_360p_(SD)_13678271.wav",
-          "hotkey": null,
-          "volume": 1.0,
-          "emoji": null,
-          "image_path": null,
-          "color": "#5865F2",
-          "speed": 1.0,
-          "preserve_pitch": true
-        },
-        "16": {
-          "name": "אני עובדת עם אמא",
-          "file_path": "sounds\\ssstik.io_1771513335081_13734385.wav",
-          "hotkey": null,
-          "volume": 1.0,
-          "emoji": null,
-          "image_path": null,
-          "color": "#5865F2",
-          "speed": 1.0,
-          "preserve_pitch": true
-        },
-        "17": {
-          "name": "בוא נטיל מטבע מה שיצא יצא ",
-          "file_path": "sounds\\הפרלמנט - נטיל מטבע  #הפרלמנט_13768713.wav",
-          "hotkey": null,
-          "volume": 1.0,
-          "emoji": null,
-          "image_path": null,
-          "color": "#5865F2",
-          "speed": 1.0,
-          "preserve_pitch": true
-        },
-        "18": {
-          "name": "נגמור אותו",
-          "file_path": "sounds\\הפרלמנט - נטיל מטבע  #הפרלמנט_13837626.wav",
-          "hotkey": null,
-          "volume": 1.0,
-          "emoji": null,
-          "image_path": null,
-          "color": "#5865F2",
-          "speed": 1.0,
-          "preserve_pitch": true
-        },
-        "19": {
-          "name": "יצא פלי",
-          "file_path": "sounds\\הפרלמנט - נטיל מטבע  #הפרלמנט_13876550.wav",
-          "hotkey": null,
-          "volume": 1.0,
-          "emoji": null,
-          "image_path": null,
-          "color": "#5865F2",
-          "speed": 1.0,
-          "preserve_pitch": true
-        },
-        "20": {
-          "name": "תבוא אלי הבייתה ותביא לי ביד",
-          "file_path": "sounds\\הזמנה ביד #שאולי הזמנה לחתונה#מצחיק #בדיחות #שאולי וראובן# (1)_14680962.wav",
-          "hotkey": null,
-          "volume": 1.0,
-          "emoji": null,
-          "image_path": null,
-          "color": "#5865F2",
-          "speed": 1.0,
-          "preserve_pitch": true
-        },
         "3": {
           "name": "ssstik.io_1771513335081",
           "file_path": "sounds\\ssstik.io_1771513335081_44846737.wav",
@@ -224,7 +147,18 @@
           "speed": 1.0,
           "preserve_pitch": true
         },
-        "21": {
+        "0": {
+          "name": "Arakara",
+          "file_path": "sounds\\ALL You Need To Know On Ara-Kara Dungeon _ The War Within [ ezmp3.cc ]_14976165.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#9B59B6",
+          "speed": 1.0,
+          "preserve_pitch": true
+        },
+        "15": {
           "name": "anita",
           "file_path": "sounds\\anita_92754420.wav",
           "hotkey": null,
@@ -277,6 +211,84 @@
           "emoji": null,
           "image_path": null,
           "color": "#7289DA",
+          "speed": 1.0,
+          "preserve_pitch": true
+        }
+      }
+    },
+    {
+      "name": "שחר",
+      "emoji": null,
+      "slots": {
+        "0": {
+          "name": "אני עובדת עם אמא",
+          "file_path": "sounds\\ssstik.io_1771513335081_13734385.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true
+        }
+      }
+    },
+    {
+      "name": "פרלמנט",
+      "emoji": null,
+      "slots": {
+        "0": {
+          "name": "תבוא אלי הבייתה ותביא לי ביד",
+          "file_path": "sounds\\הזמנה ביד #שאולי הזמנה לחתונה#מצחיק #בדיחות #שאולי וראובן# (1)_14680962.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true
+        },
+        "1": {
+          "name": "בוא נטיל מטבע מה שיצא יצא ",
+          "file_path": "sounds\\הפרלמנט - נטיל מטבע  #הפרלמנט_13768713_96070242.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true
+        },
+        "2": {
+          "name": "נגמור אותו",
+          "file_path": "sounds\\הפרלמנט - נטיל מטבע  #הפרלמנט_13837626.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true
+        },
+        "3": {
+          "name": "יצא פלי",
+          "file_path": "sounds\\הפרלמנט - נטיל מטבע  #הפרלמנט_13876550.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true
+        },
+        "4": {
+          "name": "את לא בן",
+          "file_path": "sounds\\FBDownloader.to_AQPLlv4DRz9fm6bErkgJ9ermxBW3dDcdvoeuhWhTPn3RiWsmTod0PRf3mQ4EUGk2e2oMSQD7DJrH9fqFW8vxf7aW_360p_(SD)_13678271.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#5865F2",
           "speed": 1.0,
           "preserve_pitch": true
         }

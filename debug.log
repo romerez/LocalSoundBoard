@@ -44858,3 +44858,25 @@ AdaptBlockInfo(insts=((0, {}), (2, {}), (4, {'res': '$x4.0'}), (6, {'res': '$con
 [soundboard.audio] Queued from cache: 84060 samples (speed=1.0, preserve_pitch=True, volume=1.09, id=1_1)
 [soundboard.audio] PTT pressing: mouse4
 [soundboard.audio] Queued from cache: 84060 samples (speed=1.0, preserve_pitch=True, volume=1.09, id=1_1)
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 61182 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_16)
+[soundboard.audio] librosa imported successfully: 0.11.0
+[soundboard.audio] PTT key set to: mouse4
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 141138 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_17)
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 212889 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_20)
+[soundboard.audio] librosa imported successfully: 0.11.0
+[soundboard.audio] PTT key set to: mouse4
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 40125 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_14)
+[soundboard.audio] Queued from cache: 159243 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_13)
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 165642 samples (speed=1.0, preserve_pitch=False, volume=0.21, id=0_1)
+[soundboard.audio] Queued from cache: 165642 samples (speed=1.0, preserve_pitch=False, volume=0.21, id=0_1)
+[soundboard.audio] Stop: id=0_1, currently_playing=2, ids=['0_1', '0_1']
+[soundboard.audio] Stop: removed 2 sounds from currently_playing
+[soundboard.audio] Stop: id=0_1, currently_playing=0, ids=[]
+[soundboard.audio] Stop: removed 0 sounds from currently_playing
+[soundboard.audio] librosa imported successfully: 0.11.0
+[soundboard.audio] PTT key set to: mouse4
