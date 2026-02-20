@@ -586,9 +586,9 @@ class SoundboardApp:
         self.tabs_canvas.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 4))
 
         # Frame inside canvas to hold tab buttons
-        self.tabs_container = ctk.CTkFrame(self.tabs_canvas, fg_color="transparent")
+        self.tabs_container = ctk.CTkFrame(self.tabs_canvas, fg_color="transparent", corner_radius=0)
         self.tabs_canvas_window = self.tabs_canvas.create_window(
-            (0, 2), window=self.tabs_container, anchor="nw"
+            (2, 2), window=self.tabs_container, anchor="nw"
         )
 
         # Bind canvas resize to update scroll region
@@ -627,8 +627,11 @@ class SoundboardApp:
 
     def _on_tabs_container_configure(self, event=None):
         """Handle tabs container content change."""
-        # Update scroll region to encompass all tabs
-        self.tabs_canvas.configure(scrollregion=self.tabs_canvas.bbox("all"))
+        # Update scroll region to encompass all tabs with proper bounds
+        bbox = self.tabs_canvas.bbox("all")
+        if bbox:
+            # Add small padding to prevent clipping
+            self.tabs_canvas.configure(scrollregion=(0, 0, bbox[2] + 4, bbox[3]))
         self._update_tabs_scroll_buttons()
 
     def _update_tabs_scroll_buttons(self):
@@ -643,11 +646,13 @@ class SoundboardApp:
             if not self.tab_scroll_right_btn.winfo_ismapped():
                 self.tab_scroll_right_btn.pack(side=tk.LEFT, padx=(2, 0), after=self.tabs_canvas)
         else:
-            # Hide scroll buttons
+            # Hide scroll buttons and reset scroll position to start
             if self.tab_scroll_left_btn.winfo_ismapped():
                 self.tab_scroll_left_btn.pack_forget()
             if self.tab_scroll_right_btn.winfo_ismapped():
                 self.tab_scroll_right_btn.pack_forget()
+            # Reset scroll to beginning when no overflow
+            self.tabs_canvas.xview_moveto(0)
 
     def _refresh_tab_bar(self):
         """Refresh the tab bar buttons.
@@ -678,9 +683,13 @@ class SoundboardApp:
                     corner_radius=UI["button_corner_radius"],
                     height=32,
                 )
-                btn.pack(side=tk.LEFT, padx=(0, 4))
+                # First tab gets left padding, all tabs get right padding
+                btn.pack(side=tk.LEFT, padx=(2 if idx == 0 else 0, 4))
                 btn.bind("<Button-3>", lambda e, i=idx: self._configure_tab(i))
                 self.tab_buttons.append(btn)
+
+            # Reset scroll to beginning when tabs are recreated
+            self.tabs_canvas.xview_moveto(0)
         else:
             # Same tab count - just update existing buttons (much faster)
             # Only update the tabs that need visual changes (previously active and newly active)

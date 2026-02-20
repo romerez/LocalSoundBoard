@@ -44895,3 +44895,20 @@ AdaptBlockInfo(insts=((0, {}), (2, {}), (4, {'res': '$x4.0'}), (6, {'res': '$con
 [soundboard.audio] Queued from cache: 28754 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_8)
 [soundboard.audio] PTT pressing: mouse4
 [soundboard.audio] Queued from cache: 48214 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_9)
+[pydub.converter] subprocess.call(['E:\\CursorRepos\\LocalSoundBoard\\.venv\\Lib\\site-packages\\imageio_ffmpeg\\binaries\\ffmpeg-win-x86_64-v7.1.exe', '-y', '-i', 'C:/Users/User/Downloads/1412742981240361031.ogg', '-acodec', 'pcm_s32le', '-vn', '-f', 'wav', '-'])
+[soundboard.audio] librosa imported successfully: 0.11.0
+[soundboard.audio] PTT key set to: mouse4
+[pydub.converter] subprocess.call(['E:\\CursorRepos\\LocalSoundBoard\\.venv\\Lib\\site-packages\\imageio_ffmpeg\\binaries\\ffmpeg-win-x86_64-v7.1.exe', '-y', '-i', 'C:/Users/User/Downloads/1389877451005366413.ogg', '-acodec', 'pcm_s32le', '-vn', '-f', 'wav', '-'])
+[pydub.converter] subprocess.call(['E:\\CursorRepos\\LocalSoundBoard\\.venv\\Lib\\site-packages\\imageio_ffmpeg\\binaries\\ffmpeg-win-x86_64-v7.1.exe', '-y', '-i', 'C:/Users/User/Downloads/1293318199827365918.ogg', '-acodec', 'pcm_s32le', '-vn', '-f', 'wav', '-'])
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 219840 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_5)
+[soundboard.audio] librosa imported successfully: 0.11.0
+[soundboard.audio] PTT key set to: mouse4
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 101570 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=4_1)
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 61182 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=3_0)
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 112848 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=2_0)
+[soundboard.audio] Queued from cache: 109612 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=1_0)
+[soundboard.audio] Queued from cache: 84060 samples (speed=1.0, preserve_pitch=True, volume=1.09, id=1_1)

@@ -266,6 +266,12 @@ Persistent (NOT reset per-click):
 - [x] Sound editor pause/stop without UI freeze (background thread stream cleanup)
 - [x] Zoom centered on cursor position (mouse wheel zooms to cursor location)
 - [x] Improved sound editor UI (larger window, modern styling, better layout)
+- [x] Delete sound button with confirmation popup (🗑️ in quick popup + Clear button confirmation)
+- [x] Unlimited tabs with horizontal scrolling (no more 4-tab limit)
+- [x] Dynamic tab bar scroll buttons (◀ ▶ appear when needed)
+- [x] Mousewheel scrolling for tab bar (scroll tabs left/right)
+- [x] Auto-scroll to active tab when switching
+- [x] Move button relocated to tab bar (left side, next to scroll buttons)
 
 ---
 
@@ -462,6 +468,19 @@ python main.py
 - Fixed emoji picker freeze: categories now load async via `after()` (one at a time)
 - Fixed colorless emojis: use `tk.Label` instead of `CTkButton` for proper Windows emoji rendering
 
+### Version 1.2.2 (Infinite Tabs & Delete Feature - 2026-02-20)
+- **Delete sound with confirmation**: Added 🗑️ delete button to quick popup, confirmation dialog for Clear button
+- **Unlimited tabs**: Removed 4-tab limit, tab bar now scrolls horizontally
+- **Scrollable tab bar**: Tab bar uses `tk.Canvas` with horizontal scrolling
+- **Dynamic scroll buttons**: ◀ ▶ buttons appear only when tabs overflow
+- **Tab mousewheel scrolling**: Scroll wheel works on tab bar to navigate tabs
+- **Auto-scroll to active tab**: Active tab scrolls into view when selected
+- **Move button relocated**: Moved from soundboard header to tab bar (left side)
+- **Fixed move functionality**: `_swap_slots` and `_move_slot_to_tab` now use per-tab widget update methods
+- Added `_delete_slot()` helper for sound deletion with cache cleanup
+- Added `_ensure_slots_for_tab()` to rebuild target tab widgets when moving sounds
+- Added `_scroll_tab_into_view()`, `_update_tabs_scroll_buttons()` for tab bar management
+
 ### Version 1.2.1 (Tab Switching Performance - 2026-02-20)
 - **Zero-delay tab switching**: Implemented per-tab widget frames architecture
 - Each tab now has its own pre-built widget grid stored in `tab_grid_frames`
@@ -549,6 +568,7 @@ When asked to add a feature:
 | Emojis display as colorless/black | `CTkButton` doesn't render colored emojis properly on Windows | Use native `tk.Label` with "Segoe UI Emoji" font instead of `CTkButton`; add hover/click bindings manually |
 | Hebrew/Arabic text displays backwards | Tkinter doesn't handle RTL (Right-to-Left) text properly | Wrap RTL text with Unicode RLE marker `\u202B` at start and PDF marker `\u202C` at end; use `_fix_rtl_text()` helper function |
 | Emoji picker can't scroll | Simple grid layout doesn't support scrolling | Use `tk.Canvas` with scrollbar and `create_window()` to embed scrollable frame; bind mousewheel to canvas |
+| Move slot broken after per-tab widgets | `_swap_slots` and `_move_slot_to_tab` called `_refresh_slot_buttons()` which doesn't exist in per-tab architecture | Use `_update_slot_button_for_tab(tab_idx, slot_idx)` for affected slots; use `_ensure_slots_for_tab(target_tab)` before moving to that tab |
 
 ### Sound Editor Issues
 
