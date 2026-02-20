@@ -462,6 +462,16 @@ python main.py
 - Fixed emoji picker freeze: categories now load async via `after()` (one at a time)
 - Fixed colorless emojis: use `tk.Label` instead of `CTkButton` for proper Windows emoji rendering
 
+### Version 1.2.1 (Tab Switching Performance - 2026-02-20)
+- **Zero-delay tab switching**: Implemented per-tab widget frames architecture
+- Each tab now has its own pre-built widget grid stored in `tab_grid_frames`
+- Switching tabs uses `tkraise()` (single Tkinter call) instead of updating widgets
+- All tab widgets built upfront via `_build_all_tab_widgets()` at config load
+- Added per-tab widget storage: `tab_slot_buttons`, `tab_slot_frames`, etc.
+- Legacy widget aliases (`slot_buttons`, `slot_frames`) point to current tab's widgets
+- New tabs get widgets built immediately via `_build_tab_widgets(tab_idx)`
+- Tab switching works instantly even with 100+ sounds per tab
+
 ### Version 1.0.0 (Initial)
 - Basic soundboard with 12 slots
 - Mic passthrough and mixing
@@ -560,6 +570,7 @@ When asked to add a feature:
 | Animation loop causes lag | 60fps (16ms interval) animation loop with `.configure()` calls every frame | Reduce to 20fps (50ms); set progress bar color once when playback starts, not every frame |
 | Tab bar recreation on every switch | `_refresh_tab_bar()` destroyed and recreated ALL tab buttons on every tab switch | Check if tab count changed; if not, just `configure()` existing buttons with new colors/fonts instead of destroying them |
 | Redundant preview/edit button updates | Preview/edit buttons always got `configure()` called even when appearance didn't change | Track `_slot_filled_cache` dict; only call `configure()` on preview/edit buttons when filled/empty state actually changes |
+| 2-second tab switching delay | Updating slot widget appearances on every tab switch via `configure()` calls, which triggers CTkButton's expensive `_draw()` method | **Per-tab widget frames architecture:** Each tab has its own pre-built frame with widgets. Tab switch = `tkraise()` (single call). Widgets built upfront via `_build_all_tab_widgets()`. Legacy aliases (`slot_buttons`, etc.) point to current tab's widgets. |
 
 ### Refactoring & Performance Lessons
 

@@ -245,6 +245,17 @@
           "color": "#5865F2",
           "speed": 1.0,
           "preserve_pitch": true
+        },
+        "22": {
+          "name": "anita",
+          "file_path": "sounds\\anita_92754420.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true
         }
       }
     },

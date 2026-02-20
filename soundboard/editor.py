@@ -895,10 +895,15 @@ class SoundEditor:
             self.is_playing = False
             self.is_paused = False
             self.play_position = 0
-            self.dialog.after(
-                0, lambda: self.play_btn.config(text="▶ Play Selection", bg=COLORS["green"])
-            )
-            self.dialog.after(0, self._draw_waveform)
+            # Check if dialog still exists before updating UI
+            try:
+                if self.dialog.winfo_exists():
+                    self.dialog.after(
+                        0, lambda: self._safe_update_play_btn("▶ Play Selection", COLORS["green"])
+                    )
+                    self.dialog.after(0, self._draw_waveform)
+            except Exception:
+                pass  # Dialog was destroyed, ignore
 
         try:
             self.play_stream = sd.OutputStream(
@@ -930,6 +935,14 @@ class SoundEditor:
             self._draw_playback_position(view_start, view_end)
             self._update_info_labels()
             self.dialog.after(50, self._update_playhead)
+
+    def _safe_update_play_btn(self, text: str, bg_color: str):
+        """Safely update play button text and color, handling destroyed widgets."""
+        try:
+            if hasattr(self, "play_btn") and self.play_btn.winfo_exists():
+                self.play_btn.config(text=text, bg=bg_color)
+        except Exception:
+            pass  # Widget was destroyed
 
     def _stop_playback(self):
         """Stop playback and reset position."""

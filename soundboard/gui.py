@@ -113,19 +113,36 @@ class SoundboardApp:
         self.sound_cache = SoundCache()  # Local sound storage with caching
         self.tabs: List[SoundTab] = []  # List of all tabs
         self.current_tab_idx = 0  # Currently active tab index
-        self.slot_buttons: Dict[int, Any] = {}  # CTkButton instances
-        self.slot_frames: Dict[int, Any] = {}  # CTkFrame instances
-        self.slot_progress: Dict[int, Any] = {}  # CTkProgressBar instances
-        self.slot_preview_buttons: Dict[int, Any] = {}  # CTkButton instances
-        self.slot_edit_buttons: Dict[int, Any] = {}  # CTkButton instances
-        self.slot_stop_buttons: Dict[int, Any] = {}  # CTkButton instances
-        self.slot_bottom_frames: Dict[int, Any] = {}  # CTkFrame instances
-        self.slot_images: Dict[int, Any] = {}  # Keep references to images
-        self.slot_image_paths: Dict[int, str] = {}  # Track loaded image paths
-        self.slot_emoji_labels: Dict[int, Any] = {}  # CTkLabel for emoji overlay
-        self._slot_filled_cache: Dict[int, bool] = (
-            {}
-        )  # Track filled state to skip redundant updates
+
+        # Per-tab widget storage for instant tab switching
+        # Structure: tab_idx -> slot_idx -> widget
+        self.tab_grid_frames: Dict[int, Any] = {}  # tab_idx -> grid frame for that tab
+        self.tab_slot_buttons: Dict[int, Dict[int, Any]] = {}
+        self.tab_slot_frames: Dict[int, Dict[int, Any]] = {}
+        self.tab_slot_progress: Dict[int, Dict[int, Any]] = {}
+        self.tab_slot_preview_buttons: Dict[int, Dict[int, Any]] = {}
+        self.tab_slot_edit_buttons: Dict[int, Dict[int, Any]] = {}
+        self.tab_slot_stop_buttons: Dict[int, Dict[int, Any]] = {}
+        self.tab_slot_bottom_frames: Dict[int, Dict[int, Any]] = {}
+        self.tab_slot_emoji_labels: Dict[int, Dict[int, Any]] = {}
+        self.tab_slot_images: Dict[int, Dict[int, Any]] = {}
+        self.tab_slot_image_paths: Dict[int, Dict[int, str]] = {}
+        self._tab_slot_filled_cache: Dict[int, Dict[int, bool]] = {}
+        self._tab_built: Dict[int, bool] = {}  # Track which tabs have been built
+
+        # Legacy aliases for compatibility (point to current tab's widgets)
+        self.slot_buttons: Dict[int, Any] = {}
+        self.slot_frames: Dict[int, Any] = {}
+        self.slot_progress: Dict[int, Any] = {}
+        self.slot_preview_buttons: Dict[int, Any] = {}
+        self.slot_edit_buttons: Dict[int, Any] = {}
+        self.slot_stop_buttons: Dict[int, Any] = {}
+        self.slot_bottom_frames: Dict[int, Any] = {}
+        self.slot_images: Dict[int, Any] = {}
+        self.slot_image_paths: Dict[int, str] = {}
+        self.slot_emoji_labels: Dict[int, Any] = {}
+        self._slot_filled_cache: Dict[int, bool] = {}
+
         self._last_active_tab_idx: int = 0  # Track last active tab for tab bar optimization
         self.registered_hotkeys: list = []
 
@@ -575,7 +592,7 @@ class SoundboardApp:
             self._last_active_tab_idx = self.current_tab_idx
 
     def _switch_tab(self, tab_idx: int):
-        """Switch to a different tab, or move slot if in edit mode."""
+        """Switch to a different tab using tkraise() for instant switching."""
         if tab_idx < 0 or tab_idx >= len(self.tabs):
             return
 
@@ -596,15 +613,32 @@ class SoundboardApp:
         # Cancel any ongoing interaction
         self._reset_click_state()
         if self._edit_mode:
-            self._exit_edit_mode(skip_refresh=True)  # Skip refresh, we'll do it below
+            self._exit_edit_mode(skip_refresh=True)
 
-        # Clear progress bars before switching (sounds from other tabs shouldn't show here)
-        for slot_idx in self.slot_progress:
-            self.slot_progress[slot_idx].set(0)
+        # Clear progress bars on OLD tab before switching
+        old_tab_idx = self.current_tab_idx
+        if old_tab_idx in self.tab_slot_progress:
+            for slot_idx in self.tab_slot_progress[old_tab_idx]:
+                self.tab_slot_progress[old_tab_idx][slot_idx].set(0)
 
+        # Update current tab index
         self.current_tab_idx = tab_idx
+
+        # Ensure target tab is built (lazy build on first visit)
+        self._ensure_tab_built(tab_idx)
+
+        # INSTANT SWITCH: Just raise the target tab's frame to the top
+        if tab_idx in self.tab_grid_frames:
+            self.tab_grid_frames[tab_idx].tkraise()
+
+        # Update aliases to point at new tab's widgets
+        self._update_current_tab_aliases()
+
+        # Update tab bar appearance (already optimized)
         self._refresh_tab_bar()
-        self._refresh_slot_buttons()
+
+        # Update scrollbar visibility for new tab's content
+        self.root.after(10, self._update_scrollbar_visibility)
 
     def _add_new_tab(self):
         """Add a new tab."""
@@ -662,9 +696,15 @@ class SoundboardApp:
             emoji = emoji_var.get().strip() or None
             new_tab = SoundTab(name=name, emoji=emoji)
             self.tabs.append(new_tab)
-            self.current_tab_idx = len(self.tabs) - 1
+            new_tab_idx = len(self.tabs) - 1
+            # Build widgets for the new tab
+            self._build_tab_widgets(new_tab_idx)
+            self.current_tab_idx = new_tab_idx
+            # Raise new tab to top
+            if new_tab_idx in self.tab_grid_frames:
+                self.tab_grid_frames[new_tab_idx].tkraise()
+            self._update_current_tab_aliases()
             self._refresh_tab_bar()
-            self._refresh_slot_buttons()
             self._save_config()
             dialog.destroy()
 
@@ -897,7 +937,7 @@ class SoundboardApp:
         # Pack canvas (scrollbar will be shown/hidden dynamically based on content)
         self.slots_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # Frame inside canvas for the grid
+        # Container frame inside canvas - will hold per-tab grid frames stacked at same position
         self.grid_frame = ctk.CTkFrame(self.slots_canvas, fg_color=COLORS["bg_dark"])
         self.grid_frame_window = self.slots_canvas.create_window(
             (0, 0), window=self.grid_frame, anchor="nw"
@@ -911,8 +951,8 @@ class SoundboardApp:
         self.slots_canvas.bind("<Enter>", self._on_canvas_enter)
         self.slots_canvas.bind("<Leave>", self._on_canvas_leave)
 
-        # Create initial slots (will be populated in _refresh_slot_buttons)
-        self._create_slot_widgets()
+        # Don't create slot widgets here - they're created per-tab lazily
+        # After config loads, _build_all_tab_widgets() will create them
 
     def _on_grid_configure(self, event):
         """Update scroll region when grid changes size."""
@@ -965,54 +1005,72 @@ class SoundboardApp:
         self.slots_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
     def _create_slot_widgets(self):
-        """Dynamically create slot widgets based on current tab content."""
-        # Clear existing slots and all associated state
-        for frame in self.slot_frames.values():
-            frame.destroy()
-        self.slot_frames.clear()
-        self.slot_buttons.clear()
-        self.slot_progress.clear()
-        self.slot_preview_buttons.clear()
-        self.slot_edit_buttons.clear()
-        self.slot_stop_buttons.clear()
-        self.slot_bottom_frames.clear()
-        self.slot_emoji_labels.clear()  # Clear emoji labels
-        self._slot_filled_cache.clear()  # Reset filled state cache when recreating widgets
+        """Legacy method - now builds widgets for current tab only."""
+        self._build_tab_widgets(self.current_tab_idx)
+        self._update_current_tab_aliases()
 
-        # Calculate how many slots we need: max slot index + 1 extra empty, minimum 12
-        tab = self._get_current_tab()
+    def _build_tab_widgets(self, tab_idx: int):
+        """Build all slot widgets for a specific tab.
+
+        Creates a new grid frame for the tab and populates it with slot widgets.
+        Each tab has its own isolated set of widgets for instant switching.
+        """
+        if tab_idx < 0 or tab_idx >= len(self.tabs):
+            return
+
+        # If already built, skip
+        if self._tab_built.get(tab_idx, False):
+            return
+
+        tab = self.tabs[tab_idx]
+
+        # Initialize per-tab storage
+        self.tab_slot_buttons[tab_idx] = {}
+        self.tab_slot_frames[tab_idx] = {}
+        self.tab_slot_progress[tab_idx] = {}
+        self.tab_slot_preview_buttons[tab_idx] = {}
+        self.tab_slot_edit_buttons[tab_idx] = {}
+        self.tab_slot_stop_buttons[tab_idx] = {}
+        self.tab_slot_bottom_frames[tab_idx] = {}
+        self.tab_slot_emoji_labels[tab_idx] = {}
+        self.tab_slot_images[tab_idx] = {}
+        self.tab_slot_image_paths[tab_idx] = {}
+        self._tab_slot_filled_cache[tab_idx] = {}
+
+        # Create grid frame for this tab, stacked with others at position (0,0)
+        tab_grid = ctk.CTkFrame(self.grid_frame, fg_color=COLORS["bg_dark"])
+        tab_grid.grid(row=0, column=0, sticky="nsew")
+        self.tab_grid_frames[tab_idx] = tab_grid
+
+        # Calculate slots needed
         max_idx = max(tab.slots.keys()) if tab.slots else -1
-        num_slots = max(max_idx + 2, UI["total_slots"])  # +2 to have at least 1 empty
+        num_slots = max(max_idx + 2, UI["total_slots"])
 
-        # Fixed slot dimensions - sized to fit 4 columns nicely in window
         SLOT_WIDTH = 180
-        SLOT_HEIGHT = 110  # Increased for better text visibility
-        BOTTOM_HEIGHT = 32  # Height for progress bar and buttons
+        SLOT_HEIGHT = 110
+        BOTTOM_HEIGHT = 32
 
-        # Create sound slot compound widgets (button + progress bar)
         for i in range(num_slots):
             row, col = divmod(i, UI["grid_columns"])
 
-            # Container frame for button and progress bar - modern card style
             slot_frame = ctk.CTkFrame(
-                self.grid_frame,
+                tab_grid,
                 fg_color=COLORS["bg_medium"],
                 corner_radius=UI["slot_corner_radius"],
                 width=SLOT_WIDTH,
                 height=SLOT_HEIGHT + BOTTOM_HEIGHT,
             )
             slot_frame.grid(row=row, column=col, padx=4, pady=4)
-            slot_frame.grid_propagate(False)  # Lock frame size
-            slot_frame.pack_propagate(False)  # Lock frame size
+            slot_frame.grid_propagate(False)
+            slot_frame.pack_propagate(False)
 
-            # Bottom row: progress bar + edit button + preview button (pack first so it's at bottom)
             bottom_frame = ctk.CTkFrame(slot_frame, fg_color="transparent", height=BOTTOM_HEIGHT)
             bottom_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=6, pady=(0, 6))
 
-            # Stop button (hidden by default, shown when playing)
-            def make_stop_handler(slot_id):
+            # Closures capture tab_idx to route to correct tab
+            def make_stop_handler(t_idx, slot_id):
                 def handler(event=None):
-                    self._stop_slot_with_flag(slot_id)
+                    self._stop_slot_with_flag_for_tab(t_idx, slot_id)
                     return "break"
 
                 return handler
@@ -1028,14 +1086,10 @@ class SoundboardApp:
                 height=24,
                 cursor="hand2",
             )
-            stop_handler = make_stop_handler(i)
+            stop_handler = make_stop_handler(tab_idx, i)
             stop_btn.configure(command=stop_handler)
-            # Use CTkButton's bind() which stores bindings and reapplies them
-            # when internal canvas/label children are recreated on first display.
             stop_btn.bind("<Button-1>", stop_handler)
-            # Don't pack initially - only show when playing
 
-            # Preview button (speaker icon) - pack RIGHT first
             preview_btn = ctk.CTkButton(
                 bottom_frame,
                 text="🔊",
@@ -1046,11 +1100,10 @@ class SoundboardApp:
                 corner_radius=4,
                 width=28,
                 height=24,
-                command=lambda idx=i: self._preview_slot(idx),
+                command=lambda t=tab_idx, idx=i: self._preview_slot_for_tab(t, idx),
             )
             preview_btn.pack(side=tk.RIGHT, padx=(2, 0))
 
-            # Edit button (pencil icon)
             edit_btn = ctk.CTkButton(
                 bottom_frame,
                 text="✏️",
@@ -1061,11 +1114,10 @@ class SoundboardApp:
                 corner_radius=4,
                 width=28,
                 height=24,
-                command=lambda idx=i: self._configure_slot(idx),
+                command=lambda t=tab_idx, idx=i: self._configure_slot_for_tab(t, idx),
             )
             edit_btn.pack(side=tk.RIGHT, padx=(2, 0))
 
-            # Progress bar using CTkProgressBar
             progress = ctk.CTkProgressBar(
                 bottom_frame,
                 height=6,
@@ -1076,12 +1128,6 @@ class SoundboardApp:
             progress.set(0)
             progress.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
 
-            # Sound button - modern card-style button
-            #
-            # command= is the PRIMARY click mechanism.  It is the only callback
-            # that reliably survives CTkButton._draw() (which re-binds <Button-1>
-            # on the internal canvas, wiping any raw canvas.bind() we add).
-            # CTkButton stores _command as a property and calls it from _clicked().
             btn = ctk.CTkButton(
                 slot_frame,
                 text="+",
@@ -1092,14 +1138,13 @@ class SoundboardApp:
                 corner_radius=UI["slot_corner_radius"],
                 anchor="center",
                 cursor="hand2",
-                command=lambda idx=i: self._on_slot_command(idx),
+                command=lambda t=tab_idx, idx=i: self._on_slot_command_for_tab(t, idx),
             )
             btn.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=4, pady=(0, 0))
+            btn.bind(
+                "<Button-3>", lambda e, t=tab_idx, idx=i: self._show_quick_popup_for_tab(e, t, idx)
+            )
 
-            # Right-click context menu binding (drag removed from main button)
-            btn.bind("<Button-3>", lambda e, idx=i: self._show_quick_popup(e, idx))
-
-            # Emoji label overlay (top-left corner of slot)
             emoji_label = ctk.CTkLabel(
                 slot_frame,
                 text="",
@@ -1109,20 +1154,54 @@ class SoundboardApp:
                 width=24,
                 height=24,
             )
-            # Place in top-left corner using place geometry manager
             emoji_label.place(x=6, y=4)
-            emoji_label.lower()  # Place behind button initially
+            emoji_label.lower()
 
-            self.slot_frames[i] = slot_frame
-            self.slot_buttons[i] = btn
-            self.slot_progress[i] = progress
-            self.slot_preview_buttons[i] = preview_btn
-            self.slot_edit_buttons[i] = edit_btn
-            self.slot_stop_buttons[i] = stop_btn
-            self.slot_bottom_frames[i] = bottom_frame
-            self.slot_emoji_labels[i] = emoji_label
+            self.tab_slot_frames[tab_idx][i] = slot_frame
+            self.tab_slot_buttons[tab_idx][i] = btn
+            self.tab_slot_progress[tab_idx][i] = progress
+            self.tab_slot_preview_buttons[tab_idx][i] = preview_btn
+            self.tab_slot_edit_buttons[tab_idx][i] = edit_btn
+            self.tab_slot_stop_buttons[tab_idx][i] = stop_btn
+            self.tab_slot_bottom_frames[tab_idx][i] = bottom_frame
+            self.tab_slot_emoji_labels[tab_idx][i] = emoji_label
 
-        # Schedule scrollbar visibility update after layout is complete
+        self._tab_built[tab_idx] = True
+
+        # Update slot appearances
+        for i in range(num_slots):
+            self._update_slot_button_for_tab(tab_idx, i)
+
+    def _ensure_tab_built(self, tab_idx: int):
+        """Ensure a tab's widgets are built. Builds lazily if needed."""
+        if not self._tab_built.get(tab_idx, False):
+            self._build_tab_widgets(tab_idx)
+
+    def _update_current_tab_aliases(self):
+        """Update legacy widget aliases to point at current tab's widgets."""
+        tab_idx = self.current_tab_idx
+        if tab_idx not in self.tab_slot_buttons:
+            return
+        self.slot_buttons = self.tab_slot_buttons.get(tab_idx, {})
+        self.slot_frames = self.tab_slot_frames.get(tab_idx, {})
+        self.slot_progress = self.tab_slot_progress.get(tab_idx, {})
+        self.slot_preview_buttons = self.tab_slot_preview_buttons.get(tab_idx, {})
+        self.slot_edit_buttons = self.tab_slot_edit_buttons.get(tab_idx, {})
+        self.slot_stop_buttons = self.tab_slot_stop_buttons.get(tab_idx, {})
+        self.slot_bottom_frames = self.tab_slot_bottom_frames.get(tab_idx, {})
+        self.slot_images = self.tab_slot_images.get(tab_idx, {})
+        self.slot_image_paths = self.tab_slot_image_paths.get(tab_idx, {})
+        self.slot_emoji_labels = self.tab_slot_emoji_labels.get(tab_idx, {})
+        self._slot_filled_cache = self._tab_slot_filled_cache.get(tab_idx, {})
+
+    def _build_all_tab_widgets(self):
+        """Build widgets for all tabs upfront for instant switching."""
+        for tab_idx in range(len(self.tabs)):
+            self._build_tab_widgets(tab_idx)
+        # Raise current tab to top
+        if self.current_tab_idx in self.tab_grid_frames:
+            self.tab_grid_frames[self.current_tab_idx].tkraise()
+        self._update_current_tab_aliases()
         self.root.after(10, self._update_scrollbar_visibility)
 
     def _animate_progress(self):
@@ -1191,20 +1270,28 @@ class SoundboardApp:
         # Schedule next frame (20fps is enough for progress bars)
         self.root.after(50, self._animate_progress)
 
-    def _refresh_slot_buttons(self):
-        """Refresh all slot buttons for current tab."""
-        # Check if we need to recreate the grid (more/fewer slots needed)
-        tab = self._get_current_tab()
+    def _calculate_slots_for_tab(self, tab: SoundTab) -> int:
+        """Calculate how many slots a tab needs (max slot index + 2, minimum 12)."""
         max_idx = max(tab.slots.keys()) if tab.slots else -1
-        needed_slots = max(max_idx + 2, UI["total_slots"])
+        return max(max_idx + 2, UI["total_slots"])
 
-        if len(self.slot_frames) != needed_slots:
-            # Need to recreate slots
-            self._create_slot_widgets()
+    def _refresh_slot_buttons(self):
+        """Refresh slot buttons for current tab.
 
-        # Update all slot buttons
-        for i in self.slot_buttons.keys():
-            self._update_slot_button(i)
+        With per-tab frames, this just ensures the current tab is built and aliases are updated.
+        No widget updates needed - per-tab widgets are pre-built.
+        """
+        # Ensure tab is built
+        self._ensure_tab_built(self.current_tab_idx)
+        self._update_current_tab_aliases()
+
+    def _refresh_current_tab_slots(self):
+        """Update all slot appearances for the current tab (after content changes)."""
+        tab_idx = self.current_tab_idx
+        if tab_idx not in self.tab_slot_buttons:
+            return
+        for slot_idx in self.tab_slot_buttons[tab_idx]:
+            self._update_slot_button_for_tab(tab_idx, slot_idx)
 
     def _create_status_bar(self, parent):
         """Create the status bar at the bottom."""
@@ -1575,6 +1662,31 @@ class SoundboardApp:
         # Reset slot appearances (skip if caller will refresh anyway)
         if not skip_refresh:
             self._refresh_slot_buttons()
+
+    # ---------- Per-tab callback wrappers ----------
+    # These are used by per-tab widgets. They delegate to the main methods
+    # since the tab must be active (raised) for its widgets to be clickable.
+
+    def _on_slot_command_for_tab(self, tab_idx: int, slot_idx: int):
+        """Per-tab slot command callback."""
+        # Tab should already be current since its frame is raised
+        self._on_slot_command(slot_idx)
+
+    def _preview_slot_for_tab(self, tab_idx: int, slot_idx: int):
+        """Per-tab preview callback."""
+        self._preview_slot(slot_idx)
+
+    def _configure_slot_for_tab(self, tab_idx: int, slot_idx: int):
+        """Per-tab configure callback."""
+        self._configure_slot(slot_idx)
+
+    def _show_quick_popup_for_tab(self, event, tab_idx: int, slot_idx: int):
+        """Per-tab quick popup callback."""
+        self._show_quick_popup(event, slot_idx)
+
+    def _stop_slot_with_flag_for_tab(self, tab_idx: int, slot_idx: int):
+        """Per-tab stop callback."""
+        self._stop_slot_with_flag(slot_idx)
 
     # ---------- command= callback (PRIMARY click mechanism) ----------
 
@@ -2350,17 +2462,16 @@ class SoundboardApp:
         except Exception as e:
             messagebox.showerror("Editor Error", f"Failed to open sound editor:\n{e}")
 
-    def _load_slot_image(
-        self, image_path: str, size: tuple = (40, 40)
-    ) -> Optional[ImageTk.PhotoImage]:
-        """Load and resize an image for a slot button."""
+    def _load_slot_image(self, image_path: str, size: tuple = (40, 40)) -> Optional[ctk.CTkImage]:
+        """Load and resize an image for a slot button using CTkImage."""
         if not PIL_AVAILABLE:
             return None
 
         try:
             img = Image.open(image_path)
             img.thumbnail(size, Image.Resampling.LANCZOS)
-            return ImageTk.PhotoImage(img)
+            # Use CTkImage for proper scaling on HighDPI displays
+            return ctk.CTkImage(light_image=img, dark_image=img, size=size)
         except Exception:
             return None
 
@@ -2507,6 +2618,151 @@ class SoundboardApp:
                         text_color=COLORS["text_muted"],
                     )
 
+    def _update_slot_button_for_tab(self, tab_idx: int, slot_idx: int):
+        """Update slot appearance for a specific tab (used during tab building)."""
+        if tab_idx < 0 or tab_idx >= len(self.tabs):
+            return
+        if tab_idx not in self.tab_slot_buttons:
+            return
+        if slot_idx not in self.tab_slot_buttons[tab_idx]:
+            return
+
+        tab = self.tabs[tab_idx]
+        btn = self.tab_slot_buttons[tab_idx][slot_idx]
+        slot_frame = self.tab_slot_frames[tab_idx][slot_idx]
+
+        # For initial build, no playing/preview state
+        is_playing = (
+            slot_idx in self.playing_slots
+            and self.playing_slots[slot_idx].get("tab_idx") == tab_idx
+        )
+        is_previewing = (
+            slot_idx in self.preview_slots
+            and self.preview_slots[slot_idx].get("tab_idx") == tab_idx
+        )
+
+        slot = tab.slots.get(slot_idx)
+        default_color = slot.color if slot and slot.color else COLORS["blurple"]
+
+        if is_playing:
+            bg_color = COLORS["playing"]
+            frame_color = COLORS["bg_light"]
+        elif is_previewing:
+            bg_color = COLORS["preview"]
+            frame_color = COLORS["bg_light"]
+        else:
+            bg_color = default_color if slot_idx in tab.slots else "transparent"
+            frame_color = COLORS["bg_medium"]
+
+        slot_frame.configure(fg_color=frame_color)
+
+        # Track filled state
+        is_filled = slot_idx in tab.slots
+        if tab_idx not in self._tab_slot_filled_cache:
+            self._tab_slot_filled_cache[tab_idx] = {}
+        was_filled = self._tab_slot_filled_cache[tab_idx].get(slot_idx)
+        filled_state_changed = was_filled != is_filled
+        self._tab_slot_filled_cache[tab_idx][slot_idx] = is_filled
+
+        if is_filled:
+            slot = tab.slots[slot_idx]
+            hk = f"\n[{slot.hotkey}]" if slot.hotkey else ""
+            max_name_len = 32
+            display_name = (
+                slot.name[:max_name_len] + "…" if len(slot.name) > max_name_len else slot.name
+            )
+            display_text = _fix_rtl_text(f"{display_name}{hk}")
+
+            # Update emoji label
+            if slot_idx in self.tab_slot_emoji_labels.get(tab_idx, {}):
+                emoji_label = self.tab_slot_emoji_labels[tab_idx][slot_idx]
+                if slot.emoji:
+                    emoji_label.configure(text=slot.emoji)
+                    emoji_label.lift()
+                else:
+                    emoji_label.configure(text="")
+                    emoji_label.lower()
+
+            # Load image
+            photo = None
+            image_path = (
+                slot.image_path if slot.image_path and os.path.exists(slot.image_path) else None
+            )
+            if image_path:
+                if tab_idx not in self.tab_slot_images:
+                    self.tab_slot_images[tab_idx] = {}
+                if tab_idx not in self.tab_slot_image_paths:
+                    self.tab_slot_image_paths[tab_idx] = {}
+
+                if (
+                    slot_idx in self.tab_slot_images[tab_idx]
+                    and self.tab_slot_image_paths[tab_idx].get(slot_idx) == image_path
+                ):
+                    photo = self.tab_slot_images[tab_idx][slot_idx]
+                else:
+                    photo = self._load_slot_image(image_path)
+                    if photo:
+                        self.tab_slot_images[tab_idx][slot_idx] = photo
+                        self.tab_slot_image_paths[tab_idx][slot_idx] = image_path
+
+            hover_color = COLORS["bg_lighter"] if not is_playing and not is_previewing else bg_color
+
+            btn.configure(
+                text=display_text,
+                image=photo,
+                fg_color=bg_color,
+                hover_color=hover_color,
+                text_color=COLORS["text_primary"],
+                font=self._font_sm,
+            )
+
+            if filled_state_changed:
+                if slot_idx in self.tab_slot_preview_buttons.get(tab_idx, {}):
+                    self.tab_slot_preview_buttons[tab_idx][slot_idx].configure(
+                        fg_color=COLORS["bg_light"],
+                        text_color=COLORS["text_primary"],
+                    )
+                if slot_idx in self.tab_slot_edit_buttons.get(tab_idx, {}):
+                    self.tab_slot_edit_buttons[tab_idx][slot_idx].configure(
+                        fg_color=COLORS["bg_light"],
+                        text_color=COLORS["text_primary"],
+                    )
+        else:
+            # Clear image reference
+            if tab_idx in self.tab_slot_images and slot_idx in self.tab_slot_images[tab_idx]:
+                del self.tab_slot_images[tab_idx][slot_idx]
+            if (
+                tab_idx in self.tab_slot_image_paths
+                and slot_idx in self.tab_slot_image_paths[tab_idx]
+            ):
+                del self.tab_slot_image_paths[tab_idx][slot_idx]
+
+            # Clear emoji
+            if slot_idx in self.tab_slot_emoji_labels.get(tab_idx, {}):
+                self.tab_slot_emoji_labels[tab_idx][slot_idx].configure(text="")
+                self.tab_slot_emoji_labels[tab_idx][slot_idx].lower()
+
+            btn.configure(
+                text="+",
+                image=None,
+                fg_color="transparent",
+                hover_color=COLORS["bg_light"],
+                text_color=COLORS["text_muted"],
+                font=self._font_xl_bold,
+            )
+
+            if filled_state_changed:
+                if slot_idx in self.tab_slot_preview_buttons.get(tab_idx, {}):
+                    self.tab_slot_preview_buttons[tab_idx][slot_idx].configure(
+                        fg_color=COLORS["bg_light"],
+                        text_color=COLORS["text_muted"],
+                    )
+                if slot_idx in self.tab_slot_edit_buttons.get(tab_idx, {}):
+                    self.tab_slot_edit_buttons[tab_idx][slot_idx].configure(
+                        fg_color=COLORS["bg_light"],
+                        text_color=COLORS["text_muted"],
+                    )
+
     def _register_hotkeys(self):
         """Register global hotkeys for all slots across all tabs."""
         if not HOTKEYS_AVAILABLE:
@@ -2610,6 +2866,7 @@ class SoundboardApp:
         if not os.path.exists(CONFIG_FILE):
             # Create default tab
             self.tabs = [SoundTab(name="Main", emoji="🎵")]
+            self._build_all_tab_widgets()
             self._refresh_tab_bar()
             return
 
@@ -2673,8 +2930,9 @@ class SoundboardApp:
             self.auto_start_var.set(auto_start)
             self.monitor_var.set(monitor_enabled)
 
+            # Build widgets for ALL tabs upfront (for instant tab switching)
+            self._build_all_tab_widgets()
             self._refresh_tab_bar()
-            self._refresh_slot_buttons()
             self._register_hotkeys()
 
             # Auto-start the stream if enabled and devices are selected
@@ -2685,6 +2943,7 @@ class SoundboardApp:
             print(f"Error loading config: {e}")
             # Create default tab on error
             self.tabs = [SoundTab(name="Main", emoji="🎵")]
+            self._build_all_tab_widgets()
             self._refresh_tab_bar()
 
     def _auto_start_stream(self):
