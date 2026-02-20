@@ -18,7 +18,9 @@ class SoundSlot:
     image_path: Optional[str] = None  # Path to custom image/gif
     color: Optional[str] = None  # Custom background color (hex)
     speed: float = 1.0  # Playback speed (0.5 to 2.0)
-    preserve_pitch: bool = True  # If True, use time-stretch; if False, simple resample (chipmunk effect)
+    preserve_pitch: bool = (
+        True  # If True, use time-stretch; if False, simple resample (chipmunk effect)
+    )
     loop: bool = False  # If True, sound loops until stopped
     loop_count: int = 0  # Number of times to loop (0 = infinite)
     loop_delay: float = 0.0  # Delay between loops in seconds

@@ -626,6 +626,10 @@ class AudioMixer:
         with self.lock:
             finished = []
             for i, sound in enumerate(self.currently_playing):
+                # Skip paused sounds
+                if sound.get("paused", False):
+                    continue
+
                 # Handle loop delay phase
                 if sound.get("in_delay", False):
                     delay_remaining = sound["loop_delay_samples"] - sound["delay_position"]
@@ -641,7 +645,7 @@ class AudioMixer:
                         # Still in delay - add silence
                         sound["delay_position"] += frames
                         continue
-                
+
                 pos = sound["position"]
                 data = sound["data"]
                 volume = sound["volume"]
@@ -786,7 +790,12 @@ class AudioMixer:
                     self._press_ptt()
                     logger.debug(
                         "Queued from cache: %d samples (speed=%s, preserve_pitch=%s, volume=%s, id=%s, loop=%s)",
-                        len(data), speed, preserve_pitch, volume, sound_id, loop,
+                        len(data),
+                        speed,
+                        preserve_pitch,
+                        volume,
+                        sound_id,
+                        loop,
                     )
                     return len(data) / self.sample_rate
 
@@ -810,7 +819,11 @@ class AudioMixer:
 
             logger.debug(
                 "Playing from disk: %d samples (speed=%s, preserve_pitch=%s, id=%s, loop=%s)",
-                len(data), speed, preserve_pitch, sound_id, loop,
+                len(data),
+                speed,
+                preserve_pitch,
+                sound_id,
+                loop,
             )
             # Queue sound FIRST, then press PTT
             sound_entry = {
@@ -852,7 +865,9 @@ class AudioMixer:
         """
         logger.debug(
             "Speed: speed=%s, preserve_pitch=%s, LIBROSA=%s",
-            speed, preserve_pitch, LIBROSA_AVAILABLE,
+            speed,
+            preserve_pitch,
+            LIBROSA_AVAILABLE,
         )
 
         if speed == 1.0:
@@ -877,7 +892,8 @@ class AudioMixer:
         else:
             logger.debug(
                 "Speed: using simple resample (preserve_pitch=%s, LIBROSA=%s)",
-                preserve_pitch, LIBROSA_AVAILABLE,
+                preserve_pitch,
+                LIBROSA_AVAILABLE,
             )
 
         # Resampling with pitch change (chipmunk/deep effect)
@@ -935,7 +951,8 @@ class AudioMixer:
         """
         logger.debug(
             "Stop: id=%s, currently_playing=%d, ids=%s",
-            sound_id, len(self.currently_playing),
+            sound_id,
+            len(self.currently_playing),
             [s.get("sound_id") for s in self.currently_playing],
         )
 
@@ -983,9 +1000,122 @@ class AudioMixer:
         # Release PTT key
         self._release_ptt()
 
+    def pause_sound(self, sound_id: str):
+        """Pause a specific sound by its ID.
+
+        Args:
+            sound_id: The identifier of the sound to pause
+        """
+        with self.lock:
+            for sound in self.currently_playing:
+                if sound.get("sound_id") == sound_id:
+                    sound["paused"] = True
+                    logger.debug("Paused sound: %s", sound_id)
+                    break
+
+    def resume_sound(self, sound_id: str):
+        """Resume a paused sound by its ID.
+
+        Args:
+            sound_id: The identifier of the sound to resume
+        """
+        with self.lock:
+            for sound in self.currently_playing:
+                if sound.get("sound_id") == sound_id:
+                    sound["paused"] = False
+                    logger.debug("Resumed sound: %s", sound_id)
+                    break
+
+    def toggle_sound_loop(self, sound_id: str, loop: bool = None):
+        """Toggle or set the loop state of a playing sound.
+
+        Args:
+            sound_id: The identifier of the sound
+            loop: If provided, sets the loop state; if None, toggles
+        """
+        with self.lock:
+            for sound in self.currently_playing:
+                if sound.get("sound_id") == sound_id:
+                    if loop is None:
+                        sound["loop"] = not sound.get("loop", False)
+                    else:
+                        sound["loop"] = loop
+                    # If enabling loop and loops_remaining was 0, set to infinite
+                    if sound["loop"] and sound.get("loops_remaining", 0) == 0:
+                        sound["loops_remaining"] = -1
+                    logger.debug("Toggled loop for %s: %s", sound_id, sound["loop"])
+                    break
+
+    def set_sound_speed(self, sound_id: str, speed: float, preserve_pitch: bool = True):
+        """Change the playback speed of a currently playing sound.
+
+        This re-processes the remaining audio data at the new speed.
+
+        Args:
+            sound_id: The identifier of the sound
+            speed: New speed (0.5 to 2.0)
+            preserve_pitch: Whether to preserve pitch when changing speed
+        """
+        speed = max(0.5, min(2.0, speed))
+
+        with self.lock:
+            for sound in self.currently_playing:
+                if sound.get("sound_id") == sound_id:
+                    # Get the original data from cache if possible
+                    file_path = sound.get("file_path")
+                    if not file_path or not self.sound_cache:
+                        logger.warning("Cannot change speed: no file_path or cache")
+                        return
+
+                    original_data = self.sound_cache.get_sound_data(file_path)
+                    if original_data is None:
+                        logger.warning("Cannot change speed: sound not in cache")
+                        return
+
+                    # Calculate where we are in the original audio
+                    old_speed = sound.get("speed", 1.0)
+                    old_data = sound["data"]
+                    old_pos = sound["position"]
+
+                    # Estimate position ratio in original audio
+                    old_total = len(old_data)
+                    if old_total > 0:
+                        progress_ratio = old_pos / old_total
+                    else:
+                        progress_ratio = 0.0
+
+                    # Re-process original audio at new speed
+                    if speed != 1.0:
+                        new_data = self._apply_speed(original_data, speed, preserve_pitch)
+                    else:
+                        new_data = original_data.copy()
+
+                    # Apply fade-out for non-looping sounds
+                    if not sound.get("loop", False):
+                        new_data = _apply_fade_out(new_data, self.sample_rate)
+
+                    # Calculate new position based on progress ratio
+                    new_pos = int(progress_ratio * len(new_data))
+
+                    # Update sound entry
+                    sound["data"] = new_data
+                    sound["position"] = new_pos
+                    sound["speed"] = speed
+                    sound["preserve_pitch"] = preserve_pitch
+
+                    logger.debug(
+                        "Changed speed for %s: %.2f -> %.2f (pos: %d -> %d)",
+                        sound_id,
+                        old_speed,
+                        speed,
+                        old_pos,
+                        new_pos,
+                    )
+                    break
+
     def get_playing_sounds(self) -> List[Dict]:
         """Get a snapshot of currently playing sounds for UI display.
-        
+
         Returns a list of dicts with:
             - sound_id: Unique identifier
             - name: Display name
@@ -994,6 +1124,8 @@ class AudioMixer:
             - loop: Whether looping
             - loops_remaining: Remaining loops (-1 for infinite)
             - in_delay: Whether in loop delay phase
+            - paused: Whether sound is paused
+            - speed: Current playback speed
         """
         result = []
         with self.lock:
@@ -1001,17 +1133,21 @@ class AudioMixer:
                 data_len = len(sound.get("data", []))
                 pos = sound.get("position", 0)
                 progress = pos / data_len if data_len > 0 else 0.0
-                
-                result.append({
-                    "sound_id": sound.get("sound_id"),
-                    "name": sound.get("name", "Unknown"),
-                    "progress": progress,
-                    "volume": sound.get("volume", 1.0),
-                    "loop": sound.get("loop", False),
-                    "loops_remaining": sound.get("loops_remaining", 0),
-                    "in_delay": sound.get("in_delay", False),
-                    "file_path": sound.get("file_path"),
-                })
+
+                result.append(
+                    {
+                        "sound_id": sound.get("sound_id"),
+                        "name": sound.get("name", "Unknown"),
+                        "progress": progress,
+                        "volume": sound.get("volume", 1.0),
+                        "loop": sound.get("loop", False),
+                        "loops_remaining": sound.get("loops_remaining", 0),
+                        "in_delay": sound.get("in_delay", False),
+                        "paused": sound.get("paused", False),
+                        "speed": sound.get("speed", 1.0),
+                        "file_path": sound.get("file_path"),
+                    }
+                )
         return result
 
     def set_ptt_key(self, key: Optional[str]):
