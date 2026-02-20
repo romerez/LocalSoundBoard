@@ -37,17 +37,6 @@
           "speed": 1.0,
           "preserve_pitch": true
         },
-        "0": {
-          "name": "1291763884000018594 - פלט",
-          "file_path": "sounds\\jesus-christ-kid_66804490.wav",
-          "hotkey": null,
-          "volume": 1.09,
-          "emoji": null,
-          "image_path": null,
-          "color": "#FF355E",
-          "speed": 1.0,
-          "preserve_pitch": true
-        },
         "5": {
           "name": "ביבי זיינתי את אשתך",
           "file_path": "sounds\\1291763884000018594 - פלט_89842547.wav",
@@ -224,17 +213,6 @@
           "speed": 1.0,
           "preserve_pitch": true
         },
-        "21": {
-          "name": "ASD",
-          "file_path": "sounds\\הפרלמנט - נטיל מטבע  #הפרלמנט_21437166.wav",
-          "hotkey": null,
-          "volume": 1.0,
-          "emoji": "🥳",
-          "image_path": null,
-          "color": "#5865F2",
-          "speed": 1.0,
-          "preserve_pitch": true
-        },
         "3": {
           "name": "ssstik.io_1771513335081",
           "file_path": "sounds\\ssstik.io_1771513335081_44846737.wav",
@@ -246,7 +224,7 @@
           "speed": 1.0,
           "preserve_pitch": true
         },
-        "22": {
+        "21": {
           "name": "anita",
           "file_path": "sounds\\anita_92754420.wav",
           "hotkey": null,
@@ -271,6 +249,17 @@
           "emoji": null,
           "image_path": "images\\First-time-james-franco-hanging-meme_6287e7cc.jpg",
           "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true
+        },
+        "1": {
+          "name": "1291763884000018594 - פלט",
+          "file_path": "sounds\\jesus-christ-kid_66804490.wav",
+          "hotkey": null,
+          "volume": 1.09,
+          "emoji": null,
+          "image_path": null,
+          "color": "#FF355E",
           "speed": 1.0,
           "preserve_pitch": true
         }

@@ -1228,15 +1228,22 @@ class SoundboardApp:
         for slot_idx in finished:
             tab_idx = self.playing_slots[slot_idx]["tab_idx"]
             del self.playing_slots[slot_idx]
-            # Only reset button color if this slot is in current tab AND from current tab
-            if slot_idx in self.slot_buttons and tab_idx == self.current_tab_idx:
-                self._update_slot_button(slot_idx)
-            # Clear progress bar only if from current tab
-            if slot_idx in self.slot_progress and tab_idx == self.current_tab_idx:
-                self.slot_progress[slot_idx].set(0)
-            # Hide stop button
-            if slot_idx in self.slot_stop_buttons and tab_idx == self.current_tab_idx:
-                self.slot_stop_buttons[slot_idx].pack_forget()
+
+            # Update the slot's tab directly (not just current tab)
+            # This ensures stop button is hidden even if we're on a different tab
+            if tab_idx in self.tab_slot_buttons and slot_idx in self.tab_slot_buttons.get(
+                tab_idx, {}
+            ):
+                self._update_slot_button_for_tab(tab_idx, slot_idx)
+            if tab_idx in self.tab_slot_progress and slot_idx in self.tab_slot_progress.get(
+                tab_idx, {}
+            ):
+                self.tab_slot_progress[tab_idx][slot_idx].set(0)
+            if (
+                tab_idx in self.tab_slot_stop_buttons
+                and slot_idx in self.tab_slot_stop_buttons.get(tab_idx, {})
+            ):
+                self.tab_slot_stop_buttons[tab_idx][slot_idx].pack_forget()
 
         # Handle preview slots (same logic but with green color)
         preview_finished = []
@@ -1260,12 +1267,16 @@ class SoundboardApp:
         for slot_idx in preview_finished:
             tab_idx = self.preview_slots[slot_idx]["tab_idx"]
             del self.preview_slots[slot_idx]
-            # Only reset button color if this slot is in current tab AND from current tab
-            if slot_idx in self.slot_buttons and tab_idx == self.current_tab_idx:
-                self._update_slot_button(slot_idx)
-            # Clear progress bar only if from current tab
-            if slot_idx in self.slot_progress and tab_idx == self.current_tab_idx:
-                self.slot_progress[slot_idx].set(0)
+
+            # Update the slot's tab directly (not just current tab)
+            if tab_idx in self.tab_slot_buttons and slot_idx in self.tab_slot_buttons.get(
+                tab_idx, {}
+            ):
+                self._update_slot_button_for_tab(tab_idx, slot_idx)
+            if tab_idx in self.tab_slot_progress and slot_idx in self.tab_slot_progress.get(
+                tab_idx, {}
+            ):
+                self.tab_slot_progress[tab_idx][slot_idx].set(0)
 
         # Schedule next frame (20fps is enough for progress bars)
         self.root.after(50, self._animate_progress)

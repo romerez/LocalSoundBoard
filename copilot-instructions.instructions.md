@@ -571,6 +571,62 @@ When asked to add a feature:
 | Tab bar recreation on every switch | `_refresh_tab_bar()` destroyed and recreated ALL tab buttons on every tab switch | Check if tab count changed; if not, just `configure()` existing buttons with new colors/fonts instead of destroying them |
 | Redundant preview/edit button updates | Preview/edit buttons always got `configure()` called even when appearance didn't change | Track `_slot_filled_cache` dict; only call `configure()` on preview/edit buttons when filled/empty state actually changes |
 | 2-second tab switching delay | Updating slot widget appearances on every tab switch via `configure()` calls, which triggers CTkButton's expensive `_draw()` method | **Per-tab widget frames architecture:** Each tab has its own pre-built frame with widgets. Tab switch = `tkraise()` (single call). Widgets built upfront via `_build_all_tab_widgets()`. Legacy aliases (`slot_buttons`, etc.) point to current tab's widgets. |
+| Stop button stuck visible after sound ends on non-active tab | `_animate_progress()` only updated widgets on `current_tab_idx`, not the tab where the sound was actually playing | **Always update the actual tab's widgets using per-tab storage** (`tab_slot_stop_buttons[tab_idx]`), not the legacy aliases that point to current tab. See "Per-Tab Widget Architecture" below. |
+
+### Per-Tab Widget Architecture (CRITICAL)
+
+> **READ THIS BEFORE MODIFYING ANY WIDGET UPDATE CODE**
+
+Each tab has its own independent widget set. When updating widgets for a sound/slot, you MUST use the correct tab's storage.
+
+#### Widget Storage Structure
+```python
+# Per-tab storage: tab_idx -> slot_idx -> widget
+tab_grid_frames: Dict[int, Frame]           # One grid frame per tab
+tab_slot_buttons: Dict[int, Dict[int, CTkButton]]
+tab_slot_frames: Dict[int, Dict[int, CTkFrame]]
+tab_slot_progress: Dict[int, Dict[int, CTkProgressBar]]
+tab_slot_stop_buttons: Dict[int, Dict[int, CTkButton]]
+tab_slot_preview_buttons: Dict[int, Dict[int, CTkButton]]
+tab_slot_edit_buttons: Dict[int, Dict[int, CTkButton]]
+tab_slot_emoji_labels: Dict[int, Dict[int, CTkLabel]]
+tab_slot_images: Dict[int, Dict[int, CTkImage]]
+tab_slot_image_paths: Dict[int, Dict[int, str]]
+_tab_slot_filled_cache: Dict[int, Dict[int, bool]]
+
+# Legacy aliases (point to CURRENT tab only)
+slot_buttons = tab_slot_buttons[current_tab_idx]
+slot_frames = tab_slot_frames[current_tab_idx]
+# etc.
+```
+
+#### CORRECT: Updating widgets for a specific tab
+```python
+# When a sound finishes playing on tab 3 while viewing tab 1:
+tab_idx = playing_slots[slot_idx]["tab_idx"]  # This is 3
+
+# ✅ CORRECT: Use per-tab storage directly
+if tab_idx in self.tab_slot_stop_buttons:
+    if slot_idx in self.tab_slot_stop_buttons[tab_idx]:
+        self.tab_slot_stop_buttons[tab_idx][slot_idx].pack_forget()
+
+self._update_slot_button_for_tab(tab_idx, slot_idx)  # Updates tab 3's widgets
+```
+
+#### WRONG: Using legacy aliases
+```python
+# ❌ WRONG: Legacy aliases only point to current tab
+if slot_idx in self.slot_stop_buttons:  # This is tab 1's widgets!
+    self.slot_stop_buttons[slot_idx].pack_forget()  # Updates wrong tab
+```
+
+#### When to Use What
+| Scenario | Use | Method |
+|----------|-----|--------|
+| User clicks slot on current tab | Legacy aliases OK | `_update_slot_button()` |
+| Sound finishes on ANY tab | Per-tab storage | `_update_slot_button_for_tab(tab_idx, slot_idx)` |
+| Building tab widgets | Per-tab storage | Store to `tab_slot_*[tab_idx][slot_idx]` |
+| Tab switch | Just `tkraise()` | `tab_grid_frames[new_idx].tkraise()` |
 
 ### Refactoring & Performance Lessons
 
@@ -601,3 +657,4 @@ When asked to add a feature:
 11. **Background-thread heavy I/O** - Sound preloading, file hashing, and other blocking I/O should run in daemon threads; update UI via `root.after(0, callback)`
 12. **Lazy-load expensive resources** - Emoji categories, large data structures should be built on first access, not at import time
 13. **NEVER bind directly to CTkButton internal children** - `canvas.bind()` on a CTkButton's internal canvas WILL be wiped by `_draw()`. This applies to both `add` and non-`add` variants. Use `command=` for clicks, `CTkButton.bind()` for motion/release. Read the "Slot Button Click & Drag Architecture" section before touching any slot event handling code.
+14. **Per-tab widget updates** - When updating widgets for a sound/slot that may be on ANY tab (not just current), use per-tab storage directly (`tab_slot_*[tab_idx][slot_idx]`). NEVER use legacy aliases (`slot_buttons`, `slot_frames`) for cross-tab updates. See "Per-Tab Widget Architecture" section.

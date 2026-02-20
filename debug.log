@@ -44726,3 +44726,135 @@ AdaptBlockInfo(insts=((0, {}), (2, {}), (4, {'res': '$x4.0'}), (6, {'res': '$con
 [soundboard.audio] Stop: removed 0 sounds from currently_playing
 [soundboard.audio] Stop: id=1_0, currently_playing=0, ids=[]
 [soundboard.audio] Stop: removed 0 sounds from currently_playing
+[soundboard.audio] librosa imported successfully: 0.11.0
+[soundboard.audio] PTT key set to: mouse4
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 84060 samples (speed=1.0, preserve_pitch=True, volume=1.09, id=0_0)
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 165642 samples (speed=1.0, preserve_pitch=False, volume=0.21, id=0_1)
+[soundboard.audio] Queued from cache: 40794 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_2)
+[soundboard.audio] Queued from cache: 109612 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=1_0)
+[soundboard.audio] Stop: id=1_0, currently_playing=1, ids=['1_0']
+[soundboard.audio] Stop: removed 1 sounds from currently_playing
+[soundboard.audio] Stop: id=1_0, currently_playing=0, ids=[]
+[soundboard.audio] Stop: removed 0 sounds from currently_playing
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 109612 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=1_0)
+[soundboard.audio] Stop: id=1_0, currently_playing=1, ids=['1_0']
+[soundboard.audio] Stop: removed 1 sounds from currently_playing
+[soundboard.audio] Stop: id=1_0, currently_playing=0, ids=[]
+[soundboard.audio] Stop: removed 0 sounds from currently_playing
+[soundboard.audio] Stop: id=0_2, currently_playing=0, ids=[]
+[soundboard.audio] Stop: removed 0 sounds from currently_playing
+[soundboard.audio] Stop: id=0_2, currently_playing=0, ids=[]
+[soundboard.audio] Stop: removed 0 sounds from currently_playing
+[soundboard.audio] Stop: id=0_1, currently_playing=0, ids=[]
+[soundboard.audio] Stop: removed 0 sounds from currently_playing
+[soundboard.audio] Stop: id=0_1, currently_playing=0, ids=[]
+[soundboard.audio] Stop: removed 0 sounds from currently_playing
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 40794 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_2)
+[soundboard.audio] Queued from cache: 165642 samples (speed=1.0, preserve_pitch=False, volume=0.21, id=0_1)
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 112848 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=2_0)
+[soundboard.audio] Queued from cache: 84060 samples (speed=1.0, preserve_pitch=True, volume=1.09, id=0_0)
+[soundboard.audio] Stop: id=2_0, currently_playing=0, ids=[]
+[soundboard.audio] Stop: removed 0 sounds from currently_playing
+[soundboard.audio] Stop: id=2_0, currently_playing=0, ids=[]
+[soundboard.audio] Stop: removed 0 sounds from currently_playing
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 112848 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=2_0)
+[soundboard.audio] Queued from cache: 165642 samples (speed=1.0, preserve_pitch=False, volume=0.21, id=0_1)
+[soundboard.audio] Stop: id=2_0, currently_playing=1, ids=['0_1']
+[soundboard.audio] Stop: removed 0 sounds from currently_playing
+[soundboard.audio] Stop: id=2_0, currently_playing=1, ids=['0_1']
+[soundboard.audio] Stop: removed 0 sounds from currently_playing
+[soundboard.audio] librosa imported successfully: 0.11.0
+[soundboard.audio] PTT key set to: mouse4
+[soundboard.audio] librosa imported successfully: 0.11.0
+[soundboard.audio] PTT key set to: mouse4
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 48214 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_9)
+[soundboard.audio] Queued from cache: 56476 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_10)
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 112848 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=2_0)
+[soundboard.audio] Queued from cache: 219840 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_5)
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 219840 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_5)
+[soundboard.audio] Queued from cache: 146880 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_6)
+[soundboard.audio] Queued from cache: 56476 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_10)
+[soundboard.audio] Stop: id=0_6, currently_playing=3, ids=['0_5', '0_6', '0_10']
+[soundboard.audio] Stop: removed 1 sounds from currently_playing
+[soundboard.audio] Stop: id=0_6, currently_playing=2, ids=['0_5', '0_10']
+[soundboard.audio] Stop: removed 0 sounds from currently_playing
+[soundboard.audio] Stop: id=0_10, currently_playing=2, ids=['0_5', '0_10']
+[soundboard.audio] Stop: removed 1 sounds from currently_playing
+[soundboard.audio] Stop: id=0_10, currently_playing=1, ids=['0_5']
+[soundboard.audio] Stop: removed 0 sounds from currently_playing
+[soundboard.audio] Stop: id=0_5, currently_playing=1, ids=['0_5']
+[soundboard.audio] Stop: removed 1 sounds from currently_playing
+[soundboard.audio] Stop: id=0_5, currently_playing=0, ids=[]
+[soundboard.audio] Stop: removed 0 sounds from currently_playing
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 219840 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_5)
+[soundboard.audio] Queued from cache: 146880 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_6)
+[soundboard.audio] Stop: id=0_6, currently_playing=2, ids=['0_5', '0_6']
+[soundboard.audio] Stop: removed 1 sounds from currently_playing
+[soundboard.audio] Stop: id=0_6, currently_playing=1, ids=['0_5']
+[soundboard.audio] Stop: removed 0 sounds from currently_playing
+[soundboard.audio] Stop: id=0_5, currently_playing=1, ids=['0_5']
+[soundboard.audio] Stop: removed 1 sounds from currently_playing
+[soundboard.audio] Stop: id=0_5, currently_playing=0, ids=[]
+[soundboard.audio] Stop: removed 0 sounds from currently_playing
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 102712 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_15)
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 135493 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_19)
+[soundboard.audio] Queued from cache: 2414841 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_21)
+[soundboard.audio] Stop: id=0_21, currently_playing=1, ids=['0_21']
+[soundboard.audio] Stop: removed 1 sounds from currently_playing
+[soundboard.audio] Stop: id=0_21, currently_playing=0, ids=[]
+[soundboard.audio] Stop: removed 0 sounds from currently_playing
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 107595 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_22)
+[soundboard.audio] Queued from cache: 107595 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_22)
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 107595 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_22)
+[soundboard.audio] Queued from cache: 107595 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_22)
+[soundboard.audio] Stop: id=0_22, currently_playing=2, ids=['0_22', '0_22']
+[soundboard.audio] Stop: removed 2 sounds from currently_playing
+[soundboard.audio] Stop: id=0_22, currently_playing=0, ids=[]
+[soundboard.audio] Stop: removed 0 sounds from currently_playing
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 107595 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_21)
+[soundboard.audio] Stop: id=0_21, currently_playing=1, ids=['0_21']
+[soundboard.audio] Stop: removed 1 sounds from currently_playing
+[soundboard.audio] Stop: id=0_21, currently_playing=0, ids=[]
+[soundboard.audio] Stop: removed 0 sounds from currently_playing
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 107595 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_21)
+[soundboard.audio] Stop: id=0_21, currently_playing=1, ids=['0_21']
+[soundboard.audio] Stop: removed 1 sounds from currently_playing
+[soundboard.audio] Stop: id=0_21, currently_playing=0, ids=[]
+[soundboard.audio] Stop: removed 0 sounds from currently_playing
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 56874 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_18)
+[soundboard.audio] Queued from cache: 107595 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_21)
+[soundboard.audio] Queued from cache: 141138 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_17)
+[soundboard.audio] Stop: id=0_17, currently_playing=2, ids=['0_21', '0_17']
+[soundboard.audio] Stop: removed 1 sounds from currently_playing
+[soundboard.audio] Stop: id=0_17, currently_playing=1, ids=['0_21']
+[soundboard.audio] Stop: removed 0 sounds from currently_playing
+[soundboard.audio] Queued from cache: 107595 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_21)
+[soundboard.audio] Stop: id=0_21, currently_playing=2, ids=['0_21', '0_21']
+[soundboard.audio] Stop: removed 2 sounds from currently_playing
+[soundboard.audio] Stop: id=0_21, currently_playing=0, ids=[]
+[soundboard.audio] Stop: removed 0 sounds from currently_playing
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 84060 samples (speed=1.0, preserve_pitch=True, volume=1.09, id=0_0)
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 84060 samples (speed=1.0, preserve_pitch=True, volume=1.09, id=0_0)
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 84060 samples (speed=1.0, preserve_pitch=True, volume=1.09, id=1_1)
+[soundboard.audio] PTT pressing: mouse4
+[soundboard.audio] Queued from cache: 84060 samples (speed=1.0, preserve_pitch=True, volume=1.09, id=1_1)
