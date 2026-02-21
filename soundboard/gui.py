@@ -451,6 +451,29 @@ class NowPlayingPanel:
         )
         speed_value_label.pack(side=tk.LEFT)
 
+        # Reset speed button
+        def reset_speed():
+            speed_var.set(100)
+            speed_value_label.configure(text="1.0x")
+            mixer = self._get_mixer()
+            if mixer:
+                threading.Thread(
+                    target=mixer.set_sound_speed, args=(sound_id, 1.0), daemon=True
+                ).start()
+
+        reset_speed_btn = ctk.CTkButton(
+            controls_row,
+            text="↺",
+            command=reset_speed,
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_lighter"],
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            corner_radius=4,
+            width=24,
+            height=22,
+        )
+        reset_speed_btn.pack(side=tk.LEFT, padx=(4, 0))
+
         # Bottom row: progress bar and stop button
         bottom_row = ctk.CTkFrame(content, fg_color="transparent")
         bottom_row.pack(fill=tk.X, pady=(4, 0))
@@ -467,11 +490,11 @@ class NowPlayingPanel:
 
         stop_btn = ctk.CTkButton(
             bottom_row,
-            text="⏹",
+            text="✕",
             command=lambda: self._on_stop_click(sound_id),
             fg_color=COLORS["red"],
             hover_color=COLORS["red_hover"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"], weight="bold"),
             corner_radius=4,
             width=28,
             height=20,
@@ -488,6 +511,8 @@ class NowPlayingPanel:
             "speed_slider": speed_slider,
             "speed_var": speed_var,
             "speed_value_label": speed_value_label,
+            "reset_speed_btn": reset_speed_btn,
+            "stop_btn": stop_btn,
             "sound_info": sound_info,
         }
 
@@ -3775,9 +3800,17 @@ class SoundboardApp:
             for slot_idx, slot in tab.slots.items():
                 if slot.hotkey:
                     try:
+                        # CRITICAL: Use root.after() to schedule playback on main thread!
+                        # Running play_sound inside the keyboard hook callback blocks the
+                        # Windows low-level keyboard hook, freezing ALL Windows input.
+                        def make_hotkey_handler(t: int, s: int):
+                            def handler():
+                                self.root.after(0, lambda: self._play_slot_from_tab(t, s))
+                            return handler
+                        
                         keyboard.add_hotkey(
                             slot.hotkey,
-                            lambda t=tab_idx, s=slot_idx: self._play_slot_from_tab(t, s),
+                            make_hotkey_handler(tab_idx, slot_idx),
                         )
                         self.registered_hotkeys.append(slot.hotkey)
                     except Exception:
@@ -4003,10 +4036,49 @@ class SoundboardApp:
             self.status_var.set("Ready")
 
     def _on_close(self):
-        """Handle application close."""
+        """Handle application close. BULLETPROOF - guarantees process termination."""
+        # CRITICAL: Release PTT key FIRST to prevent Windows UI freeze
         if self.mixer:
-            self.mixer.stop()
-        self.root.destroy()
+            try:
+                self.mixer._force_release_ptt()
+            except Exception:
+                pass
+
+        # Schedule force-kill as absolute last resort (500ms timeout)
+        # This runs in a daemon thread so it won't block
+        def force_kill():
+            import time
+
+            time.sleep(0.5)  # Give normal shutdown 500ms
+            os._exit(0)  # Nuclear option - kills process immediately
+
+        kill_thread = threading.Thread(target=force_kill, daemon=True)
+        kill_thread.start()
+
+        # Save config (quick operation)
+        try:
+            self._save_config()
+        except Exception:
+            pass
+
+        # Signal mixer to shut down (sets _shutting_down flag and releases PTT)
+        if self.mixer:
+            try:
+                self.mixer.stop()
+            except Exception:
+                pass
+
+        # Destroy window immediately
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
+
+        # If we get here, exit cleanly before force_kill triggers
+        try:
+            os._exit(0)
+        except Exception:
+            pass
 
     def run(self):
         """Start the application main loop."""

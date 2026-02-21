@@ -2,11 +2,19 @@
 Audio mixing and playback for the Discord Soundboard.
 """
 
+# Limit parallel threads in numpy/scipy to prevent CPU saturation
+# Must be set BEFORE importing numpy
+import os
+
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 import ctypes
 import hashlib
 import io
 import logging
-import os
 import queue
 import shutil
 import threading
@@ -22,41 +30,131 @@ from .constants import AUDIO, SOUNDS_DIR
 logger = logging.getLogger(__name__)
 
 
-# Windows API for mouse button simulation
+# Mouse button simulation using the mouse library (simpler, more reliable)
 def _simulate_mouse_button(button: str, press: bool = True):
     """
-    Simulate mouse button press/release using Windows API.
-    Works reliably for side buttons (XBUTTON1/XBUTTON2).
+    Simulate mouse button press/release using the mouse library.
+    Maps button names to mouse library constants.
     """
-    # Constants from Windows API
-    MOUSEEVENTF_XDOWN = 0x0080
-    MOUSEEVENTF_XUP = 0x0100
-    MOUSEEVENTF_LEFTDOWN = 0x0002
-    MOUSEEVENTF_LEFTUP = 0x0004
-    MOUSEEVENTF_RIGHTDOWN = 0x0008
-    MOUSEEVENTF_RIGHTUP = 0x0010
-    MOUSEEVENTF_MIDDLEDOWN = 0x0020
-    MOUSEEVENTF_MIDDLEUP = 0x0040
-    XBUTTON1 = 0x0001
-    XBUTTON2 = 0x0002
+    import mouse as mouse_lib
 
-    if button == "left":
-        flags = MOUSEEVENTF_LEFTDOWN if press else MOUSEEVENTF_LEFTUP
-        ctypes.windll.user32.mouse_event(flags, 0, 0, 0, 0)
-    elif button == "right":
-        flags = MOUSEEVENTF_RIGHTDOWN if press else MOUSEEVENTF_RIGHTUP
-        ctypes.windll.user32.mouse_event(flags, 0, 0, 0, 0)
-    elif button == "middle":
-        flags = MOUSEEVENTF_MIDDLEDOWN if press else MOUSEEVENTF_MIDDLEUP
-        ctypes.windll.user32.mouse_event(flags, 0, 0, 0, 0)
-    elif button == "x" or button == "x1":
-        # XBUTTON1 = mouse4 in some apps
-        flags = MOUSEEVENTF_XDOWN if press else MOUSEEVENTF_XUP
-        ctypes.windll.user32.mouse_event(flags, 0, 0, XBUTTON1, 0)
-    elif button == "x2":
-        # XBUTTON2 = mouse5 in some apps
-        flags = MOUSEEVENTF_XDOWN if press else MOUSEEVENTF_XUP
-        ctypes.windll.user32.mouse_event(flags, 0, 0, XBUTTON2, 0)
+    # Map our button names to mouse library button names
+    button_map = {
+        "left": mouse_lib.LEFT,
+        "right": mouse_lib.RIGHT,
+        "middle": mouse_lib.MIDDLE,
+        "x": mouse_lib.X,
+        "x1": mouse_lib.X,
+        "x2": mouse_lib.X2,
+    }
+
+    mouse_button = button_map.get(button)
+    if mouse_button is None:
+        return
+
+    if press:
+        mouse_lib.press(button=mouse_button)
+    else:
+        mouse_lib.release(button=mouse_button)
+
+
+def _get_vk_code(key: str) -> Optional[int]:
+    """
+    Get virtual key code for a key using Windows API.
+    Uses VkKeyScanA for characters and MapVirtualKeyA for special keys.
+    Falls back to keyboard library's built-in mapping if available.
+    """
+    key_lower = key.lower().strip()
+
+    # For single printable characters, use Windows API VkKeyScanA
+    if len(key_lower) == 1:
+        result = ctypes.windll.user32.VkKeyScanA(ord(key_lower))
+        if result != -1:
+            return result & 0xFF  # Low byte is the VK code
+
+    # For special keys, use the keyboard library's internal mapping (read-only, no hooks)
+    try:
+        import keyboard
+
+        # keyboard.key_to_scan_codes returns scan codes, but we need VK codes
+        # Use keyboard's internal name_to_key mapping
+        if hasattr(keyboard, "_winkeyboard"):
+            # keyboard library stores VK codes internally
+            from keyboard import _winkeyboard  # type: ignore[attr-defined]
+
+            # Try to find the key in keyboard's internal tables
+            for vk, names in getattr(_winkeyboard, "official_virtual_keys", {}).items():
+                if key_lower in [n.lower() for n in names]:
+                    return vk
+
+        # Alternative: use key_to_scan_codes and convert
+        scan_codes = keyboard.key_to_scan_codes(key_lower)
+        if scan_codes:
+            # Convert scan code to VK using Windows API
+            vk = ctypes.windll.user32.MapVirtualKeyA(scan_codes[0], 1)  # MAPVK_VSC_TO_VK
+            if vk:
+                return vk
+    except Exception:
+        pass
+
+    return None
+
+
+def _simulate_key(key: str, press: bool = True):
+    """
+    Simulate keyboard key press/release using Windows API (SendInput).
+    Uses dynamic VK code lookup - no hardcoded key mappings.
+    Does NOT use the keyboard library for sending - avoids hook conflicts.
+    """
+    KEYEVENTF_KEYUP = 0x0002
+    INPUT_KEYBOARD = 1
+
+    # Get virtual key code dynamically
+    vk = _get_vk_code(key)
+
+    if vk is None:
+        logger.warning("Unknown key for PTT simulation: %s", key)
+        return
+
+    _simulate_key_vk(vk, press)
+
+
+def _simulate_key_vk(vk: int, press: bool = True):
+    """
+    Simulate keyboard key press/release using Windows API (SendInput).
+    Takes a VK code directly - NO keyboard library calls, just pure Windows API.
+    """
+    KEYEVENTF_KEYUP = 0x0002
+    INPUT_KEYBOARD = 1
+
+    # Define INPUT structure for SendInput
+    class KEYBDINPUT(ctypes.Structure):
+        _fields_ = [
+            ("wVk", ctypes.c_ushort),
+            ("wScan", ctypes.c_ushort),
+            ("dwFlags", ctypes.c_ulong),
+            ("time", ctypes.c_ulong),
+            ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+        ]
+
+    class INPUT(ctypes.Structure):
+        _fields_ = [
+            ("type", ctypes.c_ulong),
+            ("ki", KEYBDINPUT),
+            ("padding", ctypes.c_ubyte * 8),
+        ]
+
+    flags = KEYEVENTF_KEYUP if not press else 0
+
+    inp = INPUT()
+    inp.type = INPUT_KEYBOARD
+    inp.ki.wVk = vk
+    inp.ki.wScan = 0
+    inp.ki.dwFlags = flags
+    inp.ki.time = 0
+    inp.ki.dwExtraInfo = None
+
+    ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
 
 
 # Try to get ffmpeg path from imageio-ffmpeg (bundled ffmpeg)
@@ -81,15 +179,17 @@ except ImportError:
     PYDUB_AVAILABLE = False
 
 
-# Try to import librosa for pitch-preserving time-stretch
+# Import librosa for pitch-preserving time stretch
+# Set thread limits BEFORE importing to prevent CPU saturation
 try:
     import librosa
 
     LIBROSA_AVAILABLE = True
-    logger.debug("librosa imported successfully: %s", getattr(librosa, "__version__", "unknown"))
-except Exception as e:
+except ImportError:
     LIBROSA_AVAILABLE = False
-    logger.debug("librosa import FAILED: %s: %s", type(e).__name__, e)
+
+# Lock to serialize librosa operations (prevents CPU saturation from concurrent calls)
+_librosa_lock = threading.Lock()
 
 
 def read_audio_file(file_path: str) -> Tuple[np.ndarray, int]:
@@ -157,10 +257,9 @@ def read_audio_file(file_path: str) -> Tuple[np.ndarray, int]:
 
 def _resample_audio(data: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
     """
-    High-quality audio resampling using librosa.
+    Resample audio using numpy linear interpolation (fastest, no external dependencies).
 
-    This avoids the aliasing and distortion that naive linear interpolation causes.
-    Falls back to scipy if librosa is unavailable.
+    Quality is lower than FFT-based methods but guaranteed fast (~5ms for typical audio).
 
     Args:
         data: Audio data as numpy array (mono or stereo)
@@ -173,41 +272,7 @@ def _resample_audio(data: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarra
     if orig_sr == target_sr:
         return data
 
-    # Use librosa for high-quality resampling (already imported for time-stretch)
-    if LIBROSA_AVAILABLE:
-        try:
-            if data.ndim == 1:
-                # Mono audio
-                return librosa.resample(data, orig_sr=orig_sr, target_sr=target_sr).astype(
-                    np.float32
-                )
-            else:
-                # Stereo audio - process each channel
-                channels = []
-                for ch in range(data.shape[1]):
-                    resampled = librosa.resample(data[:, ch], orig_sr=orig_sr, target_sr=target_sr)
-                    channels.append(resampled)
-                return np.column_stack(channels).astype(np.float32)
-        except Exception as e:
-            logger.debug("Resample: librosa failed: %s, falling back to interpolation", e)
-
-    # Fallback: scipy resample (still better than linear interpolation)
-    try:
-        from scipy import signal
-
-        ratio = target_sr / orig_sr
-        new_length = int(len(data) * ratio)
-        if data.ndim == 1:
-            resampled: np.ndarray = signal.resample(data, new_length)  # type: ignore[assignment]
-            return resampled.astype(np.float32)
-        else:
-            resampled = signal.resample(data, new_length, axis=0)  # type: ignore[assignment]
-            return resampled.astype(np.float32)
-    except ImportError:
-        pass
-
-    # Last resort: linear interpolation (low quality but always works)
-    logger.debug("Resample: using linear interpolation fallback (low quality)")
+    # Pure numpy linear interpolation - guaranteed fast, no parallelization issues
     ratio = target_sr / orig_sr
     new_length = int(len(data) * ratio)
     old_indices = np.arange(len(data))
@@ -464,7 +529,10 @@ class AudioMixer:
         # PTT (Push-to-Talk) settings
         self.ptt_key: Optional[str] = None
         self.ptt_active: bool = False
-        self._ptt_lock = threading.Lock()
+        self._cached_ptt_vk: Optional[int] = None  # Pre-cached VK code for keyboard keys
+        # PTT command queue - audio callback puts commands here, background thread executes
+        self._ptt_queue: queue.Queue = queue.Queue()
+        self._ptt_thread: Optional[threading.Thread] = None
         # PTT release debounce: wait N callback cycles after last sound finishes
         # At 48kHz with 1024 block size, each cycle is ~21ms
         # Discord has audio processing buffers, so we need ~300ms to ensure
@@ -476,6 +544,70 @@ class AudioMixer:
         self.monitor_enabled = False
         self.monitor_stream = None
         self._monitor_queue: queue.Queue = queue.Queue()  # Queue for monitor audio blocks
+
+        # Shutdown flag - signals background threads to abort
+        self._shutting_down = False
+
+        # Start PTT worker thread
+        self._start_ptt_thread()
+
+    def _start_ptt_thread(self):
+        """Start the background thread that processes PTT commands."""
+
+        def ptt_worker():
+            """Process PTT commands from queue in background thread."""
+            while not self._shutting_down:
+                try:
+                    # Wait for command with timeout so we can check shutdown flag
+                    cmd = self._ptt_queue.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+
+                if cmd == "press":
+                    self._do_ptt_press()
+                elif cmd == "release":
+                    self._do_ptt_release()
+                elif cmd == "force_release":
+                    self._do_ptt_release()
+                elif cmd == "stop":
+                    break
+
+        self._ptt_thread = threading.Thread(target=ptt_worker, daemon=True)
+        self._ptt_thread.start()
+
+    def _do_ptt_press(self):
+        """Actually press the PTT key. Called from PTT worker thread only."""
+        if not self.ptt_key or self.ptt_active:
+            return
+        try:
+            logger.debug("PTT pressing: %s", self.ptt_key)
+            if self.ptt_key.startswith("mouse"):
+                button = self.PTT_BUTTON_MAP.get(self.ptt_key, "x2")
+                _simulate_mouse_button(button, press=True)
+            elif self._cached_ptt_vk is not None:
+                _simulate_key_vk(self._cached_ptt_vk, press=True)
+            else:
+                logger.warning("No cached VK code for PTT key: %s", self.ptt_key)
+                return
+            self.ptt_active = True
+        except Exception as e:
+            logger.error("Failed to press PTT key: %s", e)
+
+    def _do_ptt_release(self):
+        """Actually release the PTT key. Called from PTT worker thread only."""
+        if not self.ptt_key or not self.ptt_active:
+            return
+        try:
+            if self.ptt_key.startswith("mouse"):
+                button = self.PTT_BUTTON_MAP.get(self.ptt_key, "x2")
+                _simulate_mouse_button(button, press=False)
+            elif self._cached_ptt_vk is not None:
+                _simulate_key_vk(self._cached_ptt_vk, press=False)
+            else:
+                return
+            self.ptt_active = False
+        except Exception as e:
+            logger.error("Failed to release PTT key: %s", e)
 
     def start(self):
         """Begin audio streams (separate input and output for compatibility)."""
@@ -508,20 +640,44 @@ class AudioMixer:
         self.output_stream.start()
 
     def stop(self):
-        """End audio streams."""
+        """End audio streams. Non-blocking - uses abort() for faster shutdown."""
+        self._shutting_down = True
         self.running = False
+
+        # CRITICAL: Release PTT key first to prevent Windows UI freeze
+        self._force_release_ptt()
+
+        # Use abort() instead of stop() for faster, non-blocking shutdown
         if self.input_stream:
-            self.input_stream.stop()
-            self.input_stream.close()
+            try:
+                self.input_stream.abort()
+                self.input_stream.close()
+            except Exception:
+                pass
             self.input_stream = None
         if self.output_stream:
-            self.output_stream.stop()
-            self.output_stream.close()
+            try:
+                self.output_stream.abort()
+                self.output_stream.close()
+            except Exception:
+                pass
             self.output_stream = None
         if self.monitor_stream:
-            self.monitor_stream.stop()
-            self.monitor_stream.close()
+            try:
+                self.monitor_stream.abort()
+                self.monitor_stream.close()
+            except Exception:
+                pass
             self.monitor_stream = None
+
+        # Clear any pending sounds
+        with self.lock:
+            self.currently_playing.clear()
+        while not self.sound_queue.empty():
+            try:
+                self.sound_queue.get_nowait()
+            except queue.Empty:
+                break
 
     def set_monitor_enabled(self, enabled: bool):
         """Enable or disable local speaker monitoring."""
@@ -739,60 +895,50 @@ class AudioMixer:
     ) -> float:
         """Queue a sound for playback. Uses cache if available for better performance.
 
-        IMPORTANT: When speed != 1.0, processing happens in a background thread to
-        prevent UI freeze. The sound will start after processing completes.
-
         Args:
             file_path: Path to the audio file
             volume: Playback volume (0.0 to 1.5)
             speed: Playback speed (0.5 to 2.0, where 1.0 is normal)
-            preserve_pitch: If True, use time-stretch to preserve pitch; if False, simple resample
+            preserve_pitch: If True and speed != 1.0, use librosa time-stretch (preserves pitch)
             sound_id: Optional identifier for this sound (used to stop individual sounds)
             loop: If True, sound will loop
             loop_count: Number of times to loop (0 = infinite)
             loop_delay: Delay between loops in seconds
 
-        Returns estimated duration in seconds (actual may vary if speed processing is async).
+        Returns duration in seconds (0.0 if failed).
         """
+        # Abort if shutting down
+        if self._shutting_down:
+            return 0.0
+
         # Clamp speed to valid range
         speed = max(0.5, min(2.0, speed))
 
         # Reset PTT release countdown immediately when a new sound is triggered
         self._ptt_release_countdown = 0
 
-        # If speed == 1.0, do it synchronously (fast path, no librosa needed)
-        if speed == 1.0:
-            return self._play_sound_sync(
-                file_path, volume, speed, preserve_pitch, sound_id,
-                loop, loop_count, loop_delay
-            )
-
-        # Speed != 1.0: Process in background thread to prevent UI freeze
-        # Press PTT now so Discord knows we're about to talk
-        self._press_ptt()
-
-        # Estimate duration from cached data (if available) for return value
-        estimated_duration = 0.0
-        if self.sound_cache:
-            data = self.sound_cache.get_sound_data(file_path)
-            if data is not None:
-                # Estimate: original duration / speed
-                estimated_duration = (len(data) / self.sample_rate) / speed
-
-        # Process in background thread
-        def process_and_queue():
-            try:
+        # If speed change with librosa is needed, run in background thread to avoid UI freeze
+        if speed != 1.0 and preserve_pitch and LIBROSA_AVAILABLE:
+            # Run processing in background thread
+            def process_and_play():
                 self._play_sound_sync(
-                    file_path, volume, speed, preserve_pitch, sound_id,
-                    loop, loop_count, loop_delay, skip_ptt=True  # PTT already pressed
+                    file_path, volume, speed, preserve_pitch, sound_id, loop, loop_count, loop_delay
                 )
-            except Exception as e:
-                logger.error("Background sound processing failed: %s", e)
 
-        thread = threading.Thread(target=process_and_queue, daemon=True)
-        thread.start()
+            thread = threading.Thread(target=process_and_play, daemon=True)
+            thread.start()
 
-        return estimated_duration
+            # Return estimated duration (actual may differ slightly after time-stretch)
+            if self.sound_cache:
+                data = self.sound_cache.get_sound_data(file_path)
+                if data is not None:
+                    return len(data) / self.sample_rate / speed
+            return 1.0  # Fallback estimate
+
+        # For normal speed or simple resample, run synchronously (fast)
+        return self._play_sound_sync(
+            file_path, volume, speed, preserve_pitch, sound_id, loop, loop_count, loop_delay
+        )
 
     def _play_sound_sync(
         self,
@@ -811,12 +957,16 @@ class AudioMixer:
         Internal method called by play_sound. For speed != 1.0, this is called
         from a background thread to prevent UI freeze.
         """
+        # Abort if shutting down
+        if self._shutting_down:
+            return 0.0
+
         try:
             # Use cached audio data if available (much faster - no disk I/O)
             if self.sound_cache:
                 data = self.sound_cache.get_sound_data(file_path)
                 if data is not None:
-                    # Apply speed adjustment (this is the slow part with librosa)
+                    # Apply speed adjustment (uses librosa time-stretch if preserve_pitch=True)
                     if speed != 1.0:
                         data = self._apply_speed(data, speed, preserve_pitch)
                     # Apply fade-out to prevent abrupt cutoff (skip for looping sounds)
@@ -866,8 +1016,10 @@ class AudioMixer:
             if sr != self.sample_rate:
                 data = _resample_audio(data, sr, self.sample_rate)
 
-            # Apply speed adjustment
+            # Apply speed adjustment (fast - simple resampling)
             if speed != 1.0:
+                if self._shutting_down:
+                    return 0.0
                 data = self._apply_speed(data, speed, preserve_pitch)
 
             # Apply fade-out to prevent abrupt cutoff (skip for looping sounds)
@@ -932,31 +1084,26 @@ class AudioMixer:
         if speed == 1.0:
             return data
 
+        # Use librosa time_stretch for pitch preservation if available and requested
         if preserve_pitch and LIBROSA_AVAILABLE:
             try:
-                logger.debug("Speed: attempting librosa time_stretch")
-                if data.ndim == 1:
-                    result = librosa.effects.time_stretch(data, rate=speed)
-                else:
-                    logger.debug("Speed: processing %d stereo channels", data.shape[1])
-                    channels = []
-                    for ch in range(data.shape[1]):
-                        stretched = librosa.effects.time_stretch(data[:, ch], rate=speed)
-                        channels.append(stretched)
-                    result = np.column_stack(channels)
-                logger.debug("Speed: librosa SUCCESS: %d -> %d samples", len(data), len(result))
-                return result.astype(np.float32)
+                # Serialize librosa calls to prevent CPU saturation
+                with _librosa_lock:
+                    # Convert stereo to mono for librosa, then back
+                    if data.ndim == 2:
+                        # Process each channel separately
+                        left = librosa.effects.time_stretch(data[:, 0], rate=speed)
+                        right = librosa.effects.time_stretch(data[:, 1], rate=speed)
+                        result = np.column_stack([left, right])
+                    else:
+                        result = librosa.effects.time_stretch(data, rate=speed)
+                    return result.astype(np.float32)
             except Exception as e:
-                logger.debug("Speed: librosa FAILED: %s", e)
-        else:
-            logger.debug(
-                "Speed: using simple resample (preserve_pitch=%s, LIBROSA=%s)",
-                preserve_pitch,
-                LIBROSA_AVAILABLE,
-            )
+                logger.warning("librosa time_stretch failed, falling back to resample: %s", e)
 
-        # Resampling with pitch change (chipmunk/deep effect)
-        # Calculate the new sample rate that produces the desired speed effect
+        # Fallback: simple resampling (changes pitch - chipmunk/deep voice effect)
+        # Speed > 1.0 = faster + higher pitch
+        # Speed < 1.0 = slower + lower pitch
         new_sr = int(self.sample_rate * speed)
         result = _resample_audio(data, new_sr, self.sample_rate)
         return result.astype(np.float32)
@@ -1108,19 +1255,20 @@ class AudioMixer:
     def set_sound_speed(self, sound_id: str, speed: float, preserve_pitch: bool = True):
         """Change the playback speed of a currently playing sound.
 
-        This re-processes the remaining audio data at the new speed.
-        IMPORTANT: Heavy processing done OUTSIDE lock to prevent audio callback deadlock.
+        Re-processes the audio data at the new speed.
 
         Args:
             sound_id: The identifier of the sound
             speed: New speed (0.5 to 2.0)
-            preserve_pitch: Whether to preserve pitch when changing speed
+            preserve_pitch: If True and librosa available, preserves pitch
         """
+        if self._shutting_down:
+            return
+
         speed = max(0.5, min(2.0, speed))
 
-        # Step 1: Get needed info with a QUICK lock (don't hold lock during processing)
+        # Get sound info
         file_path = None
-        old_speed = 1.0
         old_pos = 0
         old_total = 0
         is_looping = False
@@ -1129,54 +1277,39 @@ class AudioMixer:
             for sound in self.currently_playing:
                 if sound.get("sound_id") == sound_id:
                     file_path = sound.get("file_path")
-                    old_speed = sound.get("speed", 1.0)
                     old_pos = sound.get("position", 0)
                     old_total = len(sound.get("data", []))
                     is_looping = sound.get("loop", False)
                     break
 
         if not file_path or not self.sound_cache:
-            logger.warning("Cannot change speed: no file_path or cache")
             return
 
         original_data = self.sound_cache.get_sound_data(file_path)
         if original_data is None:
-            logger.warning("Cannot change speed: sound not in cache")
             return
 
-        # Step 2: Do expensive processing OUTSIDE lock (prevents audio callback deadlock)
-        try:
-            if speed != 1.0:
-                new_data = self._apply_speed(original_data, speed, preserve_pitch)
-            else:
-                new_data = original_data.copy()
+        # Apply speed (uses librosa time-stretch if preserve_pitch=True and available)
+        if speed != 1.0:
+            new_data = self._apply_speed(original_data, speed, preserve_pitch)
+        else:
+            new_data = original_data.copy()
 
-            # Apply fade-out for non-looping sounds
-            if not is_looping:
-                new_data = _apply_fade_out(new_data, self.sample_rate)
-        except Exception as e:
-            logger.error("Failed to apply speed change: %s", e)
-            return
+        # Apply fade-out for non-looping sounds
+        if not is_looping:
+            new_data = _apply_fade_out(new_data, self.sample_rate)
 
-        # Step 3: Quick lock to swap in the new data
+        # Calculate new position based on progress ratio
         progress_ratio = old_pos / old_total if old_total > 0 else 0.0
         new_pos = int(progress_ratio * len(new_data))
 
+        # Update sound data
         with self.lock:
             for sound in self.currently_playing:
                 if sound.get("sound_id") == sound_id:
                     sound["data"] = new_data
                     sound["position"] = new_pos
                     sound["speed"] = speed
-                    sound["preserve_pitch"] = preserve_pitch
-                    logger.debug(
-                        "Changed speed for %s: %.2f -> %.2f (pos: %d -> %d)",
-                        sound_id,
-                        old_speed,
-                        speed,
-                        old_pos,
-                        new_pos,
-                    )
                     break
 
     def get_playing_sounds(self) -> List[Dict]:
@@ -1217,9 +1350,22 @@ class AudioMixer:
         return result
 
     def set_ptt_key(self, key: Optional[str]):
-        """Set the Push-to-Talk key for Discord integration."""
+        """Set the Push-to-Talk key for Discord integration.
+
+        Caches the VK code immediately so we never touch keyboard library during playback.
+        """
         self.ptt_key = key if key and key.strip() else None
-        logger.debug("PTT key set to: %s", self.ptt_key)
+
+        # Pre-cache the VK code NOW, not during playback
+        # This is the only place we touch the keyboard library for VK lookup
+        if self.ptt_key and not self.ptt_key.startswith("mouse"):
+            self._cached_ptt_vk = _get_vk_code(self.ptt_key)
+            if self._cached_ptt_vk is None:
+                logger.warning("Could not get VK code for PTT key: %s", self.ptt_key)
+        else:
+            self._cached_ptt_vk = None
+
+        logger.debug("PTT key set to: %s (VK: %s)", self.ptt_key, self._cached_ptt_vk)
 
     # mouse button name → Windows API button name (matches Discord's labeling)
     PTT_BUTTON_MAP = {
@@ -1231,43 +1377,51 @@ class AudioMixer:
     }
 
     def _press_ptt(self):
-        """Press the PTT key if configured and not already pressed."""
-        if not self.ptt_key:
+        """Queue a PTT press command. Executes in background thread.
+
+        NEVER blocks - just puts command in queue. Safe to call from any thread.
+        """
+        if not self.ptt_key or self.ptt_active:
             return
-
-        with self._ptt_lock:
-            if not self.ptt_active:
-                try:
-                    logger.debug("PTT pressing: %s", self.ptt_key)
-                    if self.ptt_key.startswith("mouse"):
-                        button = self.PTT_BUTTON_MAP.get(self.ptt_key, "x2")
-                        _simulate_mouse_button(button, press=True)
-                    else:
-                        import keyboard
-
-                        keyboard.press(self.ptt_key)
-                    self.ptt_active = True
-                except Exception as e:
-                    logger.error("Failed to press PTT key: %s", e)
+        try:
+            self._ptt_queue.put_nowait("press")
+        except queue.Full:
+            pass
 
     def _release_ptt(self):
-        """Release the PTT key if it's currently pressed."""
+        """Queue a PTT release command. Executes in background thread.
+
+        NEVER blocks - just puts command in queue. Safe to call from any thread.
+        """
+        if not self.ptt_key or not self.ptt_active:
+            return
+        try:
+            self._ptt_queue.put_nowait("release")
+        except queue.Full:
+            pass
+
+    def _force_release_ptt(self):
+        """Force release PTT key unconditionally. Used during shutdown.
+
+        This one executes IMMEDIATELY (not queued) since it's for shutdown.
+        """
         if not self.ptt_key:
             return
-
-        with self._ptt_lock:
-            if self.ptt_active:
-                try:
-                    if self.ptt_key.startswith("mouse"):
-                        button = self.PTT_BUTTON_MAP.get(self.ptt_key, "x2")
-                        _simulate_mouse_button(button, press=False)
-                    else:
-                        import keyboard
-
-                        keyboard.release(self.ptt_key)
-                    self.ptt_active = False
-                except Exception as e:
-                    logger.error("Failed to release PTT key: %s", e)
+        # Signal the worker thread to stop
+        try:
+            self._ptt_queue.put_nowait("stop")
+        except queue.Full:
+            pass
+        # Also directly release to ensure key isn't stuck
+        try:
+            if self.ptt_key.startswith("mouse"):
+                button = self.PTT_BUTTON_MAP.get(self.ptt_key, "x2")
+                _simulate_mouse_button(button, press=False)
+            elif self._cached_ptt_vk is not None:
+                _simulate_key_vk(self._cached_ptt_vk, press=False)
+            self.ptt_active = False
+        except Exception:
+            pass  # Ignore errors during shutdown
 
     def _check_ptt_release(self):
         """Check if all sounds finished and release PTT if so."""
