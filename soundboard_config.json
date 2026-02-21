@@ -371,7 +371,7 @@
   "ptt_enabled": true,
   "ptt_key": "mouse4",
   "input_device": "5: Microphone (HyperX Quadcast)",
-  "output_device": "16: CABLE In 16ch (VB-Audio Virtual",
+  "output_device": "15: CABLE In 16ch (VB-Audio Virtual",
   "auto_start": true,
   "monitor_enabled": true,
   "now_playing_visible": true,

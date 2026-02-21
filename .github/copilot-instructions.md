@@ -1125,6 +1125,8 @@ When asked to add a feature:
 
 | Issue | Cause | Fix |
 |-------|-------|-----|
+| Windows UI freezes when playing sounds | `play_sound()` calls `_apply_speed()` (librosa) on UI thread | For speed != 1.0, spawn background thread to process audio, return immediately with estimated duration |
+| System-wide audio freeze when changing speed | `set_sound_speed()` held `self.lock` during slow librosa processing, blocking audio callback | Split into 3 steps: quick lock to get data → release lock → process outside lock → quick lock to update |
 | Audio sounds distorted/poor quality in Discord | Naive linear interpolation resampling causes aliasing and distortion when audio files have different sample rates than 48kHz | Use `librosa.resample()` for high-quality resampling with anti-aliasing; added `_resample_audio()` helper function |
 | Audio sounds "cut off" in Discord | PTT releasing too early + abrupt sound endings | Increased PTT debounce delay from 5 to 15 cycles (~300ms); added `_apply_fade_out()` to apply 30ms fade at end of sounds |
 | OGG files fail with "malformed" error | `soundfile` claims OGG support but fails on some files | Use shared `read_audio_file()` function with pydub fallback. Don't include `.ogg` in soundfile_formats list. |
@@ -1173,3 +1175,10 @@ When asked to add a feature:
 6. **Tkinter event handling** - return `"break"` to stop event propagation; use `winfo_containing()` to check actual widget under cursor on release; track click state with flags to prevent stray events
 7. **ALWAYS use venv Python** - run with `run.bat` or `.venv\Scripts\python.exe main.py`, never bare `python main.py`
 8. **PyQt6 + Tkinter coexistence** - PyQt6 dialogs must run as subprocess to avoid event loop conflicts
+9. **NEVER do CPU-intensive work on the UI thread** - Operations like librosa time-stretch can take 1-2+ seconds and FREEZE the entire Windows UI. Always use background threads for:
+   - librosa.effects.time_stretch (speed changes with pitch preservation)
+   - Any audio processing that takes > 50ms
+   - File I/O on large files
+   - Network requests
+10. **NEVER hold threading.Lock during slow operations** - If a lock protects shared state used by audio callbacks, holding it during slow operations (librosa, disk I/O) will block the audio thread and cause system-wide audio freeze. Pattern: grab data under lock → release lock → process → re-acquire lock to update
+11. **Always fix Pylance errors before finishing** - Use `# type: ignore[attr-defined]` for dynamic attributes, `Optional[T]` for nullable parameters, explicit casts for scipy/librosa returns. Never leave red squiggles.

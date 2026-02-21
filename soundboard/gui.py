@@ -131,7 +131,9 @@ class NowPlayingPanel:
         # Widget references (initialized in _create_panel)
         self.frame: Optional[ctk.CTkFrame] = None
         self.items_frame: Optional[ctk.CTkFrame] = None
-        self.sound_items: Dict[str, Dict[str, Any]] = {}  # sound_id -> {frame, progress, label, etc.}
+        self.sound_items: Dict[str, Dict[str, Any]] = (
+            {}
+        )  # sound_id -> {frame, progress, label, etc.}
 
         self._create_panel()
 

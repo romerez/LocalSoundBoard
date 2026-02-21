@@ -74,8 +74,8 @@ try:
     # Configure pydub to use ffmpeg from imageio-ffmpeg if available
     if FFMPEG_PATH:
         AudioSegment.converter = FFMPEG_PATH
-        AudioSegment.ffmpeg = FFMPEG_PATH
-        AudioSegment.ffprobe = FFMPEG_PATH.replace("ffmpeg", "ffprobe")
+        AudioSegment.ffmpeg = FFMPEG_PATH  # type: ignore[attr-defined]
+        AudioSegment.ffprobe = FFMPEG_PATH.replace("ffmpeg", "ffprobe")  # type: ignore[attr-defined]
     PYDUB_AVAILABLE = True
 except ImportError:
     PYDUB_AVAILABLE = False
@@ -86,7 +86,7 @@ try:
     import librosa
 
     LIBROSA_AVAILABLE = True
-    logger.debug("librosa imported successfully: %s", librosa.__version__)
+    logger.debug("librosa imported successfully: %s", getattr(librosa, "__version__", "unknown"))
 except Exception as e:
     LIBROSA_AVAILABLE = False
     logger.debug("librosa import FAILED: %s: %s", type(e).__name__, e)
@@ -198,9 +198,11 @@ def _resample_audio(data: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarra
         ratio = target_sr / orig_sr
         new_length = int(len(data) * ratio)
         if data.ndim == 1:
-            return signal.resample(data, new_length).astype(np.float32)
+            resampled: np.ndarray = signal.resample(data, new_length)  # type: ignore[assignment]
+            return resampled.astype(np.float32)
         else:
-            return signal.resample(data, new_length, axis=0).astype(np.float32)
+            resampled = signal.resample(data, new_length, axis=0)  # type: ignore[assignment]
+            return resampled.astype(np.float32)
     except ImportError:
         pass
 
@@ -737,6 +739,9 @@ class AudioMixer:
     ) -> float:
         """Queue a sound for playback. Uses cache if available for better performance.
 
+        IMPORTANT: When speed != 1.0, processing happens in a background thread to
+        prevent UI freeze. The sound will start after processing completes.
+
         Args:
             file_path: Path to the audio file
             volume: Playback volume (0.0 to 1.5)
@@ -747,21 +752,71 @@ class AudioMixer:
             loop_count: Number of times to loop (0 = infinite)
             loop_delay: Delay between loops in seconds
 
-        Returns the duration of the sound in seconds (0.0 if failed to play).
+        Returns estimated duration in seconds (actual may vary if speed processing is async).
+        """
+        # Clamp speed to valid range
+        speed = max(0.5, min(2.0, speed))
+
+        # Reset PTT release countdown immediately when a new sound is triggered
+        self._ptt_release_countdown = 0
+
+        # If speed == 1.0, do it synchronously (fast path, no librosa needed)
+        if speed == 1.0:
+            return self._play_sound_sync(
+                file_path, volume, speed, preserve_pitch, sound_id,
+                loop, loop_count, loop_delay
+            )
+
+        # Speed != 1.0: Process in background thread to prevent UI freeze
+        # Press PTT now so Discord knows we're about to talk
+        self._press_ptt()
+
+        # Estimate duration from cached data (if available) for return value
+        estimated_duration = 0.0
+        if self.sound_cache:
+            data = self.sound_cache.get_sound_data(file_path)
+            if data is not None:
+                # Estimate: original duration / speed
+                estimated_duration = (len(data) / self.sample_rate) / speed
+
+        # Process in background thread
+        def process_and_queue():
+            try:
+                self._play_sound_sync(
+                    file_path, volume, speed, preserve_pitch, sound_id,
+                    loop, loop_count, loop_delay, skip_ptt=True  # PTT already pressed
+                )
+            except Exception as e:
+                logger.error("Background sound processing failed: %s", e)
+
+        thread = threading.Thread(target=process_and_queue, daemon=True)
+        thread.start()
+
+        return estimated_duration
+
+    def _play_sound_sync(
+        self,
+        file_path: str,
+        volume: float,
+        speed: float,
+        preserve_pitch: bool,
+        sound_id: Optional[str],
+        loop: bool,
+        loop_count: int,
+        loop_delay: float,
+        skip_ptt: bool = False,
+    ) -> float:
+        """Synchronous sound playback - does all processing on calling thread.
+
+        Internal method called by play_sound. For speed != 1.0, this is called
+        from a background thread to prevent UI freeze.
         """
         try:
-            # Reset PTT release countdown immediately when a new sound is triggered
-            # This prevents PTT from releasing while we're loading/queueing
-            self._ptt_release_countdown = 0
-
-            # Clamp speed to valid range
-            speed = max(0.5, min(2.0, speed))
-
             # Use cached audio data if available (much faster - no disk I/O)
             if self.sound_cache:
                 data = self.sound_cache.get_sound_data(file_path)
                 if data is not None:
-                    # Apply speed adjustment
+                    # Apply speed adjustment (this is the slow part with librosa)
                     if speed != 1.0:
                         data = self._apply_speed(data, speed, preserve_pitch)
                     # Apply fade-out to prevent abrupt cutoff (skip for looping sounds)
@@ -785,9 +840,11 @@ class AudioMixer:
                         "speed": speed,
                         "preserve_pitch": preserve_pitch,
                         "name": Path(file_path).stem if file_path else "Unknown",
+                        "paused": False,
                     }
                     self.sound_queue.put(sound_entry)
-                    self._press_ptt()
+                    if not skip_ptt:
+                        self._press_ptt()
                     logger.debug(
                         "Queued from cache: %d samples (speed=%s, preserve_pitch=%s, volume=%s, id=%s, loop=%s)",
                         len(data),
@@ -842,9 +899,11 @@ class AudioMixer:
                 "speed": speed,
                 "preserve_pitch": preserve_pitch,
                 "name": Path(file_path).stem if file_path else "Unknown",
+                "paused": False,
             }
             self.sound_queue.put(sound_entry)
-            self._press_ptt()
+            if not skip_ptt:
+                self._press_ptt()
             return len(data) / self.sample_rate
         except Exception as e:
             logger.error("Error loading sound: %s", e)
@@ -1026,7 +1085,7 @@ class AudioMixer:
                     logger.debug("Resumed sound: %s", sound_id)
                     break
 
-    def toggle_sound_loop(self, sound_id: str, loop: bool = None):
+    def toggle_sound_loop(self, sound_id: str, loop: Optional[bool] = None):
         """Toggle or set the loop state of a playing sound.
 
         Args:
@@ -1050,6 +1109,7 @@ class AudioMixer:
         """Change the playback speed of a currently playing sound.
 
         This re-processes the remaining audio data at the new speed.
+        IMPORTANT: Heavy processing done OUTSIDE lock to prevent audio callback deadlock.
 
         Args:
             sound_id: The identifier of the sound
@@ -1058,51 +1118,57 @@ class AudioMixer:
         """
         speed = max(0.5, min(2.0, speed))
 
+        # Step 1: Get needed info with a QUICK lock (don't hold lock during processing)
+        file_path = None
+        old_speed = 1.0
+        old_pos = 0
+        old_total = 0
+        is_looping = False
+
         with self.lock:
             for sound in self.currently_playing:
                 if sound.get("sound_id") == sound_id:
-                    # Get the original data from cache if possible
                     file_path = sound.get("file_path")
-                    if not file_path or not self.sound_cache:
-                        logger.warning("Cannot change speed: no file_path or cache")
-                        return
-
-                    original_data = self.sound_cache.get_sound_data(file_path)
-                    if original_data is None:
-                        logger.warning("Cannot change speed: sound not in cache")
-                        return
-
-                    # Calculate where we are in the original audio
                     old_speed = sound.get("speed", 1.0)
-                    old_data = sound["data"]
-                    old_pos = sound["position"]
+                    old_pos = sound.get("position", 0)
+                    old_total = len(sound.get("data", []))
+                    is_looping = sound.get("loop", False)
+                    break
 
-                    # Estimate position ratio in original audio
-                    old_total = len(old_data)
-                    if old_total > 0:
-                        progress_ratio = old_pos / old_total
-                    else:
-                        progress_ratio = 0.0
+        if not file_path or not self.sound_cache:
+            logger.warning("Cannot change speed: no file_path or cache")
+            return
 
-                    # Re-process original audio at new speed
-                    if speed != 1.0:
-                        new_data = self._apply_speed(original_data, speed, preserve_pitch)
-                    else:
-                        new_data = original_data.copy()
+        original_data = self.sound_cache.get_sound_data(file_path)
+        if original_data is None:
+            logger.warning("Cannot change speed: sound not in cache")
+            return
 
-                    # Apply fade-out for non-looping sounds
-                    if not sound.get("loop", False):
-                        new_data = _apply_fade_out(new_data, self.sample_rate)
+        # Step 2: Do expensive processing OUTSIDE lock (prevents audio callback deadlock)
+        try:
+            if speed != 1.0:
+                new_data = self._apply_speed(original_data, speed, preserve_pitch)
+            else:
+                new_data = original_data.copy()
 
-                    # Calculate new position based on progress ratio
-                    new_pos = int(progress_ratio * len(new_data))
+            # Apply fade-out for non-looping sounds
+            if not is_looping:
+                new_data = _apply_fade_out(new_data, self.sample_rate)
+        except Exception as e:
+            logger.error("Failed to apply speed change: %s", e)
+            return
 
-                    # Update sound entry
+        # Step 3: Quick lock to swap in the new data
+        progress_ratio = old_pos / old_total if old_total > 0 else 0.0
+        new_pos = int(progress_ratio * len(new_data))
+
+        with self.lock:
+            for sound in self.currently_playing:
+                if sound.get("sound_id") == sound_id:
                     sound["data"] = new_data
                     sound["position"] = new_pos
                     sound["speed"] = speed
                     sound["preserve_pitch"] = preserve_pitch
-
                     logger.debug(
                         "Changed speed for %s: %.2f -> %.2f (pos: %d -> %d)",
                         sound_id,
