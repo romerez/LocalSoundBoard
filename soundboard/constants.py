@@ -389,6 +389,7 @@ SUPPORTED_IMAGE_FORMATS = (
     "*.png",
     "*.jpg",
     "*.jpeg",
+    "*.jfif",
     "*.gif",
     "*.bmp",
     "*.ico",

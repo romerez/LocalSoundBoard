@@ -83,9 +83,14 @@ def _get_vk_code(key: str) -> Optional[int]:
             from keyboard import _winkeyboard  # type: ignore[attr-defined]
 
             # Try to find the key in keyboard's internal tables
-            for vk, names in getattr(_winkeyboard, "official_virtual_keys", {}).items():
-                if key_lower in [n.lower() for n in names]:
-                    return vk
+            # Note: some "names" may contain non-strings (bools), so filter them
+            try:
+                for vk, names in getattr(_winkeyboard, "official_virtual_keys", {}).items():
+                    str_names = [n.lower() for n in names if isinstance(n, str)]
+                    if key_lower in str_names:
+                        return vk
+            except Exception:
+                pass  # Fall through to alternative method
 
         # Alternative: use key_to_scan_codes and convert
         scan_codes = keyboard.key_to_scan_codes(key_lower)

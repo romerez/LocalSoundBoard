@@ -1134,6 +1134,7 @@ When asked to add a feature:
 | OGG files fail with "malformed" error | `soundfile` claims OGG support but fails on some files | Use shared `read_audio_file()` function with pydub fallback. Don't include `.ogg` in soundfile_formats list. |
 | pydub can't load OGG/M4A/AAC | pydub requires ffmpeg binary which isn't bundled | Install `imageio-ffmpeg` (bundles ffmpeg), set `AudioSegment.converter` to `imageio_ffmpeg.get_ffmpeg_exe()` |
 | PTT releases too early | PTT released immediately when audio callback returns | Add debounce delay (15 callback cycles ~300ms) before releasing PTT |
+| PTT doesn't trigger Discord | `_get_vk_code()` fails silently when `keyboard._winkeyboard.official_virtual_keys` contains non-strings (bools), exception is caught but fallback path is skipped | Add `isinstance(n, str)` filter when iterating `official_virtual_keys`; wrap the loop in its own try/except so fallback `key_to_scan_codes` path still runs |
 | Sounds don't play with rapid clicks | Lock contention and duplicate cache lookups | Queue sound before taking locks, use single cache lookup |
 | Direct sf.read() fails for OGG | Multiple code paths used sf.read directly without fallback | Consolidated audio loading to shared `read_audio_file()` function in audio.py |
 

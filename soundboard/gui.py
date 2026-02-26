@@ -1740,7 +1740,7 @@ class SoundboardApp:
         num_slots = max(max_idx + 2, UI["total_slots"])
 
         SLOT_WIDTH = 180
-        SLOT_HEIGHT = 110
+        SLOT_HEIGHT = 120
         BOTTOM_HEIGHT = 32
 
         for i in range(num_slots):
@@ -1831,6 +1831,7 @@ class SoundboardApp:
                 corner_radius=UI["slot_corner_radius"],
                 anchor="center",
                 cursor="hand2",
+                compound="top",
                 command=lambda t=tab_idx, idx=i: self._on_slot_command_for_tab(t, idx),
             )
             btn.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=4, pady=(0, 0))
@@ -3480,7 +3481,7 @@ class SoundboardApp:
         except Exception as e:
             messagebox.showerror("Editor Error", f"Failed to open sound editor:\n{e}")
 
-    def _load_slot_image(self, image_path: str, size: tuple = (40, 40)) -> Optional[ctk.CTkImage]:
+    def _load_slot_image(self, image_path: str, size: tuple = (70, 55)) -> Optional[ctk.CTkImage]:
         """Load and resize an image for a slot button using CTkImage."""
         if not PIL_AVAILABLE:
             return None
@@ -3806,8 +3807,9 @@ class SoundboardApp:
                         def make_hotkey_handler(t: int, s: int):
                             def handler():
                                 self.root.after(0, lambda: self._play_slot_from_tab(t, s))
+
                             return handler
-                        
+
                         keyboard.add_hotkey(
                             slot.hotkey,
                             make_hotkey_handler(tab_idx, slot_idx),
