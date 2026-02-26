@@ -1024,87 +1024,40 @@ class SoundboardApp:
 
     def _create_tab_bar(self, parent):
         """Create the tab bar with horizontal scrolling for unlimited tabs."""
-        self.tab_bar_frame = ctk.CTkFrame(parent, fg_color="transparent", height=40)
-        self.tab_bar_frame.pack(fill=tk.X, pady=(0, 8))
+        # Main tab bar container
+        self.tab_bar_frame = ctk.CTkFrame(parent, fg_color=COLORS["bg_medium"], height=48, corner_radius=8)
+        self.tab_bar_frame.pack(fill=tk.X, pady=(0, 10), padx=4)
         self.tab_bar_frame.pack_propagate(False)
 
-        # Edit/Move mode button (left side)
+        # === LEFT SECTION: Edit mode ===
+        left_section = ctk.CTkFrame(self.tab_bar_frame, fg_color="transparent")
+        left_section.pack(side=tk.LEFT, padx=(8, 0), fill=tk.Y)
+
         self.edit_mode_btn = ctk.CTkButton(
-            self.tab_bar_frame,
+            left_section,
             text="↔ Move",
             command=self._toggle_edit_mode,
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
-            corner_radius=UI["button_corner_radius"],
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            corner_radius=6,
             height=32,
-            width=70,
+            width=65,
         )
-        self.edit_mode_btn.pack(side=tk.LEFT, padx=(0, 8))
+        self.edit_mode_btn.pack(side=tk.LEFT, pady=8)
 
-        # Now Playing toggle button (right side, before Stop All)
-        self.now_playing_btn = ctk.CTkButton(
-            self.tab_bar_frame,
-            text="🎵 Playing",
-            command=self._toggle_now_playing_panel,
-            fg_color=COLORS["bg_light"],
-            hover_color=COLORS["bg_lighter"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
-            corner_radius=UI["button_corner_radius"],
-            height=32,
-            width=90,
-        )
-        self.now_playing_btn.pack(side=tk.RIGHT, padx=(8, 0))
+        # === CENTER SECTION: Tabs navigation ===
+        center_section = ctk.CTkFrame(self.tab_bar_frame, fg_color="transparent")
+        center_section.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=8)
 
-        # Stop All button (right side)
-        self.stop_all_btn = ctk.CTkButton(
-            self.tab_bar_frame,
-            text="⏹ Stop All",
-            command=self._stop_all_sounds,
-            fg_color=COLORS["red"],
-            hover_color=COLORS["red_hover"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"], weight="bold"),
-            corner_radius=UI["button_corner_radius"],
-            height=32,
-            width=90,
-        )
-        self.stop_all_btn.pack(side=tk.RIGHT, padx=(8, 0))
-
-        # Add tab button (right side)
-        self.add_tab_btn = ctk.CTkButton(
-            self.tab_bar_frame,
-            text="+",
-            command=self._add_new_tab,
-            fg_color=COLORS["green"],
-            hover_color=COLORS["green_hover"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_lg"], weight="bold"),
-            corner_radius=UI["button_corner_radius"],
-            height=32,
-            width=36,
-        )
-        self.add_tab_btn.pack(side=tk.RIGHT, padx=(8, 0))
-
-        # Scroll buttons for tabs (hidden until needed)
+        # Scroll left button (hidden until needed)
         self.tab_scroll_left_btn = ctk.CTkButton(
-            self.tab_bar_frame,
+            center_section,
             text="◀",
             command=lambda: self._scroll_tabs(-1),
-            fg_color=COLORS["bg_medium"],
-            hover_color=COLORS["bg_light"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
-            corner_radius=4,
-            height=32,
-            width=24,
-        )
-        # Don't pack yet - will be shown when needed
-
-        self.tab_scroll_right_btn = ctk.CTkButton(
-            self.tab_bar_frame,
-            text="▶",
-            command=lambda: self._scroll_tabs(1),
-            fg_color=COLORS["bg_medium"],
-            hover_color=COLORS["bg_light"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_lighter"],
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
             corner_radius=4,
             height=32,
             width=24,
@@ -1113,20 +1066,84 @@ class SoundboardApp:
 
         # Scrollable canvas for tab buttons
         self.tabs_canvas = tk.Canvas(
-            self.tab_bar_frame,
-            bg=COLORS["bg_dark"],
+            center_section,
+            bg=COLORS["bg_medium"],
             highlightthickness=0,
-            height=36,
+            height=40,
         )
-        self.tabs_canvas.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 4))
+        self.tabs_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, pady=4)
+
+        # Scroll right button (hidden until needed)
+        self.tab_scroll_right_btn = ctk.CTkButton(
+            center_section,
+            text="▶",
+            command=lambda: self._scroll_tabs(1),
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_lighter"],
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            corner_radius=4,
+            height=32,
+            width=24,
+        )
+        # Don't pack yet - will be shown when needed
 
         # Frame inside canvas to hold tab buttons
         self.tabs_container = ctk.CTkFrame(
             self.tabs_canvas, fg_color="transparent", corner_radius=0
         )
         self.tabs_canvas_window = self.tabs_canvas.create_window(
-            (2, 2), window=self.tabs_container, anchor="nw"
+            (0, 4), window=self.tabs_container, anchor="nw"
         )
+
+        # === RIGHT SECTION: Actions ===
+        right_section = ctk.CTkFrame(self.tab_bar_frame, fg_color="transparent")
+        right_section.pack(side=tk.RIGHT, padx=(0, 8), fill=tk.Y)
+
+        # Add tab button
+        self.add_tab_btn = ctk.CTkButton(
+            right_section,
+            text="+",
+            command=self._add_new_tab,
+            fg_color=COLORS["green"],
+            hover_color=COLORS["green_hover"],
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_md"], weight="bold"),
+            corner_radius=6,
+            height=32,
+            width=34,
+        )
+        self.add_tab_btn.pack(side=tk.LEFT, padx=(0, 10), pady=8)
+
+        # Visual separator
+        separator = ctk.CTkFrame(right_section, fg_color=COLORS["bg_lighter"], width=2, height=28)
+        separator.pack(side=tk.LEFT, padx=(0, 10))
+
+        # Stop All button
+        self.stop_all_btn = ctk.CTkButton(
+            right_section,
+            text="⏹ Stop All",
+            command=self._stop_all_sounds,
+            fg_color=COLORS["red"],
+            hover_color=COLORS["red_hover"],
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"], weight="bold"),
+            corner_radius=6,
+            height=32,
+            width=80,
+        )
+        self.stop_all_btn.pack(side=tk.LEFT, padx=(0, 6), pady=8)
+
+        # Now Playing toggle button
+        self.now_playing_btn = ctk.CTkButton(
+            right_section,
+            text="🎵 Playing",
+            command=self._toggle_now_playing_panel,
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_lighter"],
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            corner_radius=6,
+            height=32,
+            width=80,
+        )
+        self.now_playing_btn.pack(side=tk.LEFT, pady=8)
 
         # Bind canvas resize to update scroll region
         self.tabs_canvas.bind("<Configure>", self._on_tabs_canvas_configure)
@@ -1213,15 +1230,14 @@ class SoundboardApp:
                     self.tabs_container,
                     text=display_name,
                     command=lambda i=idx: self._switch_tab(i),
-                    fg_color=COLORS["blurple"] if is_active else COLORS["bg_medium"],
+                    fg_color=COLORS["blurple"] if is_active else COLORS["bg_dark"],
                     hover_color=COLORS["blurple_hover"] if is_active else COLORS["bg_light"],
                     text_color=COLORS["text_primary"],
                     font=self._font_sm_bold if is_active else self._font_sm,
-                    corner_radius=UI["button_corner_radius"],
+                    corner_radius=6,
                     height=32,
                 )
-                # First tab gets left padding, all tabs get right padding
-                btn.pack(side=tk.LEFT, padx=(2 if idx == 0 else 0, 4))
+                btn.pack(side=tk.LEFT, padx=(0, 6))
                 btn.bind("<Button-3>", lambda e, i=idx: self._configure_tab(i))
                 self.tab_buttons.append(btn)
 
@@ -1239,7 +1255,7 @@ class SoundboardApp:
                     display_name = f"{tab.emoji} {tab.name}" if tab.emoji else tab.name
                     btn.configure(
                         text=display_name,
-                        fg_color=COLORS["blurple"] if is_active else COLORS["bg_medium"],
+                        fg_color=COLORS["blurple"] if is_active else COLORS["bg_dark"],
                         hover_color=COLORS["blurple_hover"] if is_active else COLORS["bg_light"],
                         font=self._font_sm_bold if is_active else self._font_sm,
                     )
