@@ -330,8 +330,6 @@ AUDIO = {
 
 UI = {
     "window_title": "Discord Soundboard",
-    "window_size": "800x700",
-    "window_size_with_panel": "1100x700",  # With side panel open
     "grid_columns": 4,
     "grid_rows": 3,
     "total_slots": 12,
@@ -339,7 +337,9 @@ UI = {
     "slot_corner_radius": 10,
     "button_corner_radius": 6,
     "padding": 12,
-    "slot_padding": 8,
+    "slot_padding": 4,
+    "slot_width": 180,
+    "slot_height": 152,  # 120 main + 32 bottom bar
     # Now Playing panel settings
     "now_playing_width": 280,
     "now_playing_item_height": 60,
