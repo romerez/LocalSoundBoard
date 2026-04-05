@@ -1294,6 +1294,69 @@ class AudioMixer:
                     logger.debug("Toggled loop for %s: %s", sound_id, sound["loop"])
                     break
 
+    def set_sound_volume(self, sound_id: str, volume: float):
+        """Set the volume of a currently playing sound.
+
+        Args:
+            sound_id: The identifier of the sound
+            volume: New volume (0.0 to 1.5)
+        """
+        volume = max(0.0, min(1.5, volume))
+        with self.lock:
+            for sound in self.currently_playing:
+                if sound.get("sound_id") == sound_id:
+                    sound["volume"] = volume
+                    logger.debug("Set volume for %s: %.2f", sound_id, volume)
+                    break
+
+    def restart_sound(self, sound_id: str):
+        """Restart a sound from the beginning.
+
+        Args:
+            sound_id: The identifier of the sound to restart
+        """
+        with self.lock:
+            for sound in self.currently_playing:
+                if sound.get("sound_id") == sound_id:
+                    sound["position"] = 0
+                    sound["in_delay"] = False
+                    sound["delay_position"] = 0
+                    sound["paused"] = False
+                    logger.debug("Restarted sound: %s", sound_id)
+                    break
+
+    def set_sound_loop_count(self, sound_id: str, count: int):
+        """Set the loop count for a currently playing sound.
+
+        Args:
+            sound_id: The identifier of the sound
+            count: Number of remaining loops (0 = stop after current, -1 = infinite)
+        """
+        with self.lock:
+            for sound in self.currently_playing:
+                if sound.get("sound_id") == sound_id:
+                    sound["loops_remaining"] = count
+                    if count != 0:
+                        sound["loop"] = True
+                    logger.debug("Set loop count for %s: %d", sound_id, count)
+                    break
+
+    def set_sound_loop_delay(self, sound_id: str, delay: float):
+        """Set the delay between loops for a currently playing sound.
+
+        Args:
+            sound_id: The identifier of the sound
+            delay: Delay in seconds between loops
+        """
+        delay = max(0.0, min(10.0, delay))
+        with self.lock:
+            for sound in self.currently_playing:
+                if sound.get("sound_id") == sound_id:
+                    sound["loop_delay"] = delay
+                    sound["loop_delay_samples"] = int(delay * self.sample_rate)
+                    logger.debug("Set loop delay for %s: %.2f", sound_id, delay)
+                    break
+
     def set_sound_speed(self, sound_id: str, speed: float, preserve_pitch: bool = True):
         """Change the playback speed of a currently playing sound.
 
@@ -1363,10 +1426,14 @@ class AudioMixer:
             - progress: Progress ratio (0.0-1.0)
             - volume: Volume level
             - loop: Whether looping
+            - loop_count: Original loop count setting
             - loops_remaining: Remaining loops (-1 for infinite)
+            - loop_delay: Delay between loops in seconds
             - in_delay: Whether in loop delay phase
             - paused: Whether sound is paused
             - speed: Current playback speed
+            - elapsed_seconds: Elapsed time in seconds
+            - total_seconds: Total duration in seconds
         """
         result = []
         with self.lock:
@@ -1375,6 +1442,9 @@ class AudioMixer:
                 pos = sound.get("position", 0)
                 progress = pos / data_len if data_len > 0 else 0.0
 
+                total_seconds = data_len / self.sample_rate if data_len > 0 else 0.0
+                elapsed_seconds = pos / self.sample_rate if data_len > 0 else 0.0
+
                 result.append(
                     {
                         "sound_id": sound.get("sound_id"),
@@ -1382,11 +1452,15 @@ class AudioMixer:
                         "progress": progress,
                         "volume": sound.get("volume", 1.0),
                         "loop": sound.get("loop", False),
+                        "loop_count": sound.get("loop_count", 0),
                         "loops_remaining": sound.get("loops_remaining", 0),
+                        "loop_delay": sound.get("loop_delay", 0.0),
                         "in_delay": sound.get("in_delay", False),
                         "paused": sound.get("paused", False),
                         "speed": sound.get("speed", 1.0),
                         "file_path": sound.get("file_path"),
+                        "elapsed_seconds": elapsed_seconds,
+                        "total_seconds": total_seconds,
                     }
                 )
         return result

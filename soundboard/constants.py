@@ -340,9 +340,9 @@ UI = {
     "slot_padding": 4,
     "slot_width": 180,
     "slot_height": 152,  # 120 main + 32 bottom bar
-    # Now Playing panel settings
-    "now_playing_width": 280,
-    "now_playing_item_height": 60,
+    # Now Playing / DJ Looper panel settings
+    "now_playing_width": 360,
+    "now_playing_item_height": 140,
 }
 
 

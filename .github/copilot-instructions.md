@@ -342,10 +342,19 @@ Example: `airhorn_8f3a2b1c.mp3`
 - [x] Pitch preservation option for speed changes (uses librosa time-stretch)
 - [x] Modern UI with CustomTkinter (rounded corners, modern styling)
 - [x] Looping sounds option (configurable loop count and delay between loops)
-- [x] Now Playing side panel (shows currently playing sounds with progress)
+- [x] DJ Looper side panel (full DJ controls for playing sounds)
 - [x] Loop indicator (🔁) on slot buttons for looping sounds
-- [x] Per-sound stop button in Now Playing panel
+- [x] Per-sound stop button in DJ Looper panel (prominent)
 - [x] Configurable panel position (left or right side)
+- [x] Live volume slider per sound in DJ Looper panel
+- [x] Live speed slider per sound with reset button
+- [x] Volume/speed reset buttons in DJ Looper panel
+- [x] Elapsed time / total duration display per sound
+- [x] Colored state indicator bar (orange=playing, yellow=delay, gray=paused)
+- [x] Restart/replay button per sound
+- [x] Loop count presets (∞, 2, 5, 10) in DJ Looper panel
+- [x] Loop delay slider (0-10s) adjustable live
+- [x] Dynamic loop controls (show/hide based on loop state)
 
 ---
 
@@ -542,7 +551,17 @@ AudioMixer(
 | `start` | `()` | `None` | Begin audio streams (input + output) |
 | `stop` | `()` | `None` | Stop all audio streams |
 | `play_sound` | `(file_path, volume, speed, preserve_pitch)` | `float` | Queue sound for playback, returns duration |
+| `stop_sound` | `(sound_id: str)` | `None` | Stop a specific sound by ID |
 | `stop_all_sounds` | `()` | `None` | Clear queue and stop all playing sounds |
+| `pause_sound` | `(sound_id: str)` | `None` | Pause a specific sound |
+| `resume_sound` | `(sound_id: str)` | `None` | Resume a paused sound |
+| `toggle_sound_loop` | `(sound_id, loop=None)` | `None` | Toggle or set loop state |
+| `set_sound_volume` | `(sound_id: str, volume: float)` | `None` | Set volume of playing sound (0.0-1.5) |
+| `set_sound_speed` | `(sound_id, speed, preserve_pitch)` | `None` | Change playback speed with re-processing |
+| `set_sound_loop_count` | `(sound_id: str, count: int)` | `None` | Set remaining loop count (-1=infinite) |
+| `set_sound_loop_delay` | `(sound_id: str, delay: float)` | `None` | Set delay between loops (0-10s) |
+| `restart_sound` | `(sound_id: str)` | `None` | Restart sound from beginning |
+| `get_playing_sounds` | `()` | `List[Dict]` | Get snapshot of playing sounds for UI |
 | `set_ptt_key` | `(key: Optional[str])` | `None` | Set Push-to-Talk key |
 | `set_monitor_enabled` | `(enabled: bool)` | `None` | Enable/disable local speaker monitoring |
 
@@ -668,14 +687,20 @@ SoundEditor(
 
 ### Class: `NowPlayingPanel`
 **File:** `gui.py`  
-**Purpose:** Side panel showing currently playing sounds with progress and stop controls.
+**Purpose:** DJ Looper side panel with full DJ controls for playing sounds.
 
 **Key Features:**
 - List of currently playing sounds with progress bars
-- Loop indicator for looping sounds (∞ for infinite, or count)
-- Stop button for each individual sound
+- Play/pause, loop toggle, restart buttons per sound
+- Live volume slider per sound with reset button
+- Live speed slider per sound with reset button
+- Loop count presets (∞, 2, 5, 10) for quick selection
+- Loop delay slider (0-10s) adjustable live
+- Elapsed time / total duration display per sound
+- Colored state indicator bar (orange=playing, yellow=delay, gray=paused)
+- Per-sound stop button (prominent)
 - Toggle between left/right side positioning
-- Yellow progress color during loop delay phase
+- Dynamic loop controls (show/hide based on loop state)
 
 #### Constructor
 ```python
@@ -937,7 +962,7 @@ edit_sound_file(
 | `ptt_key` | `string \| null` | `null` | Push-to-Talk key (e.g., "ctrl", "mouse4", "F1") |
 | `monitor_enabled` | `bool` | `false` | Local speaker monitoring enabled |
 | `auto_start` | `bool` | `true` | Auto-start audio stream on launch |
-| `now_playing_visible` | `bool` | `false` | Now Playing side panel visible |
+| `now_playing_visible` | `bool` | `false` | DJ Looper side panel visible |
 | `now_playing_side` | `string` | `"right"` | Panel position ("left" or "right") |
 
 ### SoundTab Schema

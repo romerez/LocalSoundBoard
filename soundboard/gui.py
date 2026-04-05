@@ -100,14 +100,19 @@ except ImportError:
 
 
 class NowPlayingPanel:
-    """Side panel showing currently playing sounds and scheduled sounds.
+    """DJ Looper side panel showing currently playing sounds with full DJ controls.
 
     Features:
     - List of currently playing sounds with progress bars
     - Play/pause button for each sound
     - Loop indicator and toggle for looping sounds
     - Speed slider for real-time speed adjustment
-    - Stop button for each sound
+    - Volume slider for real-time volume adjustment
+    - Loop count and delay controls
+    - Restart button per sound
+    - Elapsed time / total duration display
+    - Colored state indicator border (orange=playing, yellow=delay, gray=paused)
+    - Stop button per sound (prominent)
     """
 
     def __init__(
@@ -116,36 +121,49 @@ class NowPlayingPanel:
         mixer_ref: Union[Callable[[], Optional[AudioMixer]], AudioMixer],
         on_stop_callback: Optional[Callable[[str], None]] = None,
     ):
-        """
-        Args:
-            parent: Parent widget (the main content frame)
-            mixer_ref: Reference to get the AudioMixer (callable returning mixer or mixer itself)
-            on_stop_callback: Called when a sound is stopped (sound_id)
-        """
         self.parent = parent
         self.mixer_ref = mixer_ref
         self.on_stop_callback = on_stop_callback
         self.is_visible = False
-        self.panel_side = "right"  # or "left"
+        self.panel_side = "right"
 
-        # Widget references (initialized in _create_panel)
         self.frame: Optional[ctk.CTkFrame] = None
         self.items_frame: Optional[ctk.CTkFrame] = None
-        self.sound_items: Dict[str, Dict[str, Any]] = (
-            {}
-        )  # sound_id -> {frame, progress, label, etc.}
+        self.sound_items: Dict[str, Dict[str, Any]] = {}
 
         self._create_panel()
 
+    # ----- helpers -----
+
+    @staticmethod
+    def _fmt_time(seconds: float) -> str:
+        """Format seconds as M:SS."""
+        m, s = divmod(max(0, int(seconds)), 60)
+        return f"{m}:{s:02d}"
+
+    def _get_mixer(self) -> Optional[AudioMixer]:
+        mixer = self.mixer_ref() if callable(self.mixer_ref) else self.mixer_ref
+        if isinstance(mixer, AudioMixer):
+            return mixer
+        return None
+
+    def _state_color(self, sound_info: dict) -> str:
+        """Return the accent color for the current playback state."""
+        if sound_info.get("paused"):
+            return COLORS["text_muted"]
+        if sound_info.get("in_delay"):
+            return COLORS["yellow"]
+        return COLORS["playing"]
+
+    # ----- panel chrome -----
+
     def _create_panel(self):
-        """Create the panel widget (hidden by default)."""
         self.frame = ctk.CTkFrame(
             self.parent,
             fg_color=COLORS["bg_dark"],
             corner_radius=UI["corner_radius"],
             width=UI["now_playing_width"],
         )
-        # Don't pack yet - will be shown/hidden by toggle
 
         # Header
         header_frame = ctk.CTkFrame(self.frame, fg_color="transparent", height=40)
@@ -154,13 +172,12 @@ class NowPlayingPanel:
 
         header_label = ctk.CTkLabel(
             header_frame,
-            text="🎵 Now Playing",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_md"], weight="bold"),
+            text="🎧 DJ Looper",
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_lg"], weight="bold"),
             text_color=COLORS["text_primary"],
         )
         header_label.pack(side=tk.LEFT)
 
-        # Side toggle button
         self.side_btn = ctk.CTkButton(
             header_frame,
             text="◀",
@@ -191,20 +208,17 @@ class NowPlayingPanel:
             width=10,
         )
         self.items_canvas.configure(yscrollcommand=self.items_scrollbar.set)
-
         self.items_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(12, 0), pady=(0, 12))
         self.items_scrollbar.pack(side=tk.RIGHT, fill=tk.Y, padx=(4, 12), pady=(0, 12))
 
-        # Frame inside canvas for items
         self.items_frame = ctk.CTkFrame(self.items_canvas, fg_color="transparent")
         self.items_canvas_window = self.items_canvas.create_window(
             (0, 0), window=self.items_frame, anchor="nw"
         )
-
         self.items_frame.bind("<Configure>", self._on_items_configure)
         self.items_canvas.bind("<Configure>", self._on_canvas_configure)
 
-        # Empty state label
+        # Empty state
         self.empty_label = ctk.CTkLabel(
             self.items_frame,
             text="No sounds playing",
@@ -214,22 +228,20 @@ class NowPlayingPanel:
         self.empty_label.pack(pady=20)
 
     def _on_items_configure(self, event):
-        """Update scroll region when items change."""
         self.items_canvas.configure(scrollregion=self.items_canvas.bbox("all"))
 
     def _on_canvas_configure(self, event):
-        """Update items frame width to match canvas."""
         self.items_canvas.itemconfig(self.items_canvas_window, width=event.width)
 
+    # ----- visibility / positioning -----
+
     def _toggle_side(self):
-        """Toggle panel between left and right sides."""
         self.panel_side = "left" if self.panel_side == "right" else "right"
         self.side_btn.configure(text="▶" if self.panel_side == "left" else "◀")
         if self.is_visible:
             self._repack_panel()
 
     def _repack_panel(self):
-        """Repack the panel on the correct side."""
         if self.frame is None:
             return
         self.frame.pack_forget()
@@ -245,302 +257,625 @@ class NowPlayingPanel:
             )
 
     def show(self):
-        """Show the panel."""
         if not self.is_visible:
             self.is_visible = True
             self._repack_panel()
 
     def hide(self):
-        """Hide the panel."""
         if self.is_visible:
             self.is_visible = False
             if self.frame is not None:
                 self.frame.pack_forget()
 
     def toggle(self):
-        """Toggle panel visibility."""
         if self.is_visible:
             self.hide()
         else:
             self.show()
 
     def set_side(self, side: str):
-        """Set which side the panel appears on ('left' or 'right')."""
         if side in ("left", "right") and side != self.panel_side:
             self.panel_side = side
             self.side_btn.configure(text="▶" if side == "left" else "◀")
             if self.is_visible:
                 self._repack_panel()
 
-    def update(self, playing_sounds: list, playing_slots: Optional[dict] = None):
-        """Update the panel with current playing sounds.
+    # ----- update loop -----
 
-        Args:
-            playing_sounds: List from mixer.get_playing_sounds()
-            playing_slots: Dict of slot_idx -> {start_time, duration, tab_idx, ...} from GUI
-        """
+    def update(self, playing_sounds: list, playing_slots: Optional[dict] = None):
         current_ids = set()
 
-        # Hide empty label if we have sounds
         if playing_sounds:
             self.empty_label.pack_forget()
         else:
             self.empty_label.pack(pady=20)
-            # Clear all items
             for sound_id in list(self.sound_items.keys()):
                 self._remove_item(sound_id)
             return
 
-        # Update or create items for each playing sound
         for sound_info in playing_sounds:
             sound_id = sound_info.get("sound_id")
             if not sound_id:
                 continue
-
             current_ids.add(sound_id)
-
             if sound_id in self.sound_items:
-                # Update existing item
                 self._update_item(sound_id, sound_info)
             else:
-                # Create new item
                 self._create_item(sound_id, sound_info)
 
-        # Remove items that are no longer playing
         for sound_id in list(self.sound_items.keys()):
             if sound_id not in current_ids:
                 self._remove_item(sound_id)
 
+    # ----- item creation -----
+
     def _create_item(self, sound_id: str, sound_info: dict):
-        """Create a new sound item widget with DJ controls."""
-        item_frame = ctk.CTkFrame(
+        """Create a new DJ-style sound item widget."""
+        state_color = self._state_color(sound_info)
+
+        # Outer frame with colored left border indicator
+        outer_frame = ctk.CTkFrame(
             self.items_frame,
             fg_color=COLORS["bg_medium"],
             corner_radius=8,
-            height=110,  # Taller to fit all controls
         )
-        item_frame.pack(fill=tk.X, pady=4)
-        item_frame.pack_propagate(False)
+        outer_frame.pack(fill=tk.X, pady=4)
 
-        # Content frame
-        content = ctk.CTkFrame(item_frame, fg_color="transparent")
-        content.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
+        # Colored state bar on the left
+        state_bar = ctk.CTkFrame(
+            outer_frame,
+            fg_color=state_color,
+            corner_radius=4,
+            width=4,
+        )
+        state_bar.pack(side=tk.LEFT, fill=tk.Y, padx=(4, 0), pady=6)
 
-        # Top row: name and loop indicator
-        top_row = ctk.CTkFrame(content, fg_color="transparent")
-        top_row.pack(fill=tk.X)
+        # Content container
+        content = ctk.CTkFrame(outer_frame, fg_color="transparent")
+        content.pack(fill=tk.BOTH, expand=True, padx=(8, 10), pady=8)
 
-        name = sound_info.get("name", "Unknown")[:18]
-        if len(sound_info.get("name", "")) > 18:
+        # ── Row 1: Name + Stop button ──
+        row1 = ctk.CTkFrame(content, fg_color="transparent")
+        row1.pack(fill=tk.X)
+
+        name = sound_info.get("name", "Unknown")[:22]
+        if len(sound_info.get("name", "")) > 22:
             name += "…"
 
         name_label = ctk.CTkLabel(
-            top_row,
+            row1,
             text=name,
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"], weight="bold"),
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_md"], weight="bold"),
             text_color=COLORS["text_primary"],
             anchor="w",
         )
         name_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        # Loop indicator label
+        # Large stop button
+        stop_btn = ctk.CTkButton(
+            row1,
+            text="✕",
+            command=lambda: self._on_stop_click(sound_id),
+            fg_color=COLORS["red"],
+            hover_color=COLORS["red_hover"],
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_md"], weight="bold"),
+            corner_radius=6,
+            width=34,
+            height=28,
+        )
+        stop_btn.pack(side=tk.RIGHT, padx=(4, 0))
+
+        # ── Row 2: Time + Loop indicator ──
+        row2 = ctk.CTkFrame(content, fg_color="transparent")
+        row2.pack(fill=tk.X, pady=(2, 0))
+
+        elapsed = sound_info.get("elapsed_seconds", 0)
+        total = sound_info.get("total_seconds", 0)
+        time_label = ctk.CTkLabel(
+            row2,
+            text=f"{self._fmt_time(elapsed)} / {self._fmt_time(total)}",
+            font=ctk.CTkFont(family=FONTS["family_mono"], size=FONTS["size_xs"]),
+            text_color=COLORS["text_secondary"],
+            anchor="w",
+        )
+        time_label.pack(side=tk.LEFT)
+
+        # Loop indicator
         loops = sound_info.get("loops_remaining", -1)
-        loop_text = "🔁 ∞" if loops < 0 else f"🔁 {loops}" if sound_info.get("loop") else ""
+        is_looping = sound_info.get("loop", False)
+        loop_text = ""
+        if is_looping:
+            loop_text = "🔁 ∞" if loops < 0 else f"🔁 {loops}"
         loop_label = ctk.CTkLabel(
-            top_row,
+            row2,
             text=loop_text,
             font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
-            text_color=COLORS["text_muted"],
+            text_color=COLORS["green"] if is_looping else COLORS["text_muted"],
         )
-        loop_label.pack(side=tk.RIGHT, padx=(4, 0))
+        loop_label.pack(side=tk.RIGHT)
 
-        # Controls row: play/pause, loop toggle, speed
-        controls_row = ctk.CTkFrame(content, fg_color="transparent")
-        controls_row.pack(fill=tk.X, pady=(4, 0))
+        # ── Row 3: Progress bar (full width) ──
+        progress = ctk.CTkProgressBar(
+            content,
+            height=10,
+            fg_color=COLORS["bg_light"],
+            progress_color=state_color,
+            corner_radius=5,
+        )
+        progress.set(sound_info.get("progress", 0))
+        progress.pack(fill=tk.X, pady=(4, 0))
 
-        # Play/Pause button
+        # ── Row 4: Transport controls ──
+        row4 = ctk.CTkFrame(content, fg_color="transparent")
+        row4.pack(fill=tk.X, pady=(6, 0))
+
+        btn_font = ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"])
+        btn_w, btn_h = 28, 24
+
+        # Play/Pause
         is_paused = sound_info.get("paused", False)
         play_pause_btn = ctk.CTkButton(
-            controls_row,
+            row4,
             text="▶" if is_paused else "⏸",
             command=lambda: self._on_play_pause_click(sound_id),
             fg_color=COLORS["blurple"],
             hover_color=COLORS["blurple_hover"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            font=btn_font,
             corner_radius=4,
-            width=28,
-            height=22,
+            width=btn_w,
+            height=btn_h,
         )
-        play_pause_btn.pack(side=tk.LEFT, padx=(0, 4))
+        play_pause_btn.pack(side=tk.LEFT, padx=(0, 3))
 
-        # Loop toggle button
-        is_looping = sound_info.get("loop", False)
+        # Loop toggle
         loop_btn = ctk.CTkButton(
-            controls_row,
+            row4,
             text="🔁" if is_looping else "➡",
             command=lambda: self._on_loop_toggle_click(sound_id),
             fg_color=COLORS["green"] if is_looping else COLORS["bg_light"],
             hover_color=COLORS["green_hover"] if is_looping else COLORS["bg_lighter"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            font=btn_font,
             corner_radius=4,
-            width=28,
-            height=22,
+            width=btn_w,
+            height=btn_h,
         )
-        loop_btn.pack(side=tk.LEFT, padx=(0, 8))
+        loop_btn.pack(side=tk.LEFT, padx=(0, 3))
 
-        # Speed label and slider
-        speed_label = ctk.CTkLabel(
-            controls_row,
+        # Restart
+        restart_btn = ctk.CTkButton(
+            row4,
+            text="↺",
+            command=lambda: self._on_restart_click(sound_id),
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_lighter"],
+            font=btn_font,
+            corner_radius=4,
+            width=btn_w,
+            height=btn_h,
+        )
+        restart_btn.pack(side=tk.LEFT)
+
+        # ── Row 4b: Speed + Pitch + Reset ──
+        row4b = ctk.CTkFrame(content, fg_color="transparent")
+        row4b.pack(fill=tk.X, pady=(4, 0))
+
+        ctk.CTkLabel(
+            row4b,
             text="⚡",
             font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
             text_color=COLORS["text_muted"],
-            width=16,
-        )
-        speed_label.pack(side=tk.LEFT)
+            width=14,
+        ).pack(side=tk.LEFT)
 
         current_speed = sound_info.get("speed", 1.0)
         speed_var = tk.IntVar(value=int(current_speed * 100))
+        speed_debounce_id: List[Optional[str]] = [None]
+        preserve_pitch_state: List[bool] = [True]  # mutable for closure
+        # Track when user is actively changing speed to prevent _update_item flicker
+        speed_user_override: List[bool] = [False]
+        speed_override_clear_id: List[Optional[str]] = [None]
 
-        # Debounce timer for speed changes (librosa is slow)
-        speed_debounce_id: List[Optional[str]] = [None]  # Use list to allow mutation in closure
-
-        def apply_speed_change():
-            """Actually apply the speed change after debounce delay."""
+        def _apply_speed():
             mixer = self._get_mixer()
             if mixer:
                 new_speed = speed_var.get() / 100.0
-                # Run in background thread to avoid UI freeze
                 threading.Thread(
-                    target=mixer.set_sound_speed, args=(sound_id, new_speed), daemon=True
+                    target=mixer.set_sound_speed,
+                    args=(sound_id, new_speed, preserve_pitch_state[0]),
+                    daemon=True,
                 ).start()
+            # Clear user override after a delay to let mixer catch up
+            if self.items_frame is not None:
+                if speed_override_clear_id[0] is not None:
+                    try:
+                        self.items_frame.after_cancel(speed_override_clear_id[0])
+                    except Exception:
+                        pass
+                speed_override_clear_id[0] = self.items_frame.after(
+                    2000, lambda: speed_user_override.__setitem__(0, False)
+                )
 
-        def on_speed_change(val):
+        def _on_speed_change(val):
+            speed_user_override[0] = True
             new_speed = float(val) / 100.0
             speed_value_label.configure(text=f"{new_speed:.1f}x")
-            # Cancel previous timer if exists
             if speed_debounce_id[0] is not None and self.items_frame is not None:
                 try:
                     self.items_frame.after_cancel(speed_debounce_id[0])
                 except Exception:
                     pass
-            # Schedule new timer (300ms debounce)
             if self.items_frame is not None:
-                speed_debounce_id[0] = self.items_frame.after(300, apply_speed_change)
+                speed_debounce_id[0] = self.items_frame.after(300, _apply_speed)
 
         speed_slider = ctk.CTkSlider(
-            controls_row,
+            row4b,
             from_=50,
             to=200,
             variable=speed_var,
-            command=on_speed_change,
-            width=70,
+            command=_on_speed_change,
+            width=90,
             height=14,
             fg_color=COLORS["bg_dark"],
             progress_color=COLORS["blurple"],
             button_color=COLORS["blurple"],
             button_hover_color=COLORS["blurple_hover"],
         )
-        speed_slider.pack(side=tk.LEFT, padx=(2, 4))
+        speed_slider.pack(side=tk.LEFT, padx=(2, 4), fill=tk.X, expand=True)
 
         speed_value_label = ctk.CTkLabel(
-            controls_row,
+            row4b,
             text=f"{current_speed:.1f}x",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            font=ctk.CTkFont(family=FONTS["family_mono"], size=FONTS["size_xs"]),
             text_color=COLORS["text_muted"],
-            width=32,
+            width=30,
         )
         speed_value_label.pack(side=tk.LEFT)
 
-        # Reset speed button
-        def reset_speed():
+        # Pitch preservation toggle
+        def _toggle_pitch():
+            preserve_pitch_state[0] = not preserve_pitch_state[0]
+            pitch_btn.configure(
+                text="🎵" if preserve_pitch_state[0] else "🐿",
+                fg_color=COLORS["green"] if preserve_pitch_state[0] else COLORS["bg_light"],
+                hover_color=COLORS["green_hover"] if preserve_pitch_state[0] else COLORS["bg_lighter"],
+            )
+            # Re-apply current speed with new pitch setting
+            if speed_var.get() != 100:
+                speed_user_override[0] = True
+                _apply_speed()
+
+        pitch_btn = ctk.CTkButton(
+            row4b,
+            text="🎵",
+            command=_toggle_pitch,
+            fg_color=COLORS["green"],
+            hover_color=COLORS["green_hover"],
+            font=btn_font,
+            corner_radius=4,
+            width=28,
+            height=btn_h,
+        )
+        pitch_btn.pack(side=tk.LEFT, padx=(4, 2))
+
+        # Reset speed
+        def _reset_speed():
+            speed_user_override[0] = True
             speed_var.set(100)
             speed_value_label.configure(text="1.0x")
             mixer = self._get_mixer()
             if mixer:
                 threading.Thread(
-                    target=mixer.set_sound_speed, args=(sound_id, 1.0), daemon=True
+                    target=mixer.set_sound_speed,
+                    args=(sound_id, 1.0, preserve_pitch_state[0]),
+                    daemon=True,
                 ).start()
+            # Clear override after mixer catches up
+            if self.items_frame is not None:
+                if speed_override_clear_id[0] is not None:
+                    try:
+                        self.items_frame.after_cancel(speed_override_clear_id[0])
+                    except Exception:
+                        pass
+                speed_override_clear_id[0] = self.items_frame.after(
+                    2000, lambda: speed_user_override.__setitem__(0, False)
+                )
 
         reset_speed_btn = ctk.CTkButton(
-            controls_row,
+            row4b,
             text="↺",
-            command=reset_speed,
+            command=_reset_speed,
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            font=btn_font,
             corner_radius=4,
             width=24,
+            height=btn_h,
+        )
+        reset_speed_btn.pack(side=tk.LEFT, padx=(2, 0))
+
+        # ── Row 5: Volume slider ──
+        row5 = ctk.CTkFrame(content, fg_color="transparent")
+        row5.pack(fill=tk.X, pady=(4, 0))
+
+        ctk.CTkLabel(
+            row5,
+            text="🔊",
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            text_color=COLORS["text_muted"],
+            width=18,
+        ).pack(side=tk.LEFT)
+
+        current_volume = sound_info.get("volume", 1.0)
+        volume_var = tk.IntVar(value=int(current_volume * 100))
+        volume_debounce_id: List[Optional[str]] = [None]
+
+        def _apply_volume():
+            mixer = self._get_mixer()
+            if mixer:
+                new_vol = volume_var.get() / 100.0
+                mixer.set_sound_volume(sound_id, new_vol)
+
+        def _on_volume_change(val):
+            new_vol = float(val) / 100.0
+            vol_value_label.configure(text=f"{int(new_vol * 100)}%")
+            if volume_debounce_id[0] is not None and self.items_frame is not None:
+                try:
+                    self.items_frame.after_cancel(volume_debounce_id[0])
+                except Exception:
+                    pass
+            if self.items_frame is not None:
+                volume_debounce_id[0] = self.items_frame.after(50, _apply_volume)
+
+        volume_slider = ctk.CTkSlider(
+            row5,
+            from_=0,
+            to=150,
+            variable=volume_var,
+            command=_on_volume_change,
+            width=100,
+            height=14,
+            fg_color=COLORS["bg_dark"],
+            progress_color=COLORS["green"],
+            button_color=COLORS["green"],
+            button_hover_color=COLORS["green_hover"],
+        )
+        volume_slider.pack(side=tk.LEFT, padx=(2, 4), fill=tk.X, expand=True)
+
+        vol_value_label = ctk.CTkLabel(
+            row5,
+            text=f"{int(current_volume * 100)}%",
+            font=ctk.CTkFont(family=FONTS["family_mono"], size=FONTS["size_xs"]),
+            text_color=COLORS["text_muted"],
+            width=34,
+        )
+        vol_value_label.pack(side=tk.LEFT)
+
+        # Reset volume
+        def _reset_volume():
+            volume_var.set(100)
+            vol_value_label.configure(text="100%")
+            mixer = self._get_mixer()
+            if mixer:
+                mixer.set_sound_volume(sound_id, 1.0)
+
+        reset_vol_btn = ctk.CTkButton(
+            row5,
+            text="↺",
+            command=_reset_volume,
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_lighter"],
+            font=btn_font,
+            corner_radius=4,
+            width=22,
+            height=btn_h,
+        )
+        reset_vol_btn.pack(side=tk.LEFT, padx=(2, 0))
+
+        # ── Row 6: Loop delay slider (only shown when looping) ──
+        row6 = ctk.CTkFrame(content, fg_color="transparent")
+        is_looping_now = sound_info.get("loop", False)
+        if is_looping_now:
+            row6.pack(fill=tk.X, pady=(4, 0))
+
+        ctk.CTkLabel(
+            row6,
+            text="⏱",
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            text_color=COLORS["text_muted"],
+            width=18,
+        ).pack(side=tk.LEFT)
+
+        delay_label_prefix = ctk.CTkLabel(
+            row6,
+            text="Delay",
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            text_color=COLORS["text_muted"],
+            width=34,
+        )
+        delay_label_prefix.pack(side=tk.LEFT, padx=(0, 4))
+
+        current_delay = sound_info.get("loop_delay", 0.0)
+        delay_var = tk.IntVar(value=int(current_delay * 10))  # 0-100 → 0.0-10.0s
+        delay_debounce_id: List[Optional[str]] = [None]
+
+        def _apply_delay():
+            mixer = self._get_mixer()
+            if mixer:
+                new_delay = delay_var.get() / 10.0
+                mixer.set_sound_loop_delay(sound_id, new_delay)
+
+        def _on_delay_change(val):
+            new_delay = float(val) / 10.0
+            delay_value_label.configure(text=f"{new_delay:.1f}s")
+            if delay_debounce_id[0] is not None and self.items_frame is not None:
+                try:
+                    self.items_frame.after_cancel(delay_debounce_id[0])
+                except Exception:
+                    pass
+            if self.items_frame is not None:
+                delay_debounce_id[0] = self.items_frame.after(200, _apply_delay)
+
+        delay_slider = ctk.CTkSlider(
+            row6,
+            from_=0,
+            to=100,
+            variable=delay_var,
+            command=_on_delay_change,
+            width=80,
+            height=14,
+            fg_color=COLORS["bg_dark"],
+            progress_color=COLORS["yellow"],
+            button_color=COLORS["yellow"],
+            button_hover_color=COLORS["yellow"],
+        )
+        delay_slider.pack(side=tk.LEFT, padx=(2, 4), fill=tk.X, expand=True)
+
+        delay_value_label = ctk.CTkLabel(
+            row6,
+            text=f"{current_delay:.1f}s",
+            font=ctk.CTkFont(family=FONTS["family_mono"], size=FONTS["size_xs"]),
+            text_color=COLORS["text_muted"],
+            width=30,
+        )
+        delay_value_label.pack(side=tk.LEFT)
+
+        # ── Row 7: Loop count (only when looping) ──
+        row7 = ctk.CTkFrame(content, fg_color="transparent")
+        if is_looping_now:
+            row7.pack(fill=tk.X, pady=(2, 0))
+
+        ctk.CTkLabel(
+            row7,
+            text="🔢",
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            text_color=COLORS["text_muted"],
+            width=18,
+        ).pack(side=tk.LEFT)
+
+        loop_count_label = ctk.CTkLabel(
+            row7,
+            text="Loops",
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            text_color=COLORS["text_muted"],
+            width=36,
+        )
+        loop_count_label.pack(side=tk.LEFT, padx=(0, 4))
+
+        # Infinite loop btn
+        def _set_infinite_loop():
+            mixer = self._get_mixer()
+            if mixer:
+                mixer.set_sound_loop_count(sound_id, -1)
+
+        inf_btn = ctk.CTkButton(
+            row7,
+            text="∞",
+            command=_set_infinite_loop,
+            fg_color=COLORS["blurple"] if loops < 0 else COLORS["bg_light"],
+            hover_color=COLORS["blurple_hover"],
+            font=btn_font,
+            corner_radius=4,
+            width=26,
             height=22,
         )
-        reset_speed_btn.pack(side=tk.LEFT, padx=(4, 0))
+        inf_btn.pack(side=tk.LEFT, padx=(0, 3))
 
-        # Bottom row: progress bar and stop button
-        bottom_row = ctk.CTkFrame(content, fg_color="transparent")
-        bottom_row.pack(fill=tk.X, pady=(4, 0))
+        # Preset loop counts
+        for cnt in (2, 5, 10):
+            def _set_loop_count(c=cnt):
+                mixer = self._get_mixer()
+                if mixer:
+                    mixer.set_sound_loop_count(sound_id, c)
 
-        progress = ctk.CTkProgressBar(
-            bottom_row,
-            height=8,
-            fg_color=COLORS["bg_light"],
-            progress_color=COLORS["playing"],
-            corner_radius=4,
-        )
-        progress.set(sound_info.get("progress", 0))
-        progress.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+            is_active = loops == cnt
+            ctk.CTkButton(
+                row7,
+                text=str(cnt),
+                command=_set_loop_count,
+                fg_color=COLORS["blurple"] if is_active else COLORS["bg_light"],
+                hover_color=COLORS["blurple_hover"] if is_active else COLORS["bg_lighter"],
+                font=btn_font,
+                corner_radius=4,
+                width=26,
+                height=22,
+            ).pack(side=tk.LEFT, padx=(0, 3))
 
-        stop_btn = ctk.CTkButton(
-            bottom_row,
-            text="✕",
-            command=lambda: self._on_stop_click(sound_id),
-            fg_color=COLORS["red"],
-            hover_color=COLORS["red_hover"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"], weight="bold"),
-            corner_radius=4,
-            width=28,
-            height=20,
-        )
-        stop_btn.pack(side=tk.RIGHT)
-
+        # Store widget references
         self.sound_items[sound_id] = {
-            "frame": item_frame,
+            "outer_frame": outer_frame,
+            "state_bar": state_bar,
             "progress": progress,
             "name_label": name_label,
+            "time_label": time_label,
             "loop_label": loop_label,
             "play_pause_btn": play_pause_btn,
             "loop_btn": loop_btn,
+            "restart_btn": restart_btn,
             "speed_slider": speed_slider,
             "speed_var": speed_var,
             "speed_value_label": speed_value_label,
+            "speed_user_override": speed_user_override,
             "reset_speed_btn": reset_speed_btn,
+            "pitch_btn": pitch_btn,
+            "preserve_pitch_state": preserve_pitch_state,
+            "volume_slider": volume_slider,
+            "volume_var": volume_var,
+            "vol_value_label": vol_value_label,
+            "reset_vol_btn": reset_vol_btn,
             "stop_btn": stop_btn,
+            "row6": row6,
+            "row7": row7,
+            "delay_slider": delay_slider,
+            "delay_var": delay_var,
+            "delay_value_label": delay_value_label,
+            "inf_btn": inf_btn,
             "sound_info": sound_info,
         }
 
+    # ----- item update -----
+
     def _update_item(self, sound_id: str, sound_info: dict):
-        """Update an existing sound item."""
         item = self.sound_items.get(sound_id)
         if not item:
             return
 
-        # Store updated sound_info for click handlers
         item["sound_info"] = sound_info
+        state_color = self._state_color(sound_info)
 
-        # Update progress
+        # State bar
+        if item.get("state_bar"):
+            item["state_bar"].configure(fg_color=state_color)
+
+        # Progress
         item["progress"].set(sound_info.get("progress", 0))
+        item["progress"].configure(progress_color=state_color)
 
-        # Update loop indicator text
+        # Time
+        if item.get("time_label"):
+            elapsed = sound_info.get("elapsed_seconds", 0)
+            total = sound_info.get("total_seconds", 0)
+            item["time_label"].configure(
+                text=f"{self._fmt_time(elapsed)} / {self._fmt_time(total)}"
+            )
+
+        # Loop indicator
         if item.get("loop_label"):
             loops = sound_info.get("loops_remaining", -1)
             is_looping = sound_info.get("loop", False)
-            loop_text = "🔁 ∞" if loops < 0 and is_looping else f"🔁 {loops}" if is_looping else ""
-            item["loop_label"].configure(text=loop_text)
+            loop_text = ""
+            if is_looping:
+                loop_text = "🔁 ∞" if loops < 0 else f"🔁 {loops}"
+            item["loop_label"].configure(
+                text=loop_text,
+                text_color=COLORS["green"] if is_looping else COLORS["text_muted"],
+            )
 
-        # Update play/pause button
+        # Play/pause
         if item.get("play_pause_btn"):
             is_paused = sound_info.get("paused", False)
             item["play_pause_btn"].configure(text="▶" if is_paused else "⏸")
 
-        # Update loop toggle button
+        # Loop toggle
         if item.get("loop_btn"):
             is_looping = sound_info.get("loop", False)
             item["loop_btn"].configure(
@@ -549,39 +884,50 @@ class NowPlayingPanel:
                 hover_color=COLORS["green_hover"] if is_looping else COLORS["bg_lighter"],
             )
 
-        # Update speed display (don't change slider to avoid feedback loop)
-        if item.get("speed_value_label"):
+        # Speed display — skip if user is actively changing speed to prevent flicker
+        if item.get("speed_value_label") and not item.get("speed_user_override", [False])[0]:
             current_speed = sound_info.get("speed", 1.0)
             item["speed_value_label"].configure(text=f"{current_speed:.1f}x")
 
-        # Update color based on state
-        if sound_info.get("paused"):
-            item["progress"].configure(progress_color=COLORS["text_muted"])
-        elif sound_info.get("in_delay"):
-            item["progress"].configure(progress_color=COLORS["yellow"])
-        else:
-            item["progress"].configure(progress_color=COLORS["playing"])
+        # Volume display (don't change slider to avoid feedback loop)
+        if item.get("vol_value_label"):
+            current_vol = sound_info.get("volume", 1.0)
+            item["vol_value_label"].configure(text=f"{int(current_vol * 100)}%")
+
+        # Show/hide loop rows based on loop state
+        is_looping = sound_info.get("loop", False)
+        if item.get("row6"):
+            if is_looping:
+                if not item["row6"].winfo_ismapped():
+                    item["row6"].pack(fill=tk.X, pady=(4, 0))
+            else:
+                item["row6"].pack_forget()
+
+        if item.get("row7"):
+            if is_looping:
+                if not item["row7"].winfo_ismapped():
+                    item["row7"].pack(fill=tk.X, pady=(2, 0))
+            else:
+                item["row7"].pack_forget()
+
+        # Update loop delay display
+        if item.get("delay_value_label"):
+            current_delay = sound_info.get("loop_delay", 0.0)
+            item["delay_value_label"].configure(text=f"{current_delay:.1f}s")
+
+    # ----- item removal -----
 
     def _remove_item(self, sound_id: str):
-        """Remove a sound item."""
         item = self.sound_items.pop(sound_id, None)
-        if item and item.get("frame"):
-            item["frame"].destroy()
+        if item and item.get("outer_frame"):
+            item["outer_frame"].destroy()
 
-    def _get_mixer(self) -> Optional[AudioMixer]:
-        """Get the mixer instance with proper type."""
-        mixer = self.mixer_ref() if callable(self.mixer_ref) else self.mixer_ref
-        if isinstance(mixer, AudioMixer):
-            return mixer
-        return None
+    # ----- button handlers -----
 
     def _on_play_pause_click(self, sound_id: str):
-        """Handle play/pause button click."""
         mixer = self._get_mixer()
         if not mixer:
             return
-
-        # Check current state and toggle
         item = self.sound_items.get(sound_id)
         if item:
             is_paused = item.get("sound_info", {}).get("paused", False)
@@ -591,17 +937,19 @@ class NowPlayingPanel:
                 mixer.pause_sound(sound_id)
 
     def _on_loop_toggle_click(self, sound_id: str):
-        """Handle loop toggle button click."""
         mixer = self._get_mixer()
         if mixer:
             mixer.toggle_sound_loop(sound_id)
 
+    def _on_restart_click(self, sound_id: str):
+        mixer = self._get_mixer()
+        if mixer:
+            mixer.restart_sound(sound_id)
+
     def _on_stop_click(self, sound_id: str):
-        """Handle stop button click."""
         if self.on_stop_callback:
             self.on_stop_callback(sound_id)
         else:
-            # Try to stop via mixer directly
             mixer = self._get_mixer()
             if mixer:
                 mixer.stop_sound(sound_id)
@@ -1156,17 +1504,17 @@ class SoundboardApp:
         )
         self.stop_all_btn.pack(side=tk.LEFT, padx=(0, 6), pady=8)
 
-        # Now Playing toggle button
+        # DJ Looper toggle button
         self.now_playing_btn = ctk.CTkButton(
             right_section,
-            text="🎵 Playing",
+            text="🎧 DJ Looper",
             command=self._toggle_now_playing_panel,
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
             font=self._font_xs,
             corner_radius=6,
             height=32,
-            width=80,
+            width=90,
         )
         self.now_playing_btn.pack(side=tk.LEFT, pady=8)
 
@@ -1184,7 +1532,7 @@ class SoundboardApp:
 
     def _on_tabs_mousewheel(self, event):
         """Handle mousewheel scrolling on tabs canvas (vertical)."""
-        if not getattr(self, '_tabs_mousewheel_bound', False):
+        if not getattr(self, "_tabs_mousewheel_bound", False):
             return
         # Only scroll if there's overflow
         canvas_height = self.tabs_canvas.winfo_height()
@@ -1723,7 +2071,9 @@ class SoundboardApp:
                 corner_radius=UI["slot_corner_radius"],
                 height=UI["slot_height"],
             )
-            slot_frame.grid(row=row, column=col, padx=UI["slot_padding"], pady=UI["slot_padding"], sticky="nsew")
+            slot_frame.grid(
+                row=row, column=col, padx=UI["slot_padding"], pady=UI["slot_padding"], sticky="nsew"
+            )
             slot_frame.pack_propagate(False)
 
             bottom_frame = ctk.CTkFrame(slot_frame, fg_color="transparent", height=BOTTOM_HEIGHT)
@@ -2141,7 +2491,7 @@ class SoundboardApp:
             self.mixer.set_monitor_enabled(self.monitor_var.get())
 
     def _toggle_now_playing_panel(self):
-        """Toggle the Now Playing side panel visibility."""
+        """Toggle the DJ Looper side panel visibility."""
         if self.now_playing_panel.is_visible:
             self.now_playing_panel.hide()
             self.now_playing_btn.configure(
