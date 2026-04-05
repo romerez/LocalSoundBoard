@@ -1,6 +1,6 @@
 # Copilot Instructions - Discord Soundboard Project
 
-> **Last Updated:** 2026-02
+> **Last Updated:** 2026-04
 > **Status:** Active Development
 > **Language:** Python 3.x
 
@@ -324,16 +324,15 @@ Example: `airhorn_8f3a2b1c.mp3`
 - [x] Collapsible audio options panel (closed by default)
 - [x] Auto-start stream on launch (configurable)
 - [x] "+" button on empty slots to quickly add sounds
-- [x] Fixed-size UI elements (locked window and slot dimensions)
-- [x] Tab-aware progress bars (no cross-tab visual issues when switching)
+- [x] Flexible responsive layout (slots stretch to fill window width, resizable window)
+- [x] CTkScrollableFrame for smooth native scrolling (replaced manual Canvas+Scrollbar)
+- [x] Lazy tab building with incremental background loading (fast startup)
 - [x] Drag-and-drop slot reordering (within same tab)
 - [x] Drag-and-drop to move sounds between tabs
 - [x] Unlimited sounds per tab with scrolling support
 - [x] Preview progress bar with distinct green color
 - [x] Different colors for play modes (orange=Discord, green=preview)
 - [x] Improved OGG file loading via pydub fallback
-- [x] Better scrollbar visibility (only shows when needed)
-- [x] Improved slot sizing (larger slots for better text visibility)
 - [x] Edit button (✏️) on sound slots for quick access to settings
 - [x] Right-click popup for quick volume/speed adjustment
 - [x] Playback speed adjustment per sound (0.5x to 2x)
@@ -733,6 +732,8 @@ Creates root Tkinter window, initializes all components, loads configuration, an
 | `playing_slots` | `Dict` | Currently playing sounds |
 | `slot_widgets` | `List[Dict]` | UI widgets for each slot |
 | `tab_buttons` | `List[tk.Button]` | Tab bar buttons |
+| `scrollable_grid` | `CTkScrollableFrame` | Scrollable container for slot grid |
+| `grid_frame` | `CTkScrollableFrame` | Alias for scrollable_grid (backward compat) |
 | `drag_source_idx` | `int \| None` | Drag-and-drop source |
 | `is_dragging` | `bool` | Drag in progress |
 
@@ -742,7 +743,7 @@ Creates root Tkinter window, initializes all components, loads configuration, an
 | `_create_ui` | Create all UI sections |
 | `_create_device_section` | Device dropdowns and audio options |
 | `_create_tab_bar` | Tab buttons and add tab button |
-| `_create_soundboard_section` | Scrollable slot grid |
+| `_create_soundboard_section` | CTkScrollableFrame-based scrollable slot grid |
 | `_create_slot_widgets` | Individual slot buttons |
 | `_create_status_bar` | Bottom status bar |
 | `_setup_styles` | Configure ttk styles |
@@ -802,13 +803,12 @@ Creates root Tkinter window, initializes all components, loads configuration, an
 |--------|-------------|
 | `_animate_progress` | Update progress bars for playing sounds |
 
-#### Canvas/Scroll Methods
+#### Tab Building Methods
 | Method | Description |
 |--------|-------------|
-| `_on_grid_configure` | Handle grid resize |
-| `_on_canvas_configure` | Handle canvas resize |
-| `_update_scrollbar_visibility` | Show/hide scrollbar as needed |
-| `_on_mousewheel` | Handle scroll wheel |
+| `_build_all_tab_widgets` | Build current tab now, schedule rest incrementally |
+| `_build_tabs_incrementally` | Build one remaining tab per event loop tick via after_idle |
+| `_build_tab_widgets` | Build slot grid for a specific tab |
 
 #### Configuration Methods
 | Method | Description |
@@ -1144,14 +1144,14 @@ When asked to add a feature:
 |-------|-------|-----|
 | Progress bar shows on wrong tab | Playing state not tracking which tab the sound belongs to | Store `tab_idx` in `playing_slots` dict, only update UI if current tab matches |
 | Preview button not visible | Button hidden by expanding main button | Pack bottom frame FIRST at bottom, then main button expands into remaining space |
-| UI elements resize unexpectedly | Grid weights and pack expand options | Use `grid_propagate(False)` and `pack_propagate(False)` to lock sizes; set `resizable(False, False)` on window |
+| Slot height inconsistent | Slot frames without height lock expand/collapse with content | Use `pack_propagate(False)` on slot frames to lock height; use `weight=1, uniform="slot"` on grid columns for flex width |
 | Sound plays twice on click | Button had both `command=` and drag bindings that call `_play_slot` | Remove `command=` from button, let drag `_on_drag_end` handle click-to-play |
 | Colors reset when dragging | `_reset_drag_highlights()` set all slots to `bg_medium` instead of proper color | Call `_update_slot_button()` to restore full button appearance |
 | Playing color shows on wrong tab after switch | `_update_slot_button` didn't check if playing state was for current tab | Check `playing_slots[idx].get("tab_idx") == current_tab_idx` before applying playing color |
-| Scrollbar shows when not needed | Scrollbar always visible even with few slots | Add `_update_scrollbar_visibility()` to show/hide based on content height vs canvas height |
-| Scrollbar visibility false positive | `winfo_height()` returns 1 before widget is mapped | Check `canvas_height <= 1` and return early; use `winfo_ismapped()` before pack/pack_forget |
+| Massive resize lag | Manual tk.Canvas + create_window required width syncing via <Configure> events, causing cascade of 70+ redraws per pixel | Replaced entire canvas/scrollbar system with CTkScrollableFrame which handles width/scroll natively |
+| Slow startup with many tabs | `_build_all_tab_widgets()` built ALL tabs synchronously | Build only current tab synchronously, then build remaining tabs incrementally via `after_idle()` (one tab per event loop tick) |
 | Editor crashes on OGG import | `_update_info_labels()` called before `selection_label` created | Add `hasattr()` check before updating `selection_label` in `_update_info_labels()` |
-| Mouse wheel scrolls when no scrollbar | `_on_mousewheel` always scrolls regardless of scrollbar state | Check `slots_scrollbar.winfo_ismapped()` before allowing scroll |
+| Scroll wheel broken after tab sidebar | `unbind_all("<MouseWheel>")` in tabs sidebar nuked CTkScrollableFrame's internal binding | Use flag-based approach: set `_tabs_mousewheel_bound` flag, register single `bind_all` with `add="+"` to not clobber other bindings |
 | No new slots after filling all | `save` only called `_update_slot_button` not `_refresh_slot_buttons` | Call `_refresh_slot_buttons()` after save/clear to create new empty slots |
 | Sound replays when switching tabs | Drag state not cleared on tab switch, or double-event race condition | Clear `drag_source_idx`/`is_dragging` FIRST in `_on_drag_end`, and also clear in `_switch_tab` |
 | Empty slot '+' button doesn't open dialog | For empty slots, `drag_source_idx=None` causes `_on_drag_end` to return early | Track empty slot clicks separately with `empty_slot_clicked` variable, check it in `_on_drag_end` |
@@ -1173,6 +1173,9 @@ When asked to add a feature:
 1. **Always test after adding new UI elements** - layout issues are common with Tkinter
 2. **Never use a new color constant without adding it to COLORS first**
 3. **Path handling must support both forward and backslashes on Windows**
+4. **Never use `bind_all`/`unbind_all` for mousewheel** - it nukes CTkScrollableFrame's internal bindings. Use flag-based approach with `add="+"` instead.
+5. **Use CTkScrollableFrame for scrollable areas** - manual Canvas + create_window + width syncing causes massive resize lag. CTkScrollableFrame handles scroll + width natively.
+6. **Lazy tab building** - only build current tab synchronously at startup; build remaining tabs incrementally via `after_idle()` to keep startup fast.
 4. **Audio file format support varies** - always have pydub fallback ready
 5. **Atomic writes for all config/state files** - prevents corruption on crash
 6. **Tkinter event handling** - return `"break"` to stop event propagation; use `winfo_containing()` to check actual widget under cursor on release; track click state with flags to prevent stray events

@@ -544,6 +544,10 @@ class AudioMixer:
         # the end of sounds isn't cut off when PTT releases
         self._ptt_release_delay = 15  # ~300ms delay before releasing PTT
         self._ptt_release_countdown = 0  # Current countdown (0 = not counting)
+        # Safety timeout: track how long PTT has been held (in callback cycles)
+        # If PTT is active for too long without sounds, force release as safety net
+        self._ptt_active_cycles = 0  # Counts callback cycles while ptt_active is True
+        self._ptt_max_hold_cycles = 1500  # ~30 seconds (1500 * ~21ms)
 
         # Local monitoring (play sounds to speakers too)
         self.monitor_enabled = False
@@ -568,14 +572,23 @@ class AudioMixer:
                 except queue.Empty:
                     continue
 
-                if cmd == "press":
-                    self._do_ptt_press()
-                elif cmd == "release":
-                    self._do_ptt_release()
-                elif cmd == "force_release":
-                    self._do_ptt_release()
-                elif cmd == "stop":
-                    break
+                try:
+                    if cmd == "press":
+                        self._do_ptt_press()
+                    elif cmd == "release":
+                        self._do_ptt_release()
+                    elif cmd == "force_release":
+                        self._do_ptt_release()
+                    elif cmd == "stop":
+                        break
+                except BaseException as e:
+                    # Catch ALL exceptions (including SystemExit, KeyboardInterrupt)
+                    # to prevent worker thread from dying silently
+                    logger.error("PTT worker error processing '%s': %s", cmd, e)
+                    # If we crashed during a release attempt, force ptt_active = False
+                    # so the next release attempt can try again
+                    if cmd in ("release", "force_release"):
+                        self.ptt_active = False
 
         self._ptt_thread = threading.Thread(target=ptt_worker, daemon=True)
         self._ptt_thread.start()
@@ -609,10 +622,17 @@ class AudioMixer:
             elif self._cached_ptt_vk is not None:
                 _simulate_key_vk(self._cached_ptt_vk, press=False)
             else:
+                # No valid key config - clear active flag to prevent stuck state
+                self.ptt_active = False
                 return
-            self.ptt_active = False
         except Exception as e:
             logger.error("Failed to release PTT key: %s", e)
+        finally:
+            # ALWAYS clear ptt_active on release attempt, even if API call failed.
+            # If the OS-level key is stuck, retrying the same failed call won't help.
+            # Better to reset state so the next press/release cycle starts clean.
+            self.ptt_active = False
+            self._ptt_active_cycles = 0
 
     def start(self):
         """Begin audio streams (separate input and output for compatibility)."""
@@ -858,8 +878,12 @@ class AudioMixer:
             for i in reversed(finished):
                 self.currently_playing.pop(i)
 
-            # Check if we should start PTT release countdown (all sounds finished)
-            all_sounds_finished = len(self.currently_playing) == 0
+            # Check if we should start PTT release countdown
+            # Only count sounds that are actively producing audio (not paused)
+            active_sounds = sum(
+                1 for s in self.currently_playing if not s.get("paused", False)
+            )
+            all_sounds_finished = active_sounds == 0
 
         # Handle PTT release with debounce to prevent premature release
         if all_sounds_finished and self.sound_queue.empty():
@@ -872,6 +896,19 @@ class AudioMixer:
         else:
             # Sounds are playing - reset countdown
             self._ptt_release_countdown = 0
+
+        # Safety timeout: force release if PTT has been held too long
+        # Catches all edge cases (worker crash, race conditions, zombie sounds, etc.)
+        if self.ptt_active:
+            self._ptt_active_cycles += 1
+            if self._ptt_active_cycles >= self._ptt_max_hold_cycles:
+                logger.warning("PTT safety timeout reached (%d cycles), force releasing",
+                               self._ptt_active_cycles)
+                self._release_ptt()
+                self._ptt_active_cycles = 0
+                self._ptt_release_countdown = 0
+        else:
+            self._ptt_active_cycles = 0
 
         # Apply soft clipping to allow volume boost above 100% to sound louder
         # This soft limiter preserves normal audio but compresses peaks above 1.0

@@ -695,7 +695,7 @@ class SoundboardApp:
         self._create_ui()
         self._load_config()
         self._preload_sounds()  # Preload all sounds into memory
-        
+
         # Let window size itself based on content, then set minimum size
         self.root.after(50, self._finalize_window_size)
 
@@ -713,17 +713,21 @@ class SoundboardApp:
         style.configure("TButton", background=COLORS["blurple"], foreground=COLORS["text_primary"])
 
     def _finalize_window_size(self):
-        """Set minimum window size based on actual content after widgets are created."""
+        """Set window size to a comfortable default that fits the layout."""
         self.root.update_idletasks()
         req_width = self.root.winfo_reqwidth()
         req_height = self.root.winfo_reqheight()
-        
-        # Set minimum size to current required size
-        self.root.minsize(req_width, max(req_height, 600))
-        
-        # If window is smaller than required, resize it
-        if self.root.winfo_width() < req_width or self.root.winfo_height() < req_height:
-            self.root.geometry(f"{req_width}x{max(req_height, 600)}")
+
+        # Ensure minimum comfortable size
+        min_w = max(req_width, 800)
+        min_h = max(req_height, 600)
+        self.root.minsize(min_w, min_h)
+
+        # Set initial size if window is too small
+        cur_w = self.root.winfo_width()
+        cur_h = self.root.winfo_height()
+        if cur_w < min_w or cur_h < min_h:
+            self.root.geometry(f"{max(cur_w, min_w)}x{max(cur_h, min_h)}")
 
     def _create_ui(self):
         """Build the main user interface."""
@@ -1103,6 +1107,10 @@ class SoundboardApp:
         self.tabs_container.bind("<Configure>", self._on_tabs_container_configure)
         self.tabs_canvas.bind("<Enter>", self._bind_tabs_mousewheel)
         self.tabs_canvas.bind("<Leave>", self._unbind_tabs_mousewheel)
+        # Use bind_all with add="+" so it doesn't clobber CTkScrollableFrame's binding.
+        # The handler checks _tabs_mousewheel_bound flag to only scroll when hovering.
+        self._tabs_mousewheel_bound = False
+        self.tabs_canvas.bind_all("<MouseWheel>", self._on_tabs_mousewheel, add="+")
 
     def _create_action_bar(self, parent):
         """Create the action bar with Move, Stop All, and Playing buttons."""
@@ -1168,14 +1176,16 @@ class SoundboardApp:
 
     def _bind_tabs_mousewheel(self, event=None):
         """Bind mousewheel to tabs scrolling when hovering over tabs area."""
-        self.tabs_canvas.bind_all("<MouseWheel>", self._on_tabs_mousewheel)
+        self._tabs_mousewheel_bound = True
 
     def _unbind_tabs_mousewheel(self, event=None):
         """Unbind mousewheel from tabs scrolling."""
-        self.tabs_canvas.unbind_all("<MouseWheel>")
+        self._tabs_mousewheel_bound = False
 
     def _on_tabs_mousewheel(self, event):
         """Handle mousewheel scrolling on tabs canvas (vertical)."""
+        if not getattr(self, '_tabs_mousewheel_bound', False):
+            return
         # Only scroll if there's overflow
         canvas_height = self.tabs_canvas.winfo_height()
         content_height = self.tabs_container.winfo_reqheight()
@@ -1327,9 +1337,6 @@ class SoundboardApp:
 
         # Scroll the new active tab into view
         self._scroll_tab_into_view(tab_idx)
-
-        # Update scrollbar visibility for new tab's content
-        self.root.after(10, self._update_scrollbar_visibility)
 
     def _scroll_tab_into_view(self, tab_idx: int):
         """Scroll the tabs canvas to make the specified tab visible."""
@@ -1615,7 +1622,11 @@ class SoundboardApp:
         self._save_config()
 
     def _create_soundboard_section(self, parent):
-        """Create the soundboard grid section with scrolling."""
+        """Create the soundboard grid section with scrolling.
+
+        Uses CTkScrollableFrame which handles scroll + width natively without
+        manual canvas width syncing (the old approach caused massive resize lag).
+        """
         # Modern card-style container
         board_frame = ctk.CTkFrame(
             parent,
@@ -1636,95 +1647,24 @@ class SoundboardApp:
         )
         header_label.pack(side=tk.LEFT)
 
-        # Create scrollable canvas (using tk.Canvas for scroll support)
-        canvas_frame = ctk.CTkFrame(board_frame, fg_color="transparent")
-        canvas_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
-
-        self.slots_canvas = tk.Canvas(
-            canvas_frame,
-            bg=COLORS["bg_dark"],
-            highlightthickness=0,
-            bd=0,
+        # Scrollable frame — handles scroll + width natively
+        self.scrollable_grid = ctk.CTkScrollableFrame(
+            board_frame,
+            fg_color=COLORS["bg_dark"],
+            scrollbar_button_color=COLORS["bg_light"],
+            scrollbar_button_hover_color=COLORS["bg_lighter"],
+            corner_radius=0,
         )
-        self.slots_scrollbar = ctk.CTkScrollbar(
-            canvas_frame,
-            orientation="vertical",
-            command=self.slots_canvas.yview,
-            fg_color=COLORS["bg_medium"],
-            button_color=COLORS["bg_light"],
-            button_hover_color=COLORS["bg_lighter"],
-        )
-        self.slots_canvas.configure(yscrollcommand=self.slots_scrollbar.set)
+        self.scrollable_grid.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
 
-        # Pack canvas (scrollbar will be shown/hidden dynamically based on content)
-        self.slots_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        # Container frame inside canvas - will hold per-tab grid frames stacked at same position
-        self.grid_frame = ctk.CTkFrame(self.slots_canvas, fg_color=COLORS["bg_dark"])
-        self.grid_frame_window = self.slots_canvas.create_window(
-            (0, 0), window=self.grid_frame, anchor="nw"
-        )
-
-        # Bind resize events
-        self.grid_frame.bind("<Configure>", self._on_grid_configure)
-        self.slots_canvas.bind("<Configure>", self._on_canvas_configure)
-
-        # Enable mousewheel scrolling only when hovering over the soundboard area
-        self.slots_canvas.bind("<Enter>", self._on_canvas_enter)
-        self.slots_canvas.bind("<Leave>", self._on_canvas_leave)
+        # The grid_frame is the scrollable frame's inner container
+        # Tab grid frames are stacked inside it at position (0,0)
+        self.grid_frame = self.scrollable_grid
+        self.grid_frame.grid_columnconfigure(0, weight=1)
+        self.grid_frame.grid_rowconfigure(0, weight=1)
 
         # Don't create slot widgets here - they're created per-tab lazily
         # After config loads, _build_all_tab_widgets() will create them
-
-    def _on_grid_configure(self, event):
-        """Update scroll region when grid changes size."""
-        self.slots_canvas.configure(scrollregion=self.slots_canvas.bbox("all"))
-        # Show/hide scrollbar based on content height vs canvas height
-        self._update_scrollbar_visibility()
-
-    def _on_canvas_configure(self, event):
-        """Update grid frame width to match canvas width."""
-        # Make grid frame at least as wide as canvas
-        self.slots_canvas.itemconfig(self.grid_frame_window, width=event.width)
-        # Show/hide scrollbar based on content height vs canvas height
-        self._update_scrollbar_visibility()
-
-    def _update_scrollbar_visibility(self):
-        """Show scrollbar only when content exceeds visible area."""
-        # Get the bounding box of content
-        bbox = self.slots_canvas.bbox("all")
-        if bbox is None:
-            return
-        content_height = bbox[3] - bbox[1]
-        canvas_height = self.slots_canvas.winfo_height()
-
-        # Canvas returns 1 before it's properly mapped - ignore these cases
-        if canvas_height <= 1:
-            return
-
-        # Add small buffer (5px) to prevent edge cases where it flickers
-        if content_height > canvas_height + 5:
-            # Content is larger than canvas - show scrollbar
-            if not self.slots_scrollbar.winfo_ismapped():
-                self.slots_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        else:
-            # Content fits - hide scrollbar
-            if self.slots_scrollbar.winfo_ismapped():
-                self.slots_scrollbar.pack_forget()
-
-    def _on_canvas_enter(self, event):
-        """Enable scrolling when mouse enters the soundboard area."""
-        self.slots_canvas.bind_all("<MouseWheel>", self._on_mousewheel)
-
-    def _on_canvas_leave(self, event):
-        """Disable scrolling when mouse leaves the soundboard area."""
-        self.slots_canvas.unbind_all("<MouseWheel>")
-
-    def _on_mousewheel(self, event):
-        """Handle mouse wheel scrolling."""
-        if not self.slots_scrollbar.winfo_ismapped():
-            return
-        self.slots_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
     def _create_slot_widgets(self):
         """Legacy method - now builds widgets for current tab only."""
@@ -1764,12 +1704,14 @@ class SoundboardApp:
         tab_grid.grid(row=0, column=0, sticky="nsew")
         self.tab_grid_frames[tab_idx] = tab_grid
 
+        # Configure columns for even distribution (flex layout)
+        for c in range(UI["grid_columns"]):
+            tab_grid.grid_columnconfigure(c, weight=1, uniform="slot")
+
         # Calculate slots needed
         max_idx = max(tab.slots.keys()) if tab.slots else -1
         num_slots = max(max_idx + 2, UI["total_slots"])
 
-        SLOT_WIDTH = UI["slot_width"]
-        SLOT_HEIGHT = UI["slot_height"] - 32  # Main area height (total - bottom bar)
         BOTTOM_HEIGHT = 32
 
         for i in range(num_slots):
@@ -1779,11 +1721,9 @@ class SoundboardApp:
                 tab_grid,
                 fg_color=COLORS["bg_medium"],
                 corner_radius=UI["slot_corner_radius"],
-                width=SLOT_WIDTH,
-                height=SLOT_HEIGHT + BOTTOM_HEIGHT,
+                height=UI["slot_height"],
             )
-            slot_frame.grid(row=row, column=col, padx=UI["slot_padding"], pady=UI["slot_padding"])
-            slot_frame.grid_propagate(False)
+            slot_frame.grid(row=row, column=col, padx=UI["slot_padding"], pady=UI["slot_padding"], sticky="nsew")
             slot_frame.pack_propagate(False)
 
             bottom_frame = ctk.CTkFrame(slot_frame, fg_color="transparent", height=BOTTOM_HEIGHT)
@@ -1974,14 +1914,30 @@ class SoundboardApp:
                 del storage[old_key]
 
     def _build_all_tab_widgets(self):
-        """Build widgets for all tabs upfront for instant switching."""
-        for tab_idx in range(len(self.tabs)):
-            self._build_tab_widgets(tab_idx)
+        """Build current tab immediately, then build remaining tabs in background.
+
+        This keeps startup fast (only current tab blocks) while ensuring
+        tab switching is instant (other tabs are pre-built before user clicks them).
+        """
+        self._build_tab_widgets(self.current_tab_idx)
         # Raise current tab to top
         if self.current_tab_idx in self.tab_grid_frames:
             self.tab_grid_frames[self.current_tab_idx].tkraise()
         self._update_current_tab_aliases()
-        self.root.after(10, self._update_scrollbar_visibility)
+
+        # Build remaining tabs in background, one per event loop tick
+        remaining = [i for i in range(len(self.tabs)) if i != self.current_tab_idx]
+        self._build_tabs_incrementally(remaining)
+
+    def _build_tabs_incrementally(self, remaining: list):
+        """Build one tab per event loop tick to avoid blocking the UI."""
+        if not remaining:
+            return
+        tab_idx = remaining.pop(0)
+        if not self._tab_built.get(tab_idx, False):
+            self._build_tab_widgets(tab_idx)
+        # Schedule next tab build on next idle tick
+        self.root.after_idle(lambda: self._build_tabs_incrementally(remaining))
 
     def _animate_progress(self):
         """Update progress bars for playing sounds."""
@@ -4112,4 +4068,7 @@ class SoundboardApp:
 
     def run(self):
         """Start the application main loop."""
-        self.root.mainloop()
+        try:
+            self.root.mainloop()
+        except (KeyboardInterrupt, SystemExit):
+            pass
