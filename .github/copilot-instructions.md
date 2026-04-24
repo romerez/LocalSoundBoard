@@ -61,6 +61,7 @@ Replace Discord's built-in soundboard with a standalone, local solution that:
 | `pydub` | >=0.25.1 | Extended audio format support (MP3, OGG, M4A, AAC, WMA, Opus, WebM). Fallback when soundfile fails. |
 | `imageio-ffmpeg` | >=0.6.0 | Bundled ffmpeg binary for pydub. No separate ffmpeg installation required. |
 | `librosa` | >=0.10.0 | Time-stretching for pitch-preserving speed changes. Allows 0.5x-2x speed without chipmunk voice. |
+| `windnd` | >=0.0.7 | Windows drag-and-drop support for importing images onto sound slots from file explorer. |
 | `emoji-data-python` | >=1.6.0 | Emoji database with categories. Provides 1800+ emojis organized by category for emoji picker. |
 | `colour` | >=0.1.5 | Color manipulation utilities. Lighten, darken, saturate, generate gradients, complementary colors. |
 
@@ -73,7 +74,7 @@ Replace Discord's built-in soundboard with a standalone, local solution that:
 | `threading` | Background audio processing, non-blocking operations |
 | `queue` | Thread-safe audio data transfer between callbacks |
 | `ctypes` | Windows API calls for mouse button simulation (PTT) |
-| `hashlib` | Generate unique filenames for cached sounds |
+| `windnd` | Windows drag-and-drop file support |
 | `dataclasses` | Clean data models for SoundSlot and SoundTab |
 | `json` | Config file persistence |
 | `pathlib` | Cross-platform file path handling |
@@ -150,6 +151,7 @@ def main():
 | `ALL_SLOT_COLORS` | Combined standard + neon colors (24 total) |
 | `AUDIO` | Sample rate (48000), block size (1024), channels (2) |
 | `UI` | Window title, size (740x650), grid columns (4), rows (3) |
+| `SOUND_GROUPS` | Predefined sound group names (Effects, Music, Voice, Meme, Notification, Game, Nature, Ambient, Other) |
 | `EDITOR` | Max duration warning (5s), zoom limits (1x-50x) |
 | `CONFIG_FILE` | "soundboard_config.json" |
 | `SOUNDS_DIR` | "sounds" folder name |
@@ -341,6 +343,12 @@ Example: `airhorn_8f3a2b1c.mp3`
 - [x] Global "Stop All Sounds" button in audio options
 - [x] Pitch preservation option for speed changes (uses librosa time-stretch)
 - [x] Modern UI with CustomTkinter (rounded corners, modern styling)
+- [x] Drag-and-drop image from file explorer onto sound slots
+- [x] Sound groups/types for organization and filtering (Effects, Music, Voice, Meme, etc.)
+- [x] Multiple groups per sound (a sound can belong to several groups)
+- [x] Custom group creation (add your own group names, persisted in config)
+- [x] Search/filter sounds across all tabs by name, hotkey, emoji, or group
+- [x] Group filter dropdown in search bar
 - [x] Looping sounds option (configurable loop count and delay between loops)
 - [x] DJ Looper side panel (full DJ controls for playing sounds)
 - [x] Loop indicator (🔁) on slot buttons for looping sounds
@@ -367,8 +375,6 @@ Example: `airhorn_8f3a2b1c.mp3`
 
 ### Medium Priority
 - [ ] Drag-and-drop sound file import (from file explorer)
-- [ ] Search/filter sounds
-- [ ] Add a sound group/type so we can later filter it or search
 - [ ] Fade in/out effects
 - [ ] Add stream deck integration
 - [ ] Sound scheduler (queue sounds to play in sequence)
@@ -435,6 +441,7 @@ Example: `airhorn_8f3a2b1c.mp3`
 | `loop` | `bool` | `False` | If True, sound loops until stopped |
 | `loop_count` | `int` | `0` | Number of times to loop (0 = infinite) |
 | `loop_delay` | `float` | `0.0` | Delay between loops in seconds |
+| `groups` | `List[str]` | `[]` | Sound groups/types for filtering (e.g., ["Effects", "Music"]) |
 
 #### Methods
 | Method | Returns | Description |
@@ -933,7 +940,8 @@ edit_sound_file(
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": ["Effects", "Meme"]
         }
       }
     }
@@ -946,7 +954,8 @@ edit_sound_file(
   "monitor_enabled": false,
   "auto_start": true,
   "now_playing_visible": false,
-  "now_playing_side": "right"
+  "now_playing_side": "right",
+  "custom_groups": ["MyCustomGroup"]
 }
 ```
 
@@ -989,6 +998,7 @@ edit_sound_file(
 | `loop` | `bool` | `false` | If true, sound loops until stopped |
 | `loop_count` | `int` | `0` | Number of times to loop (0 = infinite) |
 | `loop_delay` | `float` | `0.0` | Delay between loops in seconds |
+| `groups` | `List[string]` | `[]` | Sound groups/types for filtering (e.g., ["Effects", "Meme"]) |
 
 ### Migration Notes
 
@@ -997,6 +1007,7 @@ The config format has evolved. Old configs are auto-migrated:
 - **v1.1 → v1.2:** Added `speed` and `color` to SoundSlot
 - **v1.2 → v1.3:** Added `preserve_pitch` to SoundSlot
 - **v1.3 → v1.4:** Added `loop`, `loop_count`, `loop_delay` to SoundSlot; added `now_playing_visible`, `now_playing_side` to root config
+- **v1.4 → v1.5:** Changed `group` (single string) to `groups` (list of strings); added `custom_groups` to root config
 ```
 
 ---
@@ -1162,6 +1173,8 @@ When asked to add a feature:
 | PTT doesn't trigger Discord | `_get_vk_code()` fails silently when `keyboard._winkeyboard.official_virtual_keys` contains non-strings (bools), exception is caught but fallback path is skipped | Add `isinstance(n, str)` filter when iterating `official_virtual_keys`; wrap the loop in its own try/except so fallback `key_to_scan_codes` path still runs |
 | Sounds don't play with rapid clicks | Lock contention and duplicate cache lookups | Queue sound before taking locks, use single cache lookup |
 | Direct sf.read() fails for OGG | Multiple code paths used sf.read directly without fallback | Consolidated audio loading to shared `read_audio_file()` function in audio.py |
+| PTT gets stuck when user presses PTT during playback | `mouse` library's `press()`/`release()` has internal state tracking that can conflict with physical mouse input; queue-based release can be lost or reordered | Replace `mouse` library simulation with direct Windows `SendInput` API for mouse buttons; use `_force_release_ptt()` (direct, not queued) for stop operations; drain PTT queue before force-releasing |
+| Preview sounds can't be stopped | Preview uses `sd.play()` directly with no stop mechanism; stop button only stops mixer sounds | Added `_stop_preview()` and `_stop_all_previews()` methods; preview button toggles play/stop; stop button and "Stop All" also stop previews; show stop button during previews |
 
 ### GUI / Tkinter
 

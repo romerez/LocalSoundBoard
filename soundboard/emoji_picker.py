@@ -654,7 +654,15 @@ def pick_emoji() -> Optional[str]:
     # Get the path to this module
     module_path = os.path.abspath(__file__)
 
-    # Get the Python executable from the same environment
+    # When running as a frozen exe, sys.executable points to the .exe, not Python.
+    # In that case, the emoji_picker.py script is bundled alongside and we need
+    # a real Python interpreter. Fall back gracefully if unavailable.
+    if getattr(sys, 'frozen', False):
+        # Frozen exe - try to find a Python interpreter
+        # The emoji picker won't work in frozen mode without a system Python
+        # For now, return None to skip the emoji picker gracefully
+        return None
+
     python_exe = sys.executable
 
     try:

@@ -16,7 +16,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "6": {
           "name": "זה כתב\"ם",
@@ -30,7 +31,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "7": {
           "name": "Aint Nobody Got Time For That",
@@ -44,7 +46,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "11": {
           "name": "סתום ת'פה ש'ך כבר!!! (רמיקס) ",
@@ -53,12 +56,15 @@
           "volume": 0.67,
           "emoji": null,
           "image_path": null,
-          "color": "#7289DA",
+          "color": "#5865F2",
           "speed": 1.0,
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": [
+            "סתום"
+          ]
         },
         "12": {
           "name": "Im rich bitch",
@@ -72,7 +78,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "0": {
           "name": "Arakara",
@@ -86,7 +93,10 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": [
+            "Meme"
+          ]
         },
         "1": {
           "name": "Fuck you bloody",
@@ -100,7 +110,8 @@
           "preserve_pitch": false,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "2": {
           "name": "במקרה היה לי קקי",
@@ -114,7 +125,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "4": {
           "name": "Bye Nigga",
@@ -128,7 +140,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "3": {
           "name": "Gotcha Bitch",
@@ -142,7 +155,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "10": {
           "name": "anita",
@@ -156,7 +170,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "9": {
           "name": "Risitas Etu",
@@ -170,7 +185,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "8": {
           "name": "Risitas lol",
@@ -184,7 +200,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "13": {
           "name": "Jesus Christ",
@@ -198,7 +215,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "14": {
           "name": "Anyway Hows Your Sex Life",
@@ -212,7 +230,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "15": {
           "name": "my names jeff",
@@ -226,7 +245,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         }
       }
     },
@@ -246,7 +266,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         }
       }
     },
@@ -266,7 +287,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "1": {
           "name": "ראש צבע עיפרון",
@@ -280,7 +302,8 @@
           "preserve_pitch": false,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "2": {
           "name": "ראש מגנזיום",
@@ -294,7 +317,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "3": {
           "name": "סתום יא בן זונה ",
@@ -308,7 +332,10 @@
           "preserve_pitch": false,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": [
+            "סתום"
+          ]
         },
         "4": {
           "name": "שב בשקט שאני מדבר!",
@@ -322,7 +349,25 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
+        },
+        "5": {
+          "name": "אחותך עושה לי את זה",
+          "file_path": "sounds\\לוקץ' - אחותך עושה לי את זה (קליפ רשמי)  Lukach - Your Sister Is Doing It To Me_77361049.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#23A559",
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [
+            "קללות"
+          ]
         }
       }
     },
@@ -342,7 +387,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "1": {
           "name": "ברוכים הבאים לשעשועון",
@@ -356,7 +402,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         }
       }
     },
@@ -376,7 +423,10 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": [
+            "Meme"
+          ]
         },
         "1": {
           "name": "בוא נטיל מטבע מה שיצא יצא ",
@@ -390,7 +440,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "2": {
           "name": "נגמור אותו",
@@ -404,7 +455,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "3": {
           "name": "יצא פלי",
@@ -418,7 +470,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "4": {
           "name": "את לא בן",
@@ -432,7 +485,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         }
       }
     },
@@ -452,7 +506,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "1": {
           "name": "Great Shot Ally",
@@ -466,7 +521,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "2": {
           "name": "Wondavar",
@@ -480,7 +536,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "3": {
           "name": "Im a Medic Ally",
@@ -494,7 +551,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "4": {
           "name": "Hahaa!",
@@ -508,7 +566,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "5": {
           "name": "Enemy in disguse",
@@ -522,7 +581,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "6": {
           "name": "Afidazean",
@@ -536,7 +596,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "7": {
           "name": "Need a Medic!",
@@ -550,7 +611,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "8": {
           "name": "HALLO!",
@@ -564,7 +626,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "9": {
           "name": "Need a medic ! Axis",
@@ -578,7 +641,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "10": {
           "name": "Oops...",
@@ -592,7 +656,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "11": {
           "name": "Danke!",
@@ -606,7 +671,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         }
       }
     },
@@ -626,7 +692,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "1": {
           "name": "בושה וחרפה!",
@@ -640,7 +707,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         }
       }
     },
@@ -660,7 +728,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "5": {
           "name": "אף אחד לא שאל אותך, סרדין",
@@ -674,21 +743,25 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": [
+            "סתום"
+          ]
         },
         "0": {
-          "name": "אתה לא צריך גימל ",
-          "file_path": "sounds\\ספיחס - אתה לא צריך גימל [Lh81z-w6JYE]_93631677.wav",
+          "name": "יש בשר עוף אפשר לעשות מרק",
+          "file_path": "sounds\\אלכס חולה אהבה - שוק שחור [72Nxn_4KdnI]_04740202.wav",
           "hotkey": null,
           "volume": 1.0,
           "emoji": null,
-          "image_path": "images\\צילום מסך 2026-04-04 183809_ffe5c07a.png",
+          "image_path": "images\\צילום מסך 2026-04-04 183700_0513246f.png",
           "color": "#5865F2",
           "speed": 1.0,
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "6": {
           "name": "אתה ישן? ",
@@ -702,7 +775,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "1": {
           "name": "גברת זה ביצים של בעלי כן?",
@@ -716,23 +790,10 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "2": {
-          "name": "תצא מהר החוצה מטומטם",
-          "file_path": "sounds\\ארכיון צחוק ישראלי -ספיחס קיטבג נפל בקקי אסקימו לימון lemon popsicle 4 sapiches eskimo limon [LssNhsxUrTc]_95168687.wav",
-          "hotkey": null,
-          "volume": 1.0,
-          "emoji": null,
-          "image_path": "images\\צילום מסך 2026-04-04 183727_33225089.png",
-          "color": "#5865F2",
-          "speed": 1.0,
-          "preserve_pitch": true,
-          "loop": false,
-          "loop_count": 0,
-          "loop_delay": 0.0
-        },
-        "3": {
           "name": "מי דיבר כאן שוק שחור ?",
           "file_path": "sounds\\אלכס חולה אהבה - שוק שחור [72Nxn_4KdnI]_04530753.wav",
           "hotkey": null,
@@ -744,9 +805,10 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
-        "7": {
+        "3": {
           "name": "שד בא לקחת אותי ",
           "file_path": "sounds\\אלכס חולה אהבה - שד בא לקחת אותי [Y6Fdn9EfCl4]_04607104.wav",
           "hotkey": null,
@@ -758,21 +820,38 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
-        "8": {
-          "name": "יש בשר עוף אפשר לעשות מרק",
-          "file_path": "sounds\\אלכס חולה אהבה - שוק שחור [72Nxn_4KdnI]_04740202.wav",
+        "7": {
+          "name": "תצא מהר החוצה מטומטם",
+          "file_path": "sounds\\ארכיון צחוק ישראלי -ספיחס קיטבג נפל בקקי אסקימו לימון lemon popsicle 4 sapiches eskimo limon [LssNhsxUrTc]_95168687.wav",
           "hotkey": null,
           "volume": 1.0,
           "emoji": null,
-          "image_path": "images\\צילום מסך 2026-04-04 183700_0513246f.png",
+          "image_path": "images\\צילום מסך 2026-04-04 183727_33225089.png",
           "color": "#5865F2",
           "speed": 1.0,
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
+        },
+        "8": {
+          "name": "אתה לא צריך גימל ",
+          "file_path": "sounds\\ספיחס - אתה לא צריך גימל [Lh81z-w6JYE]_93631677.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": "images\\צילום מסך 2026-04-04 183809_ffe5c07a.png",
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": []
         }
       }
     },
@@ -792,11 +871,12 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "1": {
           "name": "בסדר מוצרלה",
-          "file_path": "sounds\\משפחת שווץ _ פרק 3 - דוכן מיצים_17491424.wav",
+          "file_path": "sounds\\משפחת שווץ _ פרק 3 - דוכן מיצים_17491424_25402539.wav",
           "hotkey": null,
           "volume": 1.0,
           "emoji": null,
@@ -806,7 +886,23 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
+        },
+        "2": {
+          "name": "ארך ארך ארך",
+          "file_path": "sounds\\משפחת שווץ _ פרק 3 - דוכן מיצים_84259668.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": []
         }
       }
     },
@@ -826,7 +922,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "1": {
           "name": "אתה תשב שם עם הכסף שלך",
@@ -840,7 +937,8 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
         },
         "2": {
           "name": "לכבודך",
@@ -854,7 +952,89 @@
           "preserve_pitch": true,
           "loop": false,
           "loop_count": 0,
-          "loop_delay": 0.0
+          "loop_delay": 0.0,
+          "groups": []
+        }
+      }
+    },
+    {
+      "name": "טראנסים",
+      "emoji": null,
+      "slots": {
+        "0": {
+          "name": "אמא שלך זונההההה (רמיקס)",
+          "file_path": "sounds\\אמא שלך זונההההה (רמיקס)_83953871.wav",
+          "hotkey": null,
+          "volume": 0.65,
+          "emoji": null,
+          "image_path": null,
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": []
+        },
+        "1": {
+          "name": " אתם על הזין שלי (רמיקס)",
+          "file_path": "sounds\\(שיחת טלפון עם המשטרה) אתם על הזין שלי (רמיקס)_84029056.wav",
+          "hotkey": null,
+          "volume": 0.54,
+          "emoji": null,
+          "image_path": null,
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": []
+        },
+        "3": {
+          "name": "סתום תפה כבר (רמיקס)",
+          "file_path": "sounds\\סתום תפה כבר (רמיקס)_84376491.wav",
+          "hotkey": null,
+          "volume": 0.47,
+          "emoji": null,
+          "image_path": null,
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": []
+        },
+        "2": {
+          "name": "אני רוצה לזיין",
+          "file_path": "sounds\\אני רוצה לזיין (רמיקס באורך מלא) [cJQd_EZ7Dws]_59257147.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": []
+        },
+        "4": {
+          "name": "אני רוצה מפתחות!",
+          "file_path": "sounds\\מפתחות_60405305.wav",
+          "hotkey": null,
+          "volume": 0.28,
+          "emoji": null,
+          "image_path": null,
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": []
         }
       }
     }
@@ -862,10 +1042,14 @@
   "current_tab": 0,
   "ptt_enabled": true,
   "ptt_key": "f9",
-  "input_device": "5: Microphone (HyperX Quadcast)",
+  "input_device": "25: Microphone (HyperX Quadcast)",
   "output_device": "13: CABLE In 16ch (VB-Audio Virtual",
   "auto_start": true,
   "monitor_enabled": true,
   "now_playing_visible": true,
-  "now_playing_side": "left"
+  "now_playing_side": "right",
+  "custom_groups": [
+    "קללות",
+    "סתום"
+  ]
 }

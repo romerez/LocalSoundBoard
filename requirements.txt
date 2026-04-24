@@ -9,6 +9,7 @@ pydub>=0.25.1
 imageio-ffmpeg>=0.6.0  # Bundled ffmpeg for pydub OGG/M4A/AAC support
 librosa>=0.10.0  # Time-stretching for pitch-preserving speed changes
 customtkinter>=5.2.0  # Modern UI widgets with rounded corners
+windnd>=0.0.7  # Windows drag-and-drop support for file imports
 emoji-data-python>=1.6.0  # Emoji data with categories for emoji picker
 colour>=0.1.5  # Color manipulation and utilities
 PyQt6>=6.4.0  # For colored emoji rendering in emoji picker

@@ -12,11 +12,13 @@ os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
 import ctypes
+import glob
 import hashlib
 import io
 import logging
 import queue
 import shutil
+import sys
 import threading
 from pathlib import Path
 
@@ -30,32 +32,72 @@ from .constants import AUDIO, SOUNDS_DIR
 logger = logging.getLogger(__name__)
 
 
-# Mouse button simulation using the mouse library (simpler, more reliable)
+# Mouse button simulation using direct Windows SendInput API
+# Avoids the mouse library which can have internal state tracking issues
+# that cause buttons to get "stuck" when physical and simulated inputs mix.
 def _simulate_mouse_button(button: str, press: bool = True):
     """
-    Simulate mouse button press/release using the mouse library.
-    Maps button names to mouse library constants.
+    Simulate mouse button press/release using Windows SendInput API directly.
+    This is more reliable than the mouse library because it doesn't maintain
+    internal state that can get confused by concurrent physical button presses.
     """
-    import mouse as mouse_lib
+    # Mouse event flags for SendInput
+    MOUSEEVENTF_LEFTDOWN = 0x0002
+    MOUSEEVENTF_LEFTUP = 0x0004
+    MOUSEEVENTF_RIGHTDOWN = 0x0008
+    MOUSEEVENTF_RIGHTUP = 0x0010
+    MOUSEEVENTF_MIDDLEDOWN = 0x0020
+    MOUSEEVENTF_MIDDLEUP = 0x0040
+    MOUSEEVENTF_XDOWN = 0x0080
+    MOUSEEVENTF_XUP = 0x0100
+    XBUTTON1 = 0x0001
+    XBUTTON2 = 0x0002
+    INPUT_MOUSE = 0
 
-    # Map our button names to mouse library button names
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [
+            ("dx", ctypes.c_long),
+            ("dy", ctypes.c_long),
+            ("mouseData", ctypes.c_ulong),
+            ("dwFlags", ctypes.c_ulong),
+            ("time", ctypes.c_ulong),
+            ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+        ]
+
+    class INPUT(ctypes.Structure):
+        _fields_ = [
+            ("type", ctypes.c_ulong),
+            ("mi", MOUSEINPUT),
+            ("padding", ctypes.c_ubyte * 8),
+        ]
+
+    # Map button names to (down_flag, up_flag, mouseData)
     button_map = {
-        "left": mouse_lib.LEFT,
-        "right": mouse_lib.RIGHT,
-        "middle": mouse_lib.MIDDLE,
-        "x": mouse_lib.X,
-        "x1": mouse_lib.X,
-        "x2": mouse_lib.X2,
+        "left": (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, 0),
+        "right": (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, 0),
+        "middle": (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, 0),
+        "x": (MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, XBUTTON1),
+        "x1": (MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, XBUTTON1),
+        "x2": (MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, XBUTTON2),
     }
 
-    mouse_button = button_map.get(button)
-    if mouse_button is None:
+    entry = button_map.get(button)
+    if entry is None:
         return
 
-    if press:
-        mouse_lib.press(button=mouse_button)
-    else:
-        mouse_lib.release(button=mouse_button)
+    down_flag, up_flag, mouse_data = entry
+    flags = down_flag if press else up_flag
+
+    inp = INPUT()
+    inp.type = INPUT_MOUSE
+    inp.mi.dx = 0
+    inp.mi.dy = 0
+    inp.mi.mouseData = mouse_data
+    inp.mi.dwFlags = flags
+    inp.mi.time = 0
+    inp.mi.dwExtraInfo = None
+
+    ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
 
 
 def _get_vk_code(key: str) -> Optional[int]:
@@ -167,8 +209,16 @@ try:
     import imageio_ffmpeg
 
     FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
-except ImportError:
+except (ImportError, FileNotFoundError):
     FFMPEG_PATH = None
+
+# When running as frozen exe, ffmpeg may be in the bundle directory
+if not FFMPEG_PATH and getattr(sys, 'frozen', False):
+    import glob
+    base = sys._MEIPASS  # type: ignore[attr-defined]
+    candidates = glob.glob(os.path.join(base, 'imageio_ffmpeg', 'binaries', 'ffmpeg*'))
+    if candidates:
+        FFMPEG_PATH = candidates[0]
 
 # Try to import pydub for extended format support (M4A, AAC, WMA, etc.)
 try:
@@ -547,7 +597,7 @@ class AudioMixer:
         # Safety timeout: track how long PTT has been held (in callback cycles)
         # If PTT is active for too long without sounds, force release as safety net
         self._ptt_active_cycles = 0  # Counts callback cycles while ptt_active is True
-        self._ptt_max_hold_cycles = 1500  # ~30 seconds (1500 * ~21ms)
+        self._ptt_max_hold_cycles = 500  # ~10 seconds (500 * ~21ms)
 
         # Local monitoring (play sounds to speakers too)
         self.monitor_enabled = False
@@ -670,7 +720,7 @@ class AudioMixer:
         self.running = False
 
         # CRITICAL: Release PTT key first to prevent Windows UI freeze
-        self._force_release_ptt()
+        self._force_release_ptt(shutdown=True)
 
         # Use abort() instead of stop() for faster, non-blocking shutdown
         if self.input_stream:
@@ -880,9 +930,7 @@ class AudioMixer:
 
             # Check if we should start PTT release countdown
             # Only count sounds that are actively producing audio (not paused)
-            active_sounds = sum(
-                1 for s in self.currently_playing if not s.get("paused", False)
-            )
+            active_sounds = sum(1 for s in self.currently_playing if not s.get("paused", False))
             all_sounds_finished = active_sounds == 0
 
         # Handle PTT release with debounce to prevent premature release
@@ -902,11 +950,12 @@ class AudioMixer:
         if self.ptt_active:
             self._ptt_active_cycles += 1
             if self._ptt_active_cycles >= self._ptt_max_hold_cycles:
-                logger.warning("PTT safety timeout reached (%d cycles), force releasing",
-                               self._ptt_active_cycles)
-                self._release_ptt()
-                self._ptt_active_cycles = 0
-                self._ptt_release_countdown = 0
+                logger.warning(
+                    "PTT safety timeout reached (%d cycles), force releasing",
+                    self._ptt_active_cycles,
+                )
+                # Use direct release (bypass queue) for maximum reliability
+                self._force_release_ptt()
         else:
             self._ptt_active_cycles = 0
 
@@ -1231,7 +1280,8 @@ class AudioMixer:
         # Check if we should release PTT (no more sounds playing)
         with self.lock:
             if len(self.currently_playing) == 0 and self.sound_queue.empty():
-                self._release_ptt()
+                # Force direct release for reliability (bypass queue)
+                self._force_release_ptt()
 
     def stop_all_sounds(self):
         """Clear playback queue and stop all sounds."""
@@ -1245,8 +1295,8 @@ class AudioMixer:
             except queue.Empty:
                 break
 
-        # Release PTT key
-        self._release_ptt()
+        # Force release PTT key directly (bypass queue for reliability)
+        self._force_release_ptt()
 
     def pause_sound(self, sound_id: str):
         """Pause a specific sound by its ID.
@@ -1516,28 +1566,43 @@ class AudioMixer:
         except queue.Full:
             pass
 
-    def _force_release_ptt(self):
-        """Force release PTT key unconditionally. Used during shutdown.
+    def _force_release_ptt(self, shutdown: bool = False):
+        """Force release PTT key unconditionally. Bypasses the queue for reliability.
 
-        This one executes IMMEDIATELY (not queued) since it's for shutdown.
+        Used when stopping all sounds and during shutdown. Executes immediately
+        on the calling thread to prevent PTT from getting stuck.
+
+        Args:
+            shutdown: If True, also sends "stop" to the worker thread.
         """
         if not self.ptt_key:
             return
-        # Signal the worker thread to stop
-        try:
-            self._ptt_queue.put_nowait("stop")
-        except queue.Full:
-            pass
-        # Also directly release to ensure key isn't stuck
+        if shutdown:
+            # Signal the worker thread to stop
+            try:
+                self._ptt_queue.put_nowait("stop")
+            except queue.Full:
+                pass
+        else:
+            # Drain any pending press commands that could re-activate PTT after release
+            while not self._ptt_queue.empty():
+                try:
+                    self._ptt_queue.get_nowait()
+                except queue.Empty:
+                    break
+        # Directly release to ensure key isn't stuck (bypass queue)
         try:
             if self.ptt_key.startswith("mouse"):
                 button = self.PTT_BUTTON_MAP.get(self.ptt_key, "x2")
                 _simulate_mouse_button(button, press=False)
             elif self._cached_ptt_vk is not None:
                 _simulate_key_vk(self._cached_ptt_vk, press=False)
-            self.ptt_active = False
         except Exception:
-            pass  # Ignore errors during shutdown
+            pass  # Best effort
+        finally:
+            self.ptt_active = False
+            self._ptt_active_cycles = 0
+            self._ptt_release_countdown = 0
 
     def _check_ptt_release(self):
         """Check if all sounds finished and release PTT if so."""

@@ -24,6 +24,7 @@ class SoundSlot:
     loop: bool = False  # If True, sound loops until stopped
     loop_count: int = 0  # Number of times to loop (0 = infinite)
     loop_delay: float = 0.0  # Delay between loops in seconds
+    groups: List[str] = field(default_factory=list)  # Sound groups/types for filtering
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -40,6 +41,7 @@ class SoundSlot:
             "loop": self.loop,
             "loop_count": self.loop_count,
             "loop_delay": self.loop_delay,
+            "groups": self.groups,
         }
 
     @classmethod
@@ -58,7 +60,25 @@ class SoundSlot:
             loop=data.get("loop", False),
             loop_count=data.get("loop_count", 0),
             loop_delay=data.get("loop_delay", 0.0),
+            groups=_migrate_groups(data),
         )
+
+
+def _migrate_groups(data: Dict[str, Any]) -> List[str]:
+    """Migrate old single 'group' field to new 'groups' list."""
+    # New format: list of groups
+    if "groups" in data:
+        val = data["groups"]
+        if isinstance(val, list):
+            return val
+        if isinstance(val, str) and val:
+            return [val]
+        return []
+    # Old format: single group string
+    old = data.get("group")
+    if old and isinstance(old, str):
+        return [old]
+    return []
 
 
 @dataclass

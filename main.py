@@ -7,6 +7,13 @@ Run this file to start the application:
 """
 
 import logging
+import os
+import sys
+
+# When running as a frozen exe, set the working directory to the exe's folder
+# so that sounds/, images/, and config files are found correctly.
+if getattr(sys, 'frozen', False):
+    os.chdir(os.path.dirname(sys.executable))
 
 logging.basicConfig(
     filename="debug.log",

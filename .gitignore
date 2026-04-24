@@ -33,3 +33,5 @@ Thumbs.db
 dist/
 build/
 *.egg-info/
+dist_fresh/
+build_fresh/

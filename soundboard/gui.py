@@ -27,6 +27,7 @@ from .constants import (
     FONTS,
     IMAGES_DIR,
     SLOT_COLORS,
+
     SOUNDS_DIR,
     SUPPORTED_FORMATS,
     SUPPORTED_IMAGE_FORMATS,
@@ -97,6 +98,14 @@ try:
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
+
+# Try to import windnd for drag-and-drop file support (Windows only)
+try:
+    import windnd
+
+    WINDND_AVAILABLE = True
+except ImportError:
+    WINDND_AVAILABLE = False
 
 
 class NowPlayingPanel:
@@ -1031,6 +1040,13 @@ class SoundboardApp:
         self._edit_mode: bool = False
         self._dragging_slot: Optional[int] = None
 
+        # Search / filter state
+        self._search_query: str = ""
+        self._filter_group: Optional[str] = None  # None = "All Groups"
+        self._search_results: Optional[List[Dict]] = None  # None = not searching
+        # ^ Each result dict: {tab_idx, slot_idx, slot}
+        self._custom_groups: List[str] = []  # User-created groups (persisted in config)
+
         # Persistent across clicks (not reset per-click)
         self._last_play_time: float = 0.0
         self._just_stopped_slot: Optional[int] = None
@@ -1102,6 +1118,10 @@ class SoundboardApp:
             mixer_ref=lambda: self.mixer,
             on_stop_callback=self._on_panel_stop_sound,
         )
+
+        # Hook drag-and-drop for image/sound files from file explorer
+        if WINDND_AVAILABLE:
+            windnd.hook_dropfiles(self.root, func=self._on_files_dropped)
 
     def _create_device_section(self, parent):
         """Create the collapsible audio device selection and PTT section."""
@@ -1656,6 +1676,10 @@ class SoundboardApp:
         if tab_idx == self.current_tab_idx:
             return
 
+        # Clear search results if active (return to normal tab view)
+        if self._search_results is not None:
+            self._hide_search_results()
+
         # Cancel any ongoing interaction
         self._reset_click_state()
         if self._edit_mode:
@@ -1994,6 +2018,76 @@ class SoundboardApp:
             text_color=COLORS["text_secondary"],
         )
         header_label.pack(side=tk.LEFT)
+
+        # Search & filter bar
+        search_bar = ctk.CTkFrame(board_frame, fg_color="transparent")
+        search_bar.pack(fill=tk.X, padx=12, pady=(0, 4))
+
+        self._search_var = tk.StringVar()
+        self._search_var.trace_add("write", lambda *_: self._on_search_changed())
+        self._search_entry = ctk.CTkEntry(
+            search_bar,
+            textvariable=self._search_var,
+            placeholder_text="🔍 Search sounds across all tabs...",
+            fg_color=COLORS["bg_medium"],
+            border_color=COLORS["border"],
+            text_color=COLORS["text_primary"],
+            placeholder_text_color=COLORS["text_muted"],
+            font=self._font_sm,
+            height=30,
+            corner_radius=6,
+        )
+        self._search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+
+        self._filter_group_var = tk.StringVar(value="All Groups")
+        group_values = ["All Groups"]  # Updated after config load via _refresh_group_combo
+        self._group_combo = ctk.CTkComboBox(
+            search_bar,
+            variable=self._filter_group_var,
+            values=group_values,
+            width=130,
+            height=30,
+            fg_color=COLORS["bg_medium"],
+            border_color=COLORS["border"],
+            button_color=COLORS["bg_light"],
+            button_hover_color=COLORS["bg_lighter"],
+            dropdown_fg_color=COLORS["bg_medium"],
+            dropdown_hover_color=COLORS["bg_light"],
+            font=self._font_xs,
+            corner_radius=6,
+            state="readonly",
+            command=self._on_filter_changed,
+        )
+        self._group_combo.pack(side=tk.LEFT, padx=(0, 6))
+
+        self._clear_search_btn = ctk.CTkButton(
+            search_bar,
+            text="✕",
+            command=self._clear_search,
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_lighter"],
+            font=self._font_xs,
+            corner_radius=6,
+            width=30,
+            height=30,
+        )
+        self._clear_search_btn.pack(side=tk.LEFT, padx=(0, 6))
+
+        ctk.CTkButton(
+            search_bar,
+            text="⚙",
+            command=lambda: self._show_manage_groups_dialog(),
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_lighter"],
+            font=self._font_xs,
+            corner_radius=6,
+            width=30,
+            height=30,
+        ).pack(side=tk.LEFT)
+
+        # Search results frame (shown when searching, replaces normal tab grid)
+        self._search_results_frame: Optional[ctk.CTkFrame] = None
+        self._search_result_widgets: List[Dict] = []
 
         # Scrollable frame — handles scroll + width natively
         self.scrollable_grid = ctk.CTkScrollableFrame(
@@ -2379,6 +2473,408 @@ class SoundboardApp:
         max_idx = max(tab.slots.keys()) if tab.slots else -1
         return max(max_idx + 2, UI["total_slots"])
 
+    # =================================================================
+    # Search / Filter / Group Management
+    # =================================================================
+
+    def _get_all_groups(self) -> List[str]:
+        """Get all available groups (user-managed)."""
+        return list(self._custom_groups)
+
+    def _refresh_group_combo(self):
+        """Refresh the group filter dropdown with current available groups."""
+        if hasattr(self, "_group_combo"):
+            values = ["All Groups"] + self._get_all_groups()
+            self._group_combo.configure(values=values)
+
+    def _show_manage_groups_dialog(self, rebuild_callback=None):
+        """Show a dialog to add and remove custom groups."""
+        dialog = ctk.CTkToplevel(self.root)
+        dialog.title("Manage Groups")
+        dialog.geometry("400x500")
+        dialog.configure(fg_color=COLORS["bg_dark"])
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.resizable(False, True)
+
+        # Center on parent
+        dialog.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - 400) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - 500) // 2
+        dialog.geometry(f"+{x}+{y}")
+
+        # Title
+        ctk.CTkLabel(
+            dialog,
+            text="Manage Sound Groups",
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_md"], weight="bold"),
+            text_color=COLORS["text_primary"],
+        ).pack(padx=16, pady=(16, 4))
+
+        ctk.CTkLabel(
+            dialog,
+            text="Built-in groups cannot be removed. Custom groups can be added or removed.",
+            font=self._font_xs,
+            text_color=COLORS["text_muted"],
+            wraplength=360,
+        ).pack(padx=16, pady=(0, 8))
+
+        # Scrollable list of groups
+        list_frame = ctk.CTkScrollableFrame(
+            dialog,
+            fg_color=COLORS["bg_medium"],
+            corner_radius=8,
+        )
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 8))
+
+        def _rebuild_list():
+            for w in list_frame.winfo_children():
+                w.destroy()
+
+            if not self._custom_groups:
+                ctk.CTkLabel(
+                    list_frame,
+                    text="No groups yet. Add one below.",
+                    font=self._font_xs,
+                    text_color=COLORS["text_muted"],
+                ).pack(pady=20)
+                return
+
+            for g in list(self._custom_groups):
+                row = ctk.CTkFrame(list_frame, fg_color="transparent")
+                row.pack(fill=tk.X, padx=4, pady=2)
+                ctk.CTkLabel(
+                    row,
+                    text=g,
+                    font=self._font_sm,
+                    text_color=COLORS["text_primary"],
+                    anchor="w",
+                ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+                def _remove(group_name=g):
+                    self._remove_custom_group(group_name)
+                    _rebuild_list()
+                    self._refresh_group_combo()
+                    if rebuild_callback:
+                        rebuild_callback()
+
+                ctk.CTkButton(
+                    row,
+                    text="✕",
+                    command=_remove,
+                    fg_color=COLORS["red"],
+                    hover_color=COLORS["red_hover"],
+                    font=self._font_xs,
+                    corner_radius=4,
+                    width=28,
+                    height=24,
+                ).pack(side=tk.RIGHT, padx=(0, 4))
+
+        _rebuild_list()
+
+        # Add new group section
+        add_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        add_frame.pack(fill=tk.X, padx=16, pady=(0, 8))
+
+        new_var = tk.StringVar()
+        new_entry = ctk.CTkEntry(
+            add_frame,
+            textvariable=new_var,
+            placeholder_text="New group name...",
+            fg_color=COLORS["bg_medium"],
+            border_color=COLORS["bg_light"],
+            font=self._font_sm,
+            height=32,
+            corner_radius=6,
+        )
+        new_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+
+        def _add():
+            name = new_var.get().strip()
+            if not name:
+                return
+            if name not in self._custom_groups:
+                self._custom_groups.append(name)
+                _rebuild_list()
+                self._refresh_group_combo()
+                if rebuild_callback:
+                    rebuild_callback()
+            new_var.set("")
+
+        ctk.CTkButton(
+            add_frame,
+            text="+ Add",
+            command=_add,
+            fg_color=COLORS["green"],
+            hover_color=COLORS["green_hover"],
+            font=self._font_sm,
+            corner_radius=6,
+            width=70,
+            height=32,
+        ).pack(side=tk.LEFT)
+
+        # Close button
+        ctk.CTkButton(
+            dialog,
+            text="Done",
+            command=dialog.destroy,
+            fg_color=COLORS["blurple"],
+            hover_color=COLORS["blurple_hover"],
+            font=self._font_sm,
+            corner_radius=6,
+            height=34,
+        ).pack(padx=16, pady=(0, 16))
+
+        new_entry.focus_set()
+
+    def _remove_custom_group(self, group_name: str):
+        """Remove a custom group and clean it from all slots."""
+        if group_name in self._custom_groups:
+            self._custom_groups.remove(group_name)
+        # Remove from all slots across all tabs
+        for tab in self.tabs:
+            for slot in tab.slots.values():
+                if group_name in slot.groups:
+                    slot.groups.remove(group_name)
+        self._save_config()
+
+    def _on_search_changed(self):
+        """Called when the search entry text changes."""
+        self._search_query = self._search_var.get().strip().lower()
+        self._run_search()
+
+    def _on_filter_changed(self, _value: str = ""):
+        """Called when the group filter combobox changes."""
+        selected = self._filter_group_var.get()
+        self._filter_group = None if selected == "All Groups" else selected
+        self._run_search()
+
+    def _clear_search(self):
+        """Clear search query and group filter, return to normal view."""
+        self._search_var.set("")
+        self._filter_group_var.set("All Groups")
+        self._filter_group = None
+        self._search_query = ""
+        self._hide_search_results()
+
+    def _run_search(self):
+        """Execute search across all tabs and show results."""
+        query = self._search_query
+        group = self._filter_group
+
+        # If both empty, hide results and show normal grid
+        if not query and not group:
+            self._hide_search_results()
+            return
+
+        results: List[Dict] = []
+        for tab_idx, tab in enumerate(self.tabs):
+            for slot_idx, slot in tab.slots.items():
+                # Match query against name, hotkey, emoji, groups
+                if query:
+                    groups_str = " ".join(g.lower() for g in slot.groups)
+                    searchable = " ".join([
+                        slot.name.lower(),
+                        (slot.hotkey or "").lower(),
+                        (slot.emoji or ""),
+                        groups_str,
+                    ])
+                    if query not in searchable:
+                        continue
+
+                # Match group filter
+                if group and group not in slot.groups:
+                    continue
+
+                results.append({
+                    "tab_idx": tab_idx,
+                    "tab_name": tab.name,
+                    "tab_emoji": tab.emoji or "",
+                    "slot_idx": slot_idx,
+                    "slot": slot,
+                })
+
+        self._search_results = results
+        self._show_search_results()
+
+    def _show_search_results(self):
+        """Show search results overlay, hiding normal tab grids."""
+        # Hide all tab grid frames
+        for frame in self.tab_grid_frames.values():
+            frame.grid_remove()
+
+        # Destroy old results frame if exists
+        if self._search_results_frame is not None:
+            self._search_results_frame.destroy()
+
+        self._search_results_frame = ctk.CTkFrame(self.grid_frame, fg_color=COLORS["bg_dark"])
+        self._search_results_frame.grid(row=0, column=0, sticky="nsew")
+        self._search_results_frame.tkraise()
+
+        for c in range(UI["grid_columns"]):
+            self._search_results_frame.grid_columnconfigure(c, weight=1, uniform="slot")
+
+        results = self._search_results or []
+
+        if not results:
+            no_results = ctk.CTkLabel(
+                self._search_results_frame,
+                text="No sounds found",
+                font=self._font_sm,
+                text_color=COLORS["text_muted"],
+            )
+            no_results.grid(row=0, column=0, columnspan=UI["grid_columns"], pady=40)
+            return
+
+        # Header showing result count
+        count_label = ctk.CTkLabel(
+            self._search_results_frame,
+            text=f"Found {len(results)} sound{'s' if len(results) != 1 else ''}",
+            font=self._font_xs,
+            text_color=COLORS["text_muted"],
+        )
+        count_label.grid(
+            row=0, column=0, columnspan=UI["grid_columns"], sticky="w", padx=8, pady=(4, 2)
+        )
+
+        self._search_result_widgets = []
+
+        for i, result in enumerate(results):
+            row = (i // UI["grid_columns"]) + 1  # +1 for count label row
+            col = i % UI["grid_columns"]
+            slot: SoundSlot = result["slot"]
+
+            slot_color = slot.color or COLORS["blurple"]
+
+            frame = ctk.CTkFrame(
+                self._search_results_frame,
+                fg_color=COLORS["bg_medium"],
+                corner_radius=UI["slot_corner_radius"],
+                height=UI["slot_height"],
+            )
+            frame.grid(
+                row=row, column=col,
+                padx=UI["slot_padding"], pady=UI["slot_padding"],
+                sticky="nsew",
+            )
+            frame.pack_propagate(False)
+
+            # Bottom frame with tab source info
+            bottom = ctk.CTkFrame(frame, fg_color="transparent", height=32)
+            bottom.pack(side=tk.BOTTOM, fill=tk.X, padx=6, pady=(0, 4))
+
+            tab_info = f"{result['tab_emoji']} {result['tab_name']}"
+            group_text = f" · {', '.join(slot.groups)}" if slot.groups else ""
+            ctk.CTkLabel(
+                bottom,
+                text=f"{tab_info}{group_text}",
+                font=ctk.CTkFont(family=FONTS["family"], size=9),
+                text_color=COLORS["text_muted"],
+                anchor="w",
+            ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+            # Main button
+            hk = f"\n[{slot.hotkey}]" if slot.hotkey else ""
+            max_name_len = 32
+            display_name = (
+                slot.name[:max_name_len] + "…" if len(slot.name) > max_name_len else slot.name
+            )
+            display_text = _fix_rtl_text(f"{display_name}{hk}")
+
+            # Load image if available
+            photo = None
+            if slot.image_path and os.path.exists(slot.image_path):
+                photo = self._load_slot_image(slot.image_path)
+
+            tab_idx = result["tab_idx"]
+            slot_idx = result["slot_idx"]
+
+            btn = ctk.CTkButton(
+                frame,
+                text=display_text,
+                image=photo,
+                fg_color=slot_color,
+                hover_color=COLORS["bg_lighter"],
+                text_color=COLORS["text_primary"],
+                font=self._font_sm,
+                corner_radius=UI["slot_corner_radius"],
+                anchor="center",
+                cursor="hand2",
+                compound="top",
+                command=lambda t=tab_idx, s=slot_idx: self._play_slot_from_search(t, s),
+            )
+            btn.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=4)
+
+            # Emoji label
+            if slot.emoji:
+                emoji_lbl = ctk.CTkLabel(
+                    frame,
+                    text=slot.emoji,
+                    font=ctk.CTkFont(family="Segoe UI Emoji", size=18),
+                    text_color=COLORS["text_primary"],
+                    fg_color="transparent",
+                    width=24, height=24,
+                )
+                emoji_lbl.place(x=6, y=4)
+
+            self._search_result_widgets.append({
+                "frame": frame,
+                "btn": btn,
+                "tab_idx": tab_idx,
+                "slot_idx": slot_idx,
+                "photo": photo,
+            })
+
+    def _hide_search_results(self):
+        """Hide search results and restore normal tab grid view."""
+        self._search_results = None
+
+        if self._search_results_frame is not None:
+            self._search_results_frame.destroy()
+            self._search_results_frame = None
+
+        self._search_result_widgets = []
+
+        # Re-show all tab grid frames and raise current
+        for frame in self.tab_grid_frames.values():
+            frame.grid()
+
+        if self.current_tab_idx in self.tab_grid_frames:
+            self.tab_grid_frames[self.current_tab_idx].tkraise()
+
+    def _play_slot_from_search(self, tab_idx: int, slot_idx: int):
+        """Play a sound from a search result (may be on a different tab)."""
+        if tab_idx < 0 or tab_idx >= len(self.tabs):
+            return
+        tab = self.tabs[tab_idx]
+        slot = tab.slots.get(slot_idx)
+        if not slot or not self.mixer or not self.mixer.running:
+            return
+
+        try:
+            duration = self.mixer.play_sound(
+                slot.file_path,
+                volume=slot.volume,
+                speed=slot.speed,
+                preserve_pitch=slot.preserve_pitch,
+                loop=slot.loop,
+                loop_count=slot.loop_count,
+                loop_delay=slot.loop_delay,
+            )
+            self.playing_slots[slot_idx] = {
+                "start_time": time.time(),
+                "duration": duration,
+                "tab_idx": tab_idx,
+            }
+            # Update the slot on its own tab if built
+            if tab_idx in self.tab_slot_buttons and slot_idx in self.tab_slot_buttons.get(tab_idx, {}):
+                self._update_slot_button_for_tab(tab_idx, slot_idx)
+                if tab_idx in self.tab_slot_stop_buttons and slot_idx in self.tab_slot_stop_buttons.get(tab_idx, {}):
+                    self.tab_slot_stop_buttons[tab_idx][slot_idx].pack(side=tk.LEFT, padx=(0, 2))
+            self.status_var.set(f"Playing: {slot.name}")
+        except Exception as e:
+            self.status_var.set(f"Error: {e}")
+
     def _refresh_slot_buttons(self):
         """Refresh slot buttons for current tab.
 
@@ -2544,9 +3040,12 @@ class SoundboardApp:
         self.status_var.set("Stopped sound")
 
     def _stop_all_sounds(self):
-        """Stop all currently playing sounds."""
+        """Stop all currently playing sounds (Discord and preview)."""
         if self.mixer:
             self.mixer.stop_all_sounds()
+
+        # Stop any previews
+        self._stop_all_previews()
 
         # Clear playing state and hide stop buttons
         for slot_idx in list(self.playing_slots.keys()):
@@ -2562,7 +3061,11 @@ class SoundboardApp:
         self.status_var.set("Stopped all sounds")
 
     def _stop_slot(self, slot_idx: int):
-        """Stop the sound playing in a specific slot."""
+        """Stop the sound playing in a specific slot (both Discord play and preview)."""
+        # Stop preview if this slot is previewing
+        if slot_idx in self.preview_slots:
+            self._stop_preview(slot_idx)
+
         # Get the tab this slot belongs to for sound_id
         if slot_idx in self.playing_slots:
             tab_idx = self.playing_slots[slot_idx].get("tab_idx", self.current_tab_idx)
@@ -3068,7 +3571,15 @@ class SoundboardApp:
             self.status_var.set("Start the audio stream first!")
 
     def _preview_slot(self, slot_idx: int):
-        """Preview a sound through default speakers (without streaming to Discord)."""
+        """Preview a sound through default speakers (without streaming to Discord).
+
+        Clicking preview again while already previewing this slot stops the preview.
+        """
+        # If this slot is already previewing, stop it
+        if slot_idx in self.preview_slots:
+            self._stop_preview(slot_idx)
+            return
+
         tab = self._get_current_tab()
         if slot_idx not in tab.slots:
             self.status_var.set("No sound in this slot")
@@ -3083,8 +3594,8 @@ class SoundboardApp:
             return
 
         try:
-            # Stop any currently playing preview
-            sd.stop()
+            # Stop any currently playing preview on other slots
+            self._stop_all_previews()
 
             # Calculate duration
             duration = len(data) / self.sound_cache.sample_rate
@@ -3106,8 +3617,43 @@ class SoundboardApp:
                 # Set progress bar color for preview state
                 if slot_idx in self.slot_progress:
                     self.slot_progress[slot_idx].configure(progress_color=COLORS["preview"])
+                # Show stop button for preview
+                self._show_stop_button(slot_idx)
         except Exception as e:
             self.status_var.set(f"Preview error: {e}")
+
+    def _stop_preview(self, slot_idx: int):
+        """Stop a specific preview sound and reset its UI state."""
+        sd.stop()
+
+        if slot_idx in self.preview_slots:
+            tab_idx = self.preview_slots[slot_idx].get("tab_idx", self.current_tab_idx)
+            del self.preview_slots[slot_idx]
+
+            # Reset UI for this slot
+            if tab_idx == self.current_tab_idx:
+                self._update_slot_button(slot_idx)
+                if slot_idx in self.slot_progress:
+                    self.slot_progress[slot_idx].set(0)
+                if slot_idx in self.slot_stop_buttons:
+                    self.slot_stop_buttons[slot_idx].pack_forget()
+
+        self.status_var.set("Preview stopped")
+
+    def _stop_all_previews(self):
+        """Stop all currently playing previews and reset their UI state."""
+        sd.stop()
+
+        for slot_idx in list(self.preview_slots.keys()):
+            tab_idx = self.preview_slots[slot_idx].get("tab_idx", self.current_tab_idx)
+            del self.preview_slots[slot_idx]
+
+            if tab_idx == self.current_tab_idx:
+                self._update_slot_button(slot_idx)
+                if slot_idx in self.slot_progress:
+                    self.slot_progress[slot_idx].set(0)
+                if slot_idx in self.slot_stop_buttons:
+                    self.slot_stop_buttons[slot_idx].pack_forget()
 
     def _show_quick_popup(self, event, slot_idx: int):
         """Show a quick popup for volume/speed adjustment next to the clicked slot."""
@@ -3328,7 +3874,7 @@ class SoundboardApp:
 
         dialog = ctk.CTkToplevel(self.root)
         dialog.title(f"Configure Slot {slot_idx + 1}")
-        dialog.geometry("550x680")
+        dialog.geometry("550x780")
         dialog.transient(self.root)
         dialog.grab_set()
         dialog.after(10, lambda: dialog.focus_force())
@@ -3576,12 +4122,83 @@ class SoundboardApp:
 
         color_var.trace("w", update_color_preview)
 
+        # Groups / Types selector (multi-select with checkboxes)
+        ctk.CTkLabel(frame, text="Groups:", text_color=COLORS["text_primary"]).grid(
+            row=9, column=0, sticky="nw", pady=8
+        )
+        groups_outer = ctk.CTkFrame(frame, fg_color="transparent")
+        groups_outer.grid(row=9, column=1, columnspan=2, sticky="w", pady=8)
+
+        existing_groups = existing.groups if existing else []
+        group_check_vars: Dict[str, tk.BooleanVar] = {}
+        group_checks_frame = ctk.CTkFrame(groups_outer, fg_color="transparent")
+        group_checks_frame.pack(fill=tk.X)
+
+        all_groups = self._get_all_groups()
+
+        def _rebuild_group_checks():
+            """Rebuild the group checkboxes from current all_groups list."""
+            for w in group_checks_frame.winfo_children():
+                w.destroy()
+            group_check_vars.clear()
+
+            current_all = self._get_all_groups()
+            col = 0
+            row_g = 0
+            for g in current_all:
+                var = tk.BooleanVar(value=g in existing_groups)
+                group_check_vars[g] = var
+                cb = ctk.CTkCheckBox(
+                    group_checks_frame,
+                    text=g,
+                    variable=var,
+                    fg_color=COLORS["blurple"],
+                    hover_color=COLORS["blurple_hover"],
+                    font=self._font_xs,
+                    height=22,
+                    checkbox_width=16,
+                    checkbox_height=16,
+                )
+                cb.grid(row=row_g, column=col, sticky="w", padx=(0, 10), pady=1)
+                col += 1
+                if col >= 3:
+                    col = 0
+                    row_g += 1
+
+        _rebuild_group_checks()
+
+        # Manage groups button (opens dialog to add/remove groups)
+        manage_btn_frame = ctk.CTkFrame(groups_outer, fg_color="transparent")
+        manage_btn_frame.pack(fill=tk.X, pady=(4, 0))
+
+        def _open_manage_groups():
+            # Remember currently checked groups before opening dialog
+            nonlocal existing_groups
+            existing_groups = [g for g, v in group_check_vars.items() if v.get()]
+            self._show_manage_groups_dialog(rebuild_callback=_rebuild_group_checks)
+            # After dialog closes, re-check the groups that were selected
+            for g in existing_groups:
+                if g in group_check_vars:
+                    group_check_vars[g].set(True)
+
+        ctk.CTkButton(
+            manage_btn_frame,
+            text="⚙ Manage Groups",
+            command=_open_manage_groups,
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_lighter"],
+            font=self._font_xs,
+            corner_radius=4,
+            width=120,
+            height=26,
+        ).pack(side=tk.LEFT)
+
         # Loop checkbox
         ctk.CTkLabel(frame, text="Loop:", text_color=COLORS["text_primary"]).grid(
-            row=9, column=0, sticky="w", pady=8
+            row=10, column=0, sticky="w", pady=8
         )
         loop_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        loop_frame.grid(row=9, column=1, columnspan=2, sticky="w")
+        loop_frame.grid(row=10, column=1, columnspan=2, sticky="w")
 
         loop_var = tk.BooleanVar(value=existing.loop if existing else False)
         loop_checkbox = ctk.CTkCheckBox(
@@ -3615,10 +4232,10 @@ class SoundboardApp:
 
         # Loop delay
         ctk.CTkLabel(frame, text="Loop Delay:", text_color=COLORS["text_primary"]).grid(
-            row=10, column=0, sticky="w", pady=8
+            row=11, column=0, sticky="w", pady=8
         )
         delay_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        delay_frame.grid(row=10, column=1, sticky="w")
+        delay_frame.grid(row=11, column=1, sticky="w")
 
         loop_delay_var = tk.DoubleVar(value=existing.loop_delay if existing else 0.0)
         loop_delay_slider = ctk.CTkSlider(
@@ -3691,6 +4308,7 @@ class SoundboardApp:
                 loop=loop_var.get(),
                 loop_count=loop_count_var.get(),
                 loop_delay=loop_delay_var.get(),
+                groups=[g for g, v in group_check_vars.items() if v.get()],
             )
             self._update_slot_button_for_tab(
                 self.current_tab_idx, slot_idx
@@ -3734,7 +4352,7 @@ class SoundboardApp:
 
         # Button row
         btn_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        btn_frame.grid(row=11, column=0, columnspan=3, pady=25)
+        btn_frame.grid(row=12, column=0, columnspan=3, pady=25)
 
         ctk.CTkButton(
             btn_frame,
@@ -3760,6 +4378,94 @@ class SoundboardApp:
             hover_color=COLORS["bg_light"],
             width=100,
         ).pack(side=tk.LEFT, padx=5)
+
+    def _on_files_dropped(self, files):
+        """Handle files dropped from file explorer onto the main window.
+
+        Determines which slot is under the cursor and applies the image to it.
+        Accepts image files dropped onto filled sound slots.
+        """
+        # Determine cursor position
+        try:
+            cursor_x = self.root.winfo_pointerx()
+            cursor_y = self.root.winfo_pointery()
+        except Exception:
+            return
+
+        # Decode file paths (windnd passes bytes on some versions)
+        file_paths = []
+        for f in files:
+            if isinstance(f, bytes):
+                try:
+                    file_paths.append(f.decode("utf-8"))
+                except UnicodeDecodeError:
+                    try:
+                        file_paths.append(f.decode("gbk"))
+                    except UnicodeDecodeError:
+                        continue
+            else:
+                file_paths.append(str(f))
+
+        if not file_paths:
+            return
+
+        # Find image files among the dropped files
+        image_exts = {".png", ".jpg", ".jpeg", ".jfif", ".gif", ".bmp", ".ico"}
+        image_files = [
+            f for f in file_paths
+            if Path(f).suffix.lower() in image_exts and os.path.isfile(f)
+        ]
+
+        if not image_files:
+            self.status_var.set("Drop an image file onto a sound slot")
+            return
+
+        image_path = image_files[0]  # Use first image
+
+        # Find which slot is under the cursor
+        target_slot = self._find_slot_at_position(cursor_x, cursor_y)
+        if target_slot is None:
+            self.status_var.set("Drop the image onto a sound slot")
+            return
+
+        tab_idx, slot_idx = target_slot
+        tab = self.tabs[tab_idx]
+        slot = tab.slots.get(slot_idx)
+
+        if not slot:
+            self.status_var.set("Drop the image onto a filled sound slot")
+            return
+
+        # Copy image to local storage and assign to slot
+        local_path = self._copy_image_to_storage(image_path)
+        slot.image_path = local_path
+
+        # Update the slot appearance
+        self._update_slot_button_for_tab(tab_idx, slot_idx)
+        if tab_idx == self.current_tab_idx:
+            self._update_slot_button(slot_idx)
+
+        self._save_config()
+        self.status_var.set(f"Image set for: {slot.name}")
+
+    def _find_slot_at_position(self, screen_x: int, screen_y: int):
+        """Find slot under screen coordinates. Returns (tab_idx, slot_idx) or None."""
+        tab_idx = self.current_tab_idx
+        if tab_idx not in self.tab_slot_frames:
+            return None
+
+        for slot_idx, frame in self.tab_slot_frames[tab_idx].items():
+            try:
+                fx = frame.winfo_rootx()
+                fy = frame.winfo_rooty()
+                fw = frame.winfo_width()
+                fh = frame.winfo_height()
+                if fx <= screen_x <= fx + fw and fy <= screen_y <= fy + fh:
+                    return (tab_idx, slot_idx)
+            except Exception:
+                continue
+
+        return None
 
     def _copy_image_to_storage(self, source_path: str) -> str:
         """Copy an image to local storage and return the local path."""
@@ -4223,6 +4929,7 @@ class SoundboardApp:
             "now_playing_side": (
                 self.now_playing_panel.panel_side if hasattr(self, "now_playing_panel") else "right"
             ),
+            "custom_groups": self._custom_groups,
         }
 
         # Atomic write: write to temp file first, then rename
@@ -4313,6 +5020,10 @@ class SoundboardApp:
             # Load Now Playing panel settings
             now_playing_visible = config.get("now_playing_visible", False)
             now_playing_side = config.get("now_playing_side", "right")
+
+            # Load custom groups
+            self._custom_groups = config.get("custom_groups", [])
+            self._refresh_group_combo()
 
             if hasattr(self, "now_playing_panel"):
                 self.now_playing_panel.set_side(now_playing_side)

@@ -539,6 +539,8 @@ When asked to add a feature:
 | PTT releases too early | PTT released immediately when audio callback returns | Add debounce delay (5 callback cycles ~100ms) before releasing PTT |
 | Sounds don't play with rapid clicks | Lock contention and duplicate cache lookups | Queue sound before taking locks, use single cache lookup |
 | Direct sf.read() fails for OGG | Multiple code paths used sf.read directly without fallback | Consolidated audio loading to shared `read_audio_file()` function in audio.py |
+| PTT gets stuck when user presses PTT during playback | `mouse` library's `press()`/`release()` has internal state tracking that can conflict with physical mouse input; queue-based release can be lost or reordered | Replace `mouse` library simulation with direct Windows `SendInput` API for mouse buttons; use `_force_release_ptt()` (direct, not queued) for stop operations; drain PTT queue before force-releasing |
+| Preview sounds can't be stopped | Preview uses `sd.play()` directly with no stop mechanism; stop button only stops mixer sounds | Added `_stop_preview()` and `_stop_all_previews()` methods; preview button toggles play/stop; stop button and "Stop All" also stop previews; show stop button during previews |
 
 ### GUI / Tkinter
 
