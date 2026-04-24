@@ -213,10 +213,11 @@ except (ImportError, FileNotFoundError):
     FFMPEG_PATH = None
 
 # When running as frozen exe, ffmpeg may be in the bundle directory
-if not FFMPEG_PATH and getattr(sys, 'frozen', False):
+if not FFMPEG_PATH and getattr(sys, "frozen", False):
     import glob
+
     base = sys._MEIPASS  # type: ignore[attr-defined]
-    candidates = glob.glob(os.path.join(base, 'imageio_ffmpeg', 'binaries', 'ffmpeg*'))
+    candidates = glob.glob(os.path.join(base, "imageio_ffmpeg", "binaries", "ffmpeg*"))
     if candidates:
         FFMPEG_PATH = candidates[0]
 

@@ -27,7 +27,6 @@ from .constants import (
     FONTS,
     IMAGES_DIR,
     SLOT_COLORS,
-
     SOUNDS_DIR,
     SUPPORTED_FORMATS,
     SUPPORTED_IMAGE_FORMATS,
@@ -546,7 +545,9 @@ class NowPlayingPanel:
             pitch_btn.configure(
                 text="🎵" if preserve_pitch_state[0] else "🐿",
                 fg_color=COLORS["green"] if preserve_pitch_state[0] else COLORS["bg_light"],
-                hover_color=COLORS["green_hover"] if preserve_pitch_state[0] else COLORS["bg_lighter"],
+                hover_color=(
+                    COLORS["green_hover"] if preserve_pitch_state[0] else COLORS["bg_lighter"]
+                ),
             )
             # Re-apply current speed with new pitch setting
             if speed_var.get() != 100:
@@ -791,6 +792,7 @@ class NowPlayingPanel:
 
         # Preset loop counts
         for cnt in (2, 5, 10):
+
             def _set_loop_count(c=cnt):
                 mixer = self._get_mixer()
                 if mixer:
@@ -2673,12 +2675,14 @@ class SoundboardApp:
                 # Match query against name, hotkey, emoji, groups
                 if query:
                     groups_str = " ".join(g.lower() for g in slot.groups)
-                    searchable = " ".join([
-                        slot.name.lower(),
-                        (slot.hotkey or "").lower(),
-                        (slot.emoji or ""),
-                        groups_str,
-                    ])
+                    searchable = " ".join(
+                        [
+                            slot.name.lower(),
+                            (slot.hotkey or "").lower(),
+                            (slot.emoji or ""),
+                            groups_str,
+                        ]
+                    )
                     if query not in searchable:
                         continue
 
@@ -2686,13 +2690,15 @@ class SoundboardApp:
                 if group and group not in slot.groups:
                     continue
 
-                results.append({
-                    "tab_idx": tab_idx,
-                    "tab_name": tab.name,
-                    "tab_emoji": tab.emoji or "",
-                    "slot_idx": slot_idx,
-                    "slot": slot,
-                })
+                results.append(
+                    {
+                        "tab_idx": tab_idx,
+                        "tab_name": tab.name,
+                        "tab_emoji": tab.emoji or "",
+                        "slot_idx": slot_idx,
+                        "slot": slot,
+                    }
+                )
 
         self._search_results = results
         self._show_search_results()
@@ -2753,8 +2759,10 @@ class SoundboardApp:
                 height=UI["slot_height"],
             )
             frame.grid(
-                row=row, column=col,
-                padx=UI["slot_padding"], pady=UI["slot_padding"],
+                row=row,
+                column=col,
+                padx=UI["slot_padding"],
+                pady=UI["slot_padding"],
                 sticky="nsew",
             )
             frame.pack_propagate(False)
@@ -2813,17 +2821,20 @@ class SoundboardApp:
                     font=ctk.CTkFont(family="Segoe UI Emoji", size=18),
                     text_color=COLORS["text_primary"],
                     fg_color="transparent",
-                    width=24, height=24,
+                    width=24,
+                    height=24,
                 )
                 emoji_lbl.place(x=6, y=4)
 
-            self._search_result_widgets.append({
-                "frame": frame,
-                "btn": btn,
-                "tab_idx": tab_idx,
-                "slot_idx": slot_idx,
-                "photo": photo,
-            })
+            self._search_result_widgets.append(
+                {
+                    "frame": frame,
+                    "btn": btn,
+                    "tab_idx": tab_idx,
+                    "slot_idx": slot_idx,
+                    "photo": photo,
+                }
+            )
 
     def _hide_search_results(self):
         """Hide search results and restore normal tab grid view."""
@@ -2867,9 +2878,14 @@ class SoundboardApp:
                 "tab_idx": tab_idx,
             }
             # Update the slot on its own tab if built
-            if tab_idx in self.tab_slot_buttons and slot_idx in self.tab_slot_buttons.get(tab_idx, {}):
+            if tab_idx in self.tab_slot_buttons and slot_idx in self.tab_slot_buttons.get(
+                tab_idx, {}
+            ):
                 self._update_slot_button_for_tab(tab_idx, slot_idx)
-                if tab_idx in self.tab_slot_stop_buttons and slot_idx in self.tab_slot_stop_buttons.get(tab_idx, {}):
+                if (
+                    tab_idx in self.tab_slot_stop_buttons
+                    and slot_idx in self.tab_slot_stop_buttons.get(tab_idx, {})
+                ):
                     self.tab_slot_stop_buttons[tab_idx][slot_idx].pack(side=tk.LEFT, padx=(0, 2))
             self.status_var.set(f"Playing: {slot.name}")
         except Exception as e:
@@ -4412,8 +4428,7 @@ class SoundboardApp:
         # Find image files among the dropped files
         image_exts = {".png", ".jpg", ".jpeg", ".jfif", ".gif", ".bmp", ".ico"}
         image_files = [
-            f for f in file_paths
-            if Path(f).suffix.lower() in image_exts and os.path.isfile(f)
+            f for f in file_paths if Path(f).suffix.lower() in image_exts and os.path.isfile(f)
         ]
 
         if not image_files:
