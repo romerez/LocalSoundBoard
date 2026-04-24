@@ -61,6 +61,7 @@ class SoundEditor:
         self.is_paused: bool = False
         self.play_stream: Optional[sd.OutputStream] = None
         self.play_position: int = 0
+        self.play_start_sample: int = 0  # Absolute sample where playback started (frozen at play-start)
         self.play_lock = threading.Lock()
         self.selected_audio: Optional[np.ndarray] = None  # Prepared audio for playback
 
@@ -68,6 +69,10 @@ class SoundEditor:
         self.canvas_width: int = 700
         self.canvas_height: int = 200
         self.dragging: Optional[str] = None  # "start", "end", or None
+
+        # Marker undo history — list of (trim_start, trim_end) snapshots
+        # A snapshot is pushed BEFORE each drag starts so Ctrl+Z can restore it.
+        self._marker_history: list = []
 
         # Result
         self.result: Optional[Tuple[np.ndarray, int]] = None
@@ -140,6 +145,8 @@ class SoundEditor:
 
         # Make dialog modal
         self.dialog.protocol("WM_DELETE_WINDOW", self._on_cancel)
+        # Undo trim markers
+        self.dialog.bind("<Control-z>", self._undo_marker)
 
         # Main container with padding
         main_frame = tk.Frame(self.dialog, bg=COLORS["bg_dark"], padx=20, pady=15)
@@ -221,9 +228,12 @@ class SoundEditor:
         self.canvas.pack(fill=tk.BOTH, expand=True)
 
         # Bind mouse events
-        self.canvas.bind("<Button-1>", self._on_canvas_click)
+        self.canvas.bind("<Button-1>", self._on_canvas_left_click)
         self.canvas.bind("<B1-Motion>", self._on_canvas_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_canvas_release)
+        self.canvas.bind("<Button-3>", self._on_canvas_right_click)
+        self.canvas.bind("<B3-Motion>", self._on_canvas_drag)
+        self.canvas.bind("<ButtonRelease-3>", self._on_canvas_release)
         self.canvas.bind("<Configure>", self._on_canvas_resize)
         self.canvas.bind("<MouseWheel>", self._on_mouse_wheel)
 
@@ -526,7 +536,7 @@ class SoundEditor:
             self.canvas.create_text(
                 x,
                 self.canvas_height - 5,
-                text="START",
+                text="◀ START (L)",
                 fill=COLORS["green"],
                 font=("Segoe UI", 8, "bold"),
                 anchor="s",
@@ -545,7 +555,7 @@ class SoundEditor:
             self.canvas.create_text(
                 x,
                 self.canvas_height - 5,
-                text="END",
+                text="END (R) ▶",
                 fill=COLORS["red"],
                 font=("Segoe UI", 8, "bold"),
                 anchor="s",
@@ -554,7 +564,9 @@ class SoundEditor:
     def _draw_playback_position(self, view_start: int, view_end: int):
         """Draw the current playback position indicator."""
         with self.play_lock:
-            pos = self.play_position + self.trim_start
+            # Use play_start_sample (frozen at play-start) so that dragging
+            # trim markers while playing does NOT affect the needle position.
+            pos = self.play_position + self.play_start_sample
 
         view_range = view_end - view_start
         if view_start <= pos < view_end:
@@ -606,36 +618,23 @@ class SoundEditor:
             end_time = self.trim_end / self.sample_rate
             self.selection_label.config(text=f"📍 {start_time:.2f}s - {end_time:.2f}s")
 
+    def _on_canvas_left_click(self, event):
+        """Left click sets / drags the START marker."""
+        # Save snapshot before starting drag
+        self._marker_history.append((self.trim_start, self.trim_end))
+        self.dragging = "start"
+        self._update_marker_position(event.x)
+
+    def _on_canvas_right_click(self, event):
+        """Right click sets / drags the END marker."""
+        # Save snapshot before starting drag
+        self._marker_history.append((self.trim_start, self.trim_end))
+        self.dragging = "end"
+        self._update_marker_position(event.x)
+
     def _on_canvas_click(self, event):
-        """Handle click on the canvas to select trim markers."""
-        # Calculate which marker is closest to click
-        total_samples = len(self.waveform_data)
-        visible_samples = int(total_samples / self.zoom_level)
-        view_start = int(self.view_start * (total_samples - visible_samples))
-        view_end = view_start + visible_samples
-        view_range = view_end - view_start
-
-        # Get click position in samples
-        click_sample = view_start + int(event.x / self.canvas_width * view_range)
-
-        # Check distance to markers
-        start_x = (self.trim_start - view_start) / view_range * self.canvas_width
-        end_x = (self.trim_end - view_start) / view_range * self.canvas_width
-
-        # Threshold for selecting a marker
-        threshold = 15
-
-        if abs(event.x - start_x) < threshold:
-            self.dragging = "start"
-        elif abs(event.x - end_x) < threshold:
-            self.dragging = "end"
-        else:
-            # Click anywhere else to set nearest marker
-            if abs(click_sample - self.trim_start) < abs(click_sample - self.trim_end):
-                self.dragging = "start"
-            else:
-                self.dragging = "end"
-            self._update_marker_position(event.x)
+        """Legacy handler — kept for safety, delegates to left-click."""
+        self._on_canvas_left_click(event)
 
     def _on_canvas_drag(self, event):
         """Handle dragging on the canvas."""
@@ -645,6 +644,14 @@ class SoundEditor:
     def _on_canvas_release(self, event):
         """Handle mouse release."""
         self.dragging = None
+
+    def _undo_marker(self, event=None):
+        """Restore the previous trim marker positions (Ctrl+Z)."""
+        if not self._marker_history:
+            return
+        self.trim_start, self.trim_end = self._marker_history.pop()
+        self._draw_waveform()
+        self._update_info_labels()
 
     def _update_marker_position(self, x: int):
         """Update the position of the dragged marker."""
@@ -674,14 +681,32 @@ class SoundEditor:
         self._draw_waveform()
 
     def _on_mouse_wheel(self, event):
-        """Handle mouse wheel for zooming - zoom centered on cursor position."""
-        # Get cursor X position relative to canvas
-        cursor_x = event.x
+        """Handle mouse wheel: Ctrl+scroll = zoom centered on cursor, plain scroll = pan left/right."""
+        if event.state & 0x0004:  # Ctrl held → zoom
+            if event.delta > 0:
+                self._zoom_in_at(event.x)
+            else:
+                self._zoom_out_at(event.x)
+        else:  # No modifier → pan horizontally
+            # scroll up (delta>0) = go back (left), scroll down = go forward (right)
+            self._pan_view(-1 if event.delta > 0 else 1)
 
-        if event.delta > 0:
-            self._zoom_in_at(cursor_x)
-        else:
-            self._zoom_out_at(cursor_x)
+    def _pan_view(self, direction: int):
+        """Pan the waveform view left (direction=-1) or right (direction=1)."""
+        if self.zoom_level <= 1.0:
+            return
+        total = len(self.waveform_data)
+        if total == 0:
+            return
+        visible = total / self.zoom_level
+        scrollable = total - visible
+        if scrollable <= 0:
+            return
+        # Step = 15% of the currently visible window, converted to view_start units
+        step = (visible * 0.15) / scrollable
+        self.view_start = max(0.0, min(1.0, self.view_start + direction * step))
+        self.h_scroll.set(self.view_start)
+        self._draw_waveform()
 
     def _zoom_in_at(self, cursor_x: int):
         """Zoom in centered on the given X position."""
@@ -859,6 +884,7 @@ class SoundEditor:
         if not self.is_paused:
             self._prepare_audio_for_playback()
             self.play_position = 0
+            self.play_start_sample = self.trim_start  # Freeze the absolute start offset
 
         self.is_playing = True
         self.is_paused = False

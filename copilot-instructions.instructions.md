@@ -45,6 +45,7 @@ Replace Discord's built-in soundboard with a standalone, local solution that:
 | Pitch-Preserving Speed | `librosa` |
 | Emoji Data | `emoji-data-python` |
 | Color Utilities | `colour` |
+| Noise Suppression | `noisereduce` (mic-only, replaces Krisp) |
 
 ### Dependencies
 
@@ -62,6 +63,7 @@ librosa>=0.10.0
 customtkinter>=5.2.0
 emoji-data-python>=1.6.0
 colour>=0.1.5
+noisereduce>=3.0.0
 ```
 
 ---

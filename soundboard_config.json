@@ -82,6 +82,21 @@
           "groups": []
         },
         "0": {
+          "name": "Fuck you bloody",
+          "file_path": "sounds\\bloody-fuck-you-bloody_Jzdok0G_15502481.wav",
+          "hotkey": null,
+          "volume": 0.21,
+          "emoji": null,
+          "image_path": "images\\maxresdefault_54aee3d9.jpg",
+          "color": "#1ABC9C",
+          "speed": 1.0,
+          "preserve_pitch": false,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": []
+        },
+        "1": {
           "name": "Arakara",
           "file_path": "sounds\\ALL You Need To Know On Ara-Kara Dungeon _ The War Within [ ezmp3.cc ]_14976165.wav",
           "hotkey": null,
@@ -97,21 +112,6 @@
           "groups": [
             "Meme"
           ]
-        },
-        "1": {
-          "name": "Fuck you bloody",
-          "file_path": "sounds\\bloody-fuck-you-bloody_Jzdok0G_15502481.wav",
-          "hotkey": null,
-          "volume": 0.21,
-          "emoji": null,
-          "image_path": "images\\maxresdefault_54aee3d9.jpg",
-          "color": "#1ABC9C",
-          "speed": 1.0,
-          "preserve_pitch": false,
-          "loop": false,
-          "loop_count": 0,
-          "loop_delay": 0.0,
-          "groups": []
         },
         "2": {
           "name": "במקרה היה לי קקי",
@@ -247,6 +247,21 @@
           "loop_count": 0,
           "loop_delay": 0.0,
           "groups": []
+        },
+        "16": {
+          "name": "סבבה - השומר הישן",
+          "file_path": "sounds\\yt_OzFF5pVoqEU_57145135.mp3",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": []
         }
       }
     },
@@ -341,7 +356,7 @@
           "name": "שב בשקט שאני מדבר!",
           "file_path": "sounds\\1274111091236012133_38209977.wav",
           "hotkey": null,
-          "volume": 0.13,
+          "volume": 0.37,
           "emoji": null,
           "image_path": "images\\צילום מסך 2026-02-26 215625_9b367aaf.png",
           "color": "#5865F2",
@@ -1051,5 +1066,8 @@
   "custom_groups": [
     "קללות",
     "סתום"
-  ]
+  ],
+  "youtube_cookies_path": "",
+  "noise_suppression": true,
+  "noise_suppression_strength": 70.9090909090909
 }

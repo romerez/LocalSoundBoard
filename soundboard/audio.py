@@ -32,6 +32,89 @@ from .constants import AUDIO, SOUNDS_DIR
 logger = logging.getLogger(__name__)
 
 
+# Optional noise-suppression dependency. Loaded lazily so the app still
+# starts if the user hasn't installed noisereduce yet.
+try:
+    import noisereduce as _nr  # type: ignore
+    NOISEREDUCE_AVAILABLE = True
+except Exception:  # pragma: no cover - import-time guard
+    _nr = None
+    NOISEREDUCE_AVAILABLE = False
+
+
+class NoiseSuppressor:
+    """Real-time noise suppressor for mic input.
+
+    Replaces Discord's Krisp noise suppression (which is bypassed when routing
+    through a virtual cable). Uses spectral gating via the `noisereduce`
+    library. Each incoming mic block is appended to a small ring buffer so
+    the spectral analysis has enough context (~85 ms at 48 kHz), then only
+    the latest block is returned to keep latency low.
+
+    Designed to be cheap enough to run inside `_input_callback`. Falls back
+    to a passthrough (returns input unchanged) if `noisereduce` is missing
+    or processing fails.
+    """
+
+    def __init__(self, sample_rate: int, block_size: int):
+        self.sample_rate = sample_rate
+        self.block_size = block_size
+        self.enabled: bool = False
+        # Strength: 0.0 = no reduction, 1.0 = aggressive
+        self.strength: float = 0.85
+        # Context buffer (~85 ms at 48 kHz). Bigger = better spectral estimate
+        # but more CPU per block. 4 blocks is a good compromise.
+        self._buffer_size = max(block_size * 4, 4096)
+        self._buffer = np.zeros(self._buffer_size, dtype=np.float32)
+        # FFT size for spectral gating. 512 samples ~= 10 ms at 48 kHz.
+        self._n_fft = 512
+
+    def set_strength(self, strength: float) -> None:
+        """Set reduction strength (0.0 - 1.0). Higher = more aggressive."""
+        self.strength = max(0.0, min(1.0, float(strength)))
+
+    def reset(self) -> None:
+        """Clear the context buffer (e.g. when stream restarts)."""
+        self._buffer = np.zeros(self._buffer_size, dtype=np.float32)
+
+    def process(self, mic_block: np.ndarray) -> np.ndarray:
+        """Apply noise suppression to a mic block. Returns same shape array.
+
+        Safe to call even when disabled or when noisereduce is unavailable -
+        will return the input unchanged in those cases.
+        """
+        if not self.enabled or not NOISEREDUCE_AVAILABLE or _nr is None:
+            return mic_block
+        n = len(mic_block)
+        if n == 0:
+            return mic_block
+        try:
+            # Slide buffer forward and append the new block at the end so
+            # noisereduce has previous context to estimate the noise floor.
+            if n >= self._buffer_size:
+                self._buffer = mic_block[-self._buffer_size:].astype(np.float32, copy=True)
+            else:
+                self._buffer[:-n] = self._buffer[n:]
+                self._buffer[-n:] = mic_block.astype(np.float32, copy=False)
+            denoised = _nr.reduce_noise(
+                y=self._buffer,
+                sr=self.sample_rate,
+                stationary=True,
+                prop_decrease=self.strength,
+                n_fft=self._n_fft,
+            )
+            out = np.asarray(denoised[-n:], dtype=np.float32)
+            # Defensive: keep shape/length stable
+            if len(out) != n:
+                return mic_block
+            return out
+        except Exception as e:
+            # Never let noise suppression break the audio callback - fall
+            # back to passthrough on any failure.
+            logger.debug("NoiseSuppressor.process failed: %s", e)
+            return mic_block
+
+
 # Mouse button simulation using direct Windows SendInput API
 # Avoids the mouse library which can have internal state tracking issues
 # that cause buttons to get "stuck" when physical and simulated inputs mix.
@@ -582,6 +665,11 @@ class AudioMixer:
         self.mic_volume = 1.0
         self.mic_muted = False
 
+        # Noise suppression (replaces Discord's Krisp NS which is bypassed
+        # when routing through the virtual cable). Disabled by default;
+        # toggled via the GUI checkbox.
+        self.noise_suppressor = NoiseSuppressor(self.sample_rate, self.block_size)
+
         # PTT (Push-to-Talk) settings
         self.ptt_key: Optional[str] = None
         self.ptt_active: bool = False
@@ -800,6 +888,12 @@ class AudioMixer:
         """Capture microphone input into queue."""
         # Extract mono channel
         mic_data = indata[:, 0].copy()
+
+        # Apply noise suppression to the mic channel only (sounds are mixed
+        # in later, untouched). This replaces Discord's Krisp NS which is
+        # bypassed when routing through the virtual cable.
+        if self.noise_suppressor.enabled:
+            mic_data = self.noise_suppressor.process(mic_data)
 
         # Try to add to queue (non-blocking)
         try:
@@ -1411,31 +1505,37 @@ class AudioMixer:
     def set_sound_speed(self, sound_id: str, speed: float, preserve_pitch: bool = True):
         """Change the playback speed of a currently playing sound.
 
-        Re-processes the audio data at the new speed.
+        Re-processes the audio data at the new speed in a background-safe way.
 
-        Args:
-            sound_id: The identifier of the sound
-            speed: New speed (0.5 to 2.0)
-            preserve_pitch: If True and librosa available, preserves pitch
+        Concurrency model:
+        - Optimistically writes the requested speed/preserve_pitch into the
+          playing sound under the lock so the UI sees the new value immediately.
+        - Runs the slow librosa work OUTSIDE any lock.
+        - Before committing the new audio buffer, re-checks the sound's current
+          requested speed; if it changed (user moved slider again), drops the
+          stale result so the newest pending change wins.
+        - Reads `position` INSIDE the commit lock so the new position reflects
+          where playback actually is now (not where it was when this call
+          started, several hundred ms ago).
         """
         if self._shutting_down:
             return
 
         speed = max(0.5, min(2.0, speed))
 
-        # Get sound info
+        # Phase 1: read what we need + optimistically publish requested speed
         file_path = None
-        old_pos = 0
-        old_total = 0
         is_looping = False
-
         with self.lock:
             for sound in self.currently_playing:
                 if sound.get("sound_id") == sound_id:
                     file_path = sound.get("file_path")
-                    old_pos = sound.get("position", 0)
-                    old_total = len(sound.get("data", []))
                     is_looping = sound.get("loop", False)
+                    # Optimistic write so get_playing_sounds() reports the
+                    # value the user just selected, even before librosa
+                    # finishes re-stretching the buffer.
+                    sound["speed"] = speed
+                    sound["preserve_pitch"] = preserve_pitch
                     break
 
         if not file_path or not self.sound_cache:
@@ -1445,28 +1545,48 @@ class AudioMixer:
         if original_data is None:
             return
 
-        # Apply speed (uses librosa time-stretch if preserve_pitch=True and available)
+        # Phase 2: slow processing OUTSIDE the lock (librosa can take
+        # hundreds of ms; we must not block the audio callback).
         if speed != 1.0:
             new_data = self._apply_speed(original_data, speed, preserve_pitch)
         else:
             new_data = original_data.copy()
 
-        # Apply fade-out for non-looping sounds
         if not is_looping:
             new_data = _apply_fade_out(new_data, self.sample_rate)
 
-        # Calculate new position based on progress ratio
-        progress_ratio = old_pos / old_total if old_total > 0 else 0.0
-        new_pos = int(progress_ratio * len(new_data))
+        if self._shutting_down:
+            return
 
-        # Update sound data
+        new_len = len(new_data)
+        if new_len == 0:
+            return
+
+        # Phase 3: commit. Drop result if the user changed speed again while
+        # we were processing (the newer call will commit its own result).
+        # Also re-read `position` from the live sound so we don't snap back.
         with self.lock:
             for sound in self.currently_playing:
-                if sound.get("sound_id") == sound_id:
-                    sound["data"] = new_data
-                    sound["position"] = new_pos
-                    sound["speed"] = speed
-                    break
+                if sound.get("sound_id") != sound_id:
+                    continue
+                # Stale-update guard: someone else won.
+                if (
+                    abs(sound.get("speed", 1.0) - speed) > 1e-6
+                    or sound.get("preserve_pitch", True) != preserve_pitch
+                ):
+                    return
+                old_data_len = len(sound.get("data", []))
+                old_pos = sound.get("position", 0)
+                progress_ratio = (
+                    old_pos / old_data_len if old_data_len > 0 else 0.0
+                )
+                new_pos = int(progress_ratio * new_len)
+                if new_pos >= new_len:
+                    new_pos = new_len - 1
+                sound["data"] = new_data
+                sound["position"] = max(0, new_pos)
+                # speed/preserve_pitch were already set in phase 1
+                break
 
     def get_playing_sounds(self) -> List[Dict]:
         """Get a snapshot of currently playing sounds for UI display.

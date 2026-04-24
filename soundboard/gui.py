@@ -37,45 +37,117 @@ from .editor import SoundEditor
 from .models import SoundSlot, SoundTab
 
 
+# ---------------------------------------------------------------------------
+# CustomTkinter performance patch: defer per-widget Canvas redraws during
+# active window resize/move.
+#
+# Every CTk widget binds <Configure> to `_update_dimensions_event`, which
+# calls `_draw()` whenever its size changes. With dozens of slot widgets
+# (frames + buttons + progress bars), every pixel of resize triggers a
+# cascade of expensive Canvas redraws (rounded corners, gradients, etc.)
+# that stutters the window during a drag.
+#
+# This patch makes `_update_dimensions_event` skip the `_draw()` call while
+# `SoundboardApp._resize_active_until` is in the future. The widget still
+# records its new dimensions; we just suppress the visual redraw until the
+# resize settles. A single deferred sweep then redraws everything once.
+# ---------------------------------------------------------------------------
+try:
+    from customtkinter.windows.widgets.core_widget_classes import ctk_base_class as _ctk_base
+
+    _SHARED_RESIZE_STATE: Dict[str, Any] = {"until": 0.0}
+
+    _orig_update_dimensions_event = _ctk_base.CTkBaseClass._update_dimensions_event
+
+    def _patched_update_dimensions_event(self, event):  # type: ignore[no-redef]
+        # Replicate the dimension-change check from the original, but skip the
+        # _draw() call when a resize is in progress. The next _draw on this
+        # widget (triggered by the post-resize sweep, theme change, or any
+        # state change) will pick up the recorded dimensions.
+        try:
+            new_w = self._reverse_widget_scaling(event.width)
+            new_h = self._reverse_widget_scaling(event.height)
+            if (
+                round(self._current_width) != round(new_w)
+                or round(self._current_height) != round(new_h)
+            ):
+                self._current_width = new_w
+                self._current_height = new_h
+                if time.time() < _SHARED_RESIZE_STATE["until"]:
+                    # Defer the redraw: tag widget for later sweep.
+                    _SHARED_RESIZE_STATE.setdefault("dirty", set()).add(self)  # type: ignore[arg-type]
+                    return
+                self._draw(no_color_updates=True)
+        except Exception:
+            # Fall back to the original behavior on any unexpected issue
+            # so we never break CTk's drawing.
+            try:
+                _orig_update_dimensions_event(self, event)
+            except Exception:
+                pass
+
+    _ctk_base.CTkBaseClass._update_dimensions_event = _patched_update_dimensions_event
+except Exception:
+    # If CTk internals change, silently fall back to default behavior.
+    _SHARED_RESIZE_STATE = {"until": 0.0}
+
+
+# Regex matching Hebrew, Arabic, Persian RTL characters
+_RTL_PATTERN = re.compile(r"[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F]")
+
+
+def _is_rtl_dominant(text: str) -> bool:
+    """Return True if the text is primarily RTL (more Hebrew/Arabic than Latin chars)."""
+    if not text:
+        return False
+    rtl_count = len(_RTL_PATTERN.findall(text))
+    ltr_count = len(re.findall(r"[a-zA-Z]", text))
+    return rtl_count > 0 and rtl_count >= ltr_count
+
+
 def _fix_rtl_text(text: str) -> str:
     """
-    Fix RTL (Right-to-Left) text display for Hebrew, Arabic, etc.
+    Prepare RTL-dominant text for Tkinter Canvas / CTkButton on Windows.
 
-    Tkinter displays text left-to-right, but Hebrew/Arabic should be
-    read right-to-left. This function reverses the word order so that
-    when displayed LTR, it reads correctly in RTL.
+    Tkinter Canvas uses Win32 GDI which applies BiDi: it reverses word order
+    for RTL paragraphs. We pre-reverse word order so the two reversals cancel
+    out and the text displays in the same left-to-right logical order as typed.
 
-    Args:
-        text: The text to fix
-
-    Returns:
-        Text with word order reversed for RTL languages
+    Brackets and punctuation (!, ', geresh, gershayim) are part of their
+    adjacent token and survive unchanged — Tkinter Canvas does NOT apply BiDi
+    bracket mirroring so no pre-mirroring is needed or wanted.
+    LTR-dominant lines are passed through unchanged.
     """
-    if not text:
+    if not text or not _RTL_PATTERN.search(text):
         return text
-
-    # Check if text contains RTL characters (Hebrew, Arabic, Persian, etc.)
-    rtl_pattern = re.compile(r"[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F]")
-
-    if not rtl_pattern.search(text):
-        return text
-
-    # Split into lines
     lines = text.split("\n")
-    fixed_lines = []
-
+    result = []
     for line in lines:
-        if not rtl_pattern.search(line):
-            fixed_lines.append(line)
-            continue
+        if _is_rtl_dominant(line):
+            result.append(" ".join(reversed(line.split(" "))))
+        else:
+            result.append(line)
+    return "\n".join(result)
 
-        # Reverse word order for RTL text
-        # This makes "word1 word2 word3" display as "word3 word2 word1"
-        # which reads correctly right-to-left
-        words = line.split(" ")
-        fixed_lines.append(" ".join(reversed(words)))
 
-    return "\n".join(fixed_lines)
+def _bind_rtl_entry(entry_widget: "ctk.CTkEntry", str_var: "tk.StringVar") -> None:
+    """
+    Force LTR display in a CTkEntry, even when the text contains Hebrew.
+
+    Win32 Edit controls auto-detect paragraph direction from the first strong
+    BiDi character. For Hebrew text that first char is RTL, causing the whole
+    field to display right-to-left. Setting justify='left' (ES_LEFT style)
+    keeps the paragraph in LTR mode so the text appears in logical order,
+    matching the button display and what the user typed.
+    """
+    def _set_ltr(*_args: object) -> None:
+        try:
+            entry_widget._entry.configure(justify="left")  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+    str_var.trace_add("write", _set_ltr)
+    _set_ltr()  # Apply immediately
 
 
 # Configure CustomTkinter appearance
@@ -236,10 +308,41 @@ class NowPlayingPanel:
         self.empty_label.pack(pady=20)
 
     def _on_items_configure(self, event):
-        self.items_canvas.configure(scrollregion=self.items_canvas.bbox("all"))
+        # Debounce: window resize/move fires this many times per drag.
+        # Coalesce into a single update ~80ms later.
+        if getattr(self, "_items_cfg_after", None):
+            try:
+                self.items_frame.after_cancel(self._items_cfg_after)  # type: ignore[arg-type]
+            except Exception:
+                pass
+        self._items_cfg_after = self.items_frame.after(80, self._apply_items_configure)  # type: ignore[union-attr]
+
+    def _apply_items_configure(self):
+        self._items_cfg_after = None
+        try:
+            self.items_canvas.configure(scrollregion=self.items_canvas.bbox("all"))
+        except Exception:
+            pass
 
     def _on_canvas_configure(self, event):
-        self.items_canvas.itemconfig(self.items_canvas_window, width=event.width)
+        # Debounce: width sync on canvas item is expensive during resize drags.
+        self._pending_canvas_width = event.width
+        if getattr(self, "_canvas_cfg_after", None):
+            try:
+                self.items_canvas.after_cancel(self._canvas_cfg_after)  # type: ignore[arg-type]
+            except Exception:
+                pass
+        self._canvas_cfg_after = self.items_canvas.after(80, self._apply_canvas_configure)
+
+    def _apply_canvas_configure(self):
+        self._canvas_cfg_after = None
+        width = getattr(self, "_pending_canvas_width", None)
+        if width is None:
+            return
+        try:
+            self.items_canvas.itemconfig(self.items_canvas_window, width=width)
+        except Exception:
+            pass
 
     # ----- visibility / positioning -----
 
@@ -476,50 +579,67 @@ class NowPlayingPanel:
         ).pack(side=tk.LEFT)
 
         current_speed = sound_info.get("speed", 1.0)
-        speed_var = tk.IntVar(value=int(current_speed * 100))
-        speed_debounce_id: List[Optional[str]] = [None]
-        preserve_pitch_state: List[bool] = [True]  # mutable for closure
-        # Track when user is actively changing speed to prevent _update_item flicker
+        # NOTE: Do NOT use variable=tk.IntVar with CTkSlider — IntVar quantizes
+        # the float value the slider tries to write, which on some Tk builds
+        # causes feedback loops where the slider visually doesn't move and
+        # `command=` never fires reliably. Track value via closure instead.
+        speed_current: List[float] = [float(int(current_speed * 100))]
+        preserve_pitch_state: List[bool] = [True]
+        # Override flag prevents _update_item from snapping the value label
+        # back to the mixer's stale speed while the user is interacting.
         speed_user_override: List[bool] = [False]
-        speed_override_clear_id: List[Optional[str]] = [None]
+        speed_apply_after: List[Optional[str]] = [None]
+
+        # Create the value label FIRST so the slider's initial set() (which
+        # may fire `command`) doesn't NameError on a not-yet-created widget.
+        speed_value_label = ctk.CTkLabel(
+            row4b,
+            text=f"{current_speed:.1f}x",
+            font=ctk.CTkFont(family=FONTS["family_mono"], size=FONTS["size_xs"]),
+            text_color=COLORS["text_muted"],
+            width=30,
+        )
 
         def _apply_speed():
+            speed_apply_after[0] = None
             mixer = self._get_mixer()
             if mixer:
-                new_speed = speed_var.get() / 100.0
+                new_speed = speed_current[0] / 100.0
                 threading.Thread(
                     target=mixer.set_sound_speed,
                     args=(sound_id, new_speed, preserve_pitch_state[0]),
                     daemon=True,
                 ).start()
-            # Clear user override after a delay to let mixer catch up
-            if self.items_frame is not None:
-                if speed_override_clear_id[0] is not None:
-                    try:
-                        self.items_frame.after_cancel(speed_override_clear_id[0])
-                    except Exception:
-                        pass
-                speed_override_clear_id[0] = self.items_frame.after(
-                    2000, lambda: speed_user_override.__setitem__(0, False)
+            # Keep override briefly so the label doesn't snap before the
+            # background thread finishes publishing the new speed.
+            if self.frame is not None:
+                self.frame.after(
+                    400, lambda: speed_user_override.__setitem__(0, False)
                 )
 
         def _on_speed_change(val):
+            # Fires on every drag tick. Update label live, debounce apply.
             speed_user_override[0] = True
-            new_speed = float(val) / 100.0
-            speed_value_label.configure(text=f"{new_speed:.1f}x")
-            if speed_debounce_id[0] is not None and self.items_frame is not None:
+            try:
+                v = float(val)
+            except (TypeError, ValueError):
+                return
+            speed_current[0] = v
+            speed_value_label.configure(text=f"{v / 100.0:.1f}x")
+            # Debounce: apply 250 ms after the last drag event.
+            if speed_apply_after[0] is not None and self.frame is not None:
                 try:
-                    self.items_frame.after_cancel(speed_debounce_id[0])
+                    self.frame.after_cancel(speed_apply_after[0])
                 except Exception:
                     pass
-            if self.items_frame is not None:
-                speed_debounce_id[0] = self.items_frame.after(300, _apply_speed)
+            if self.frame is not None:
+                speed_apply_after[0] = self.frame.after(250, _apply_speed)
 
         speed_slider = ctk.CTkSlider(
             row4b,
             from_=50,
             to=200,
-            variable=speed_var,
+            number_of_steps=150,
             command=_on_speed_change,
             width=90,
             height=14,
@@ -528,15 +648,9 @@ class NowPlayingPanel:
             button_color=COLORS["blurple"],
             button_hover_color=COLORS["blurple_hover"],
         )
+        speed_slider.set(speed_current[0])
         speed_slider.pack(side=tk.LEFT, padx=(2, 4), fill=tk.X, expand=True)
 
-        speed_value_label = ctk.CTkLabel(
-            row4b,
-            text=f"{current_speed:.1f}x",
-            font=ctk.CTkFont(family=FONTS["family_mono"], size=FONTS["size_xs"]),
-            text_color=COLORS["text_muted"],
-            width=30,
-        )
         speed_value_label.pack(side=tk.LEFT)
 
         # Pitch preservation toggle
@@ -550,7 +664,7 @@ class NowPlayingPanel:
                 ),
             )
             # Re-apply current speed with new pitch setting
-            if speed_var.get() != 100:
+            if int(speed_current[0]) != 100:
                 speed_user_override[0] = True
                 _apply_speed()
 
@@ -570,7 +684,8 @@ class NowPlayingPanel:
         # Reset speed
         def _reset_speed():
             speed_user_override[0] = True
-            speed_var.set(100)
+            speed_current[0] = 100.0
+            speed_slider.set(100)
             speed_value_label.configure(text="1.0x")
             mixer = self._get_mixer()
             if mixer:
@@ -579,15 +694,9 @@ class NowPlayingPanel:
                     args=(sound_id, 1.0, preserve_pitch_state[0]),
                     daemon=True,
                 ).start()
-            # Clear override after mixer catches up
-            if self.items_frame is not None:
-                if speed_override_clear_id[0] is not None:
-                    try:
-                        self.items_frame.after_cancel(speed_override_clear_id[0])
-                    except Exception:
-                        pass
-                speed_override_clear_id[0] = self.items_frame.after(
-                    2000, lambda: speed_user_override.__setitem__(0, False)
+            if self.frame is not None:
+                self.frame.after(
+                    400, lambda: speed_user_override.__setitem__(0, False)
                 )
 
         reset_speed_btn = ctk.CTkButton(
@@ -618,14 +727,19 @@ class NowPlayingPanel:
         current_volume = sound_info.get("volume", 1.0)
         volume_var = tk.IntVar(value=int(current_volume * 100))
         volume_debounce_id: List[Optional[str]] = [None]
+        # Prevents _update_item from snapping the value label back to the
+        # mixer's stale volume during the 50 ms debounce window.
+        volume_user_override: List[bool] = [False]
 
         def _apply_volume():
             mixer = self._get_mixer()
             if mixer:
                 new_vol = volume_var.get() / 100.0
                 mixer.set_sound_volume(sound_id, new_vol)
+            volume_user_override[0] = False
 
         def _on_volume_change(val):
+            volume_user_override[0] = True
             new_vol = float(val) / 100.0
             vol_value_label.configure(text=f"{int(new_vol * 100)}%")
             if volume_debounce_id[0] is not None and self.items_frame is not None:
@@ -662,11 +776,13 @@ class NowPlayingPanel:
 
         # Reset volume
         def _reset_volume():
+            volume_user_override[0] = True
             volume_var.set(100)
             vol_value_label.configure(text="100%")
             mixer = self._get_mixer()
             if mixer:
                 mixer.set_sound_volume(sound_id, 1.0)
+            volume_user_override[0] = False
 
         reset_vol_btn = ctk.CTkButton(
             row5,
@@ -707,14 +823,17 @@ class NowPlayingPanel:
         current_delay = sound_info.get("loop_delay", 0.0)
         delay_var = tk.IntVar(value=int(current_delay * 10))  # 0-100 → 0.0-10.0s
         delay_debounce_id: List[Optional[str]] = [None]
+        delay_user_override: List[bool] = [False]
 
         def _apply_delay():
             mixer = self._get_mixer()
             if mixer:
                 new_delay = delay_var.get() / 10.0
                 mixer.set_sound_loop_delay(sound_id, new_delay)
+            delay_user_override[0] = False
 
         def _on_delay_change(val):
+            delay_user_override[0] = True
             new_delay = float(val) / 10.0
             delay_value_label.configure(text=f"{new_delay:.1f}s")
             if delay_debounce_id[0] is not None and self.items_frame is not None:
@@ -790,7 +909,8 @@ class NowPlayingPanel:
         )
         inf_btn.pack(side=tk.LEFT, padx=(0, 3))
 
-        # Preset loop counts
+        # Preset loop counts (collected so _update_item can re-style the active one)
+        preset_loop_buttons: Dict[int, Any] = {}
         for cnt in (2, 5, 10):
 
             def _set_loop_count(c=cnt):
@@ -799,7 +919,7 @@ class NowPlayingPanel:
                     mixer.set_sound_loop_count(sound_id, c)
 
             is_active = loops == cnt
-            ctk.CTkButton(
+            btn = ctk.CTkButton(
                 row7,
                 text=str(cnt),
                 command=_set_loop_count,
@@ -809,7 +929,9 @@ class NowPlayingPanel:
                 corner_radius=4,
                 width=26,
                 height=22,
-            ).pack(side=tk.LEFT, padx=(0, 3))
+            )
+            btn.pack(side=tk.LEFT, padx=(0, 3))
+            preset_loop_buttons[cnt] = btn
 
         # Store widget references
         self.sound_items[sound_id] = {
@@ -823,7 +945,7 @@ class NowPlayingPanel:
             "loop_btn": loop_btn,
             "restart_btn": restart_btn,
             "speed_slider": speed_slider,
-            "speed_var": speed_var,
+            "speed_current": speed_current,
             "speed_value_label": speed_value_label,
             "speed_user_override": speed_user_override,
             "reset_speed_btn": reset_speed_btn,
@@ -832,6 +954,7 @@ class NowPlayingPanel:
             "volume_slider": volume_slider,
             "volume_var": volume_var,
             "vol_value_label": vol_value_label,
+            "volume_user_override": volume_user_override,
             "reset_vol_btn": reset_vol_btn,
             "stop_btn": stop_btn,
             "row6": row6,
@@ -839,7 +962,9 @@ class NowPlayingPanel:
             "delay_slider": delay_slider,
             "delay_var": delay_var,
             "delay_value_label": delay_value_label,
+            "delay_user_override": delay_user_override,
             "inf_btn": inf_btn,
+            "preset_loop_buttons": preset_loop_buttons,
             "sound_info": sound_info,
         }
 
@@ -900,8 +1025,8 @@ class NowPlayingPanel:
             current_speed = sound_info.get("speed", 1.0)
             item["speed_value_label"].configure(text=f"{current_speed:.1f}x")
 
-        # Volume display (don't change slider to avoid feedback loop)
-        if item.get("vol_value_label"):
+        # Volume display — skip if user is actively changing volume
+        if item.get("vol_value_label") and not item.get("volume_user_override", [False])[0]:
             current_vol = sound_info.get("volume", 1.0)
             item["vol_value_label"].configure(text=f"{int(current_vol * 100)}%")
 
@@ -921,10 +1046,25 @@ class NowPlayingPanel:
             else:
                 item["row7"].pack_forget()
 
-        # Update loop delay display
-        if item.get("delay_value_label"):
+        # Update loop delay display — skip if user is actively dragging
+        if item.get("delay_value_label") and not item.get("delay_user_override", [False])[0]:
             current_delay = sound_info.get("loop_delay", 0.0)
             item["delay_value_label"].configure(text=f"{current_delay:.1f}s")
+
+        # Update loop-count preset button highlights
+        loops_remaining = sound_info.get("loops_remaining", -1)
+        if item.get("inf_btn"):
+            is_inf = loops_remaining < 0
+            item["inf_btn"].configure(
+                fg_color=COLORS["blurple"] if is_inf else COLORS["bg_light"],
+                hover_color=COLORS["blurple_hover"] if is_inf else COLORS["bg_lighter"],
+            )
+        for cnt, btn in (item.get("preset_loop_buttons") or {}).items():
+            is_active = loops_remaining == cnt
+            btn.configure(
+                fg_color=COLORS["blurple"] if is_active else COLORS["bg_light"],
+                hover_color=COLORS["blurple_hover"] if is_active else COLORS["bg_lighter"],
+            )
 
     # ----- item removal -----
 
@@ -1012,6 +1152,9 @@ class SoundboardApp:
         self._last_active_tab_idx: int = 0  # Track last active tab for tab bar optimization
         self.registered_hotkeys: list = []
 
+        # Debounced save handle (see _save_config / _save_config_now)
+        self._save_after_id: Optional[str] = None
+
         # Pre-create cached fonts for performance
         self._font_sm = ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"])
         self._font_sm_bold = ctk.CTkFont(
@@ -1068,7 +1211,49 @@ class SoundboardApp:
         # Start animation loop
         self._animate_progress()
 
+        # Track active window resize/move so the animation loop and other
+        # periodic work back off while geometry is changing. Without this,
+        # progress-bar updates compound with CTk's per-widget Canvas redraws
+        # on every Configure event during a drag and stutter the resize.
+        self._resize_active_until: float = 0.0
+        self._resize_sweep_after_id: Optional[str] = None
+        self.root.bind("<Configure>", self._on_root_configure, add="+")
+
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _on_root_configure(self, event):
+        """Mark the window as 'currently resizing' for ~150ms after each event."""
+        # Only react to events on the root window itself, not children.
+        if event.widget is not self.root:
+            return
+        until = time.time() + 0.15
+        self._resize_active_until = until
+        # Share with the CTk monkeypatch so per-widget redraws are deferred.
+        _SHARED_RESIZE_STATE["until"] = until
+        # Schedule a one-shot post-resize sweep that redraws everything once.
+        if self._resize_sweep_after_id is not None:
+            try:
+                self.root.after_cancel(self._resize_sweep_after_id)  # type: ignore[arg-type]
+            except Exception:
+                pass
+        self._resize_sweep_after_id = self.root.after(180, self._post_resize_sweep)
+
+    def _post_resize_sweep(self):
+        """Redraw all CTk widgets that were skipped during the resize."""
+        self._resize_sweep_after_id = None
+        # Bail if another resize started in the meantime; the next sweep will catch it.
+        if time.time() < self._resize_active_until:
+            self._resize_sweep_after_id = self.root.after(60, self._post_resize_sweep)
+            return
+        dirty = _SHARED_RESIZE_STATE.pop("dirty", None) if isinstance(_SHARED_RESIZE_STATE, dict) else None
+        if not dirty:
+            return
+        for widget in list(dirty):
+            try:
+                if widget.winfo_exists():
+                    widget._draw(no_color_updates=True)  # type: ignore[attr-defined]
+            except Exception:
+                pass
 
     def _setup_styles(self):
         """Configure ttk styles for Discord-like appearance (legacy support)."""
@@ -1316,6 +1501,38 @@ class SoundboardApp:
         )
         self.auto_start_checkbox.pack(side=tk.LEFT)
 
+        # Noise suppression (replaces Discord's Krisp - which is bypassed
+        # when routing through the virtual cable)
+        self.noise_suppress_var = tk.BooleanVar(value=False)
+        self.noise_suppress_checkbox = ctk.CTkCheckBox(
+            controls_row,
+            text="🛡 Noise Suppression",
+            variable=self.noise_suppress_var,
+            command=self._toggle_noise_suppression,
+            fg_color=COLORS["blurple"],
+            hover_color=COLORS["blurple_hover"],
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            corner_radius=4,
+        )
+        self.noise_suppress_checkbox.pack(side=tk.LEFT, padx=(15, 8))
+
+        # Strength slider for noise suppression
+        self.ns_strength_var = tk.DoubleVar(value=85)
+        self.ns_strength_slider = ctk.CTkSlider(
+            controls_row,
+            from_=0,
+            to=100,
+            variable=self.ns_strength_var,
+            command=self._update_ns_strength,
+            width=110,
+            height=14,
+            fg_color=COLORS["bg_light"],
+            progress_color=COLORS["blurple"],
+            button_color=COLORS["text_primary"],
+            button_hover_color=COLORS["blurple"],
+        )
+        self.ns_strength_slider.pack(side=tk.LEFT, padx=(0, 0))
+
         # PTT key frame (hidden by default)
         self.ptt_frame = ctk.CTkFrame(device_frame, fg_color="transparent")
         # Hidden initially - will be shown via pack when needed
@@ -1508,6 +1725,20 @@ class SoundboardApp:
         )
         self.edit_mode_btn.pack(side=tk.LEFT, pady=8)
 
+        # YouTube → MP3 download button
+        self.youtube_btn = ctk.CTkButton(
+            left_section,
+            text="⬇ YouTube",
+            command=self._show_youtube_download_dialog,
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_lighter"],
+            font=self._font_xs,
+            corner_radius=6,
+            height=32,
+            width=90,
+        )
+        self.youtube_btn.pack(side=tk.LEFT, padx=(6, 0), pady=8)
+
         # RIGHT: Stop All and Playing buttons
         right_section = ctk.CTkFrame(self.action_bar_frame, fg_color="transparent")
         right_section.pack(side=tk.RIGHT, padx=(0, 8), fill=tk.Y)
@@ -1569,19 +1800,37 @@ class SoundboardApp:
         self.tabs_canvas.yview_scroll(direction * 3, "units")
 
     def _on_tabs_canvas_configure(self, event=None):
-        """Handle tabs canvas resize."""
-        # Update window width to match canvas width
-        if event:
-            self.tabs_canvas.itemconfig(self.tabs_canvas_window, width=event.width)
-        self._update_tabs_scrollbar()
+        """Handle tabs canvas resize (debounced)."""
+        # Immediately match inner window width to canvas width (cheap).
+        if event is not None:
+            try:
+                self.tabs_canvas.itemconfig(self.tabs_canvas_window, width=event.width)
+            except Exception:
+                pass
+        # Defer the expensive scrollbar show/hide + bbox work.
+        self._schedule_tabs_scroll_update()
 
     def _on_tabs_container_configure(self, event=None):
-        """Handle tabs container content change."""
-        # Update scroll region to encompass all tabs with proper bounds
-        bbox = self.tabs_canvas.bbox("all")
-        if bbox:
-            # Add small padding to prevent clipping
-            self.tabs_canvas.configure(scrollregion=(0, 0, bbox[2], bbox[3] + 4))
+        """Handle tabs container content change (debounced)."""
+        self._schedule_tabs_scroll_update()
+
+    def _schedule_tabs_scroll_update(self):
+        """Coalesce tabs scroll-region updates fired by Configure during resize."""
+        if getattr(self, "_tabs_scroll_after", None):
+            try:
+                self.root.after_cancel(self._tabs_scroll_after)  # type: ignore[arg-type]
+            except Exception:
+                pass
+        self._tabs_scroll_after = self.root.after(80, self._apply_tabs_scroll_update)
+
+    def _apply_tabs_scroll_update(self):
+        self._tabs_scroll_after = None
+        try:
+            bbox = self.tabs_canvas.bbox("all")
+            if bbox:
+                self.tabs_canvas.configure(scrollregion=(0, 0, bbox[2], bbox[3] + 4))
+        except Exception:
+            pass
         self._update_tabs_scrollbar()
 
     def _update_tabs_scrollbar(self):
@@ -1617,10 +1866,11 @@ class SoundboardApp:
             for idx, tab in enumerate(self.tabs):
                 display_name = f"{tab.emoji} {tab.name}" if tab.emoji else tab.name
                 is_active = idx == self.current_tab_idx
+                tab_anchor = "e" if _is_rtl_dominant(tab.name) else "w"
 
                 btn = ctk.CTkButton(
                     self.tabs_container,
-                    text=display_name,
+                    text=_fix_rtl_text(display_name),
                     command=lambda i=idx: self._switch_tab(i),
                     fg_color=COLORS["blurple"] if is_active else COLORS["bg_medium"],
                     hover_color=COLORS["blurple_hover"] if is_active else COLORS["bg_light"],
@@ -1628,7 +1878,7 @@ class SoundboardApp:
                     font=self._font_sm_bold if is_active else self._font_sm,
                     corner_radius=6,
                     height=36,
-                    anchor="w",
+                    anchor=tab_anchor,
                 )
                 btn.pack(side=tk.TOP, fill=tk.X, pady=(0, 4))
                 btn.bind("<Button-3>", lambda e, i=idx: self._configure_tab(i))
@@ -1646,18 +1896,53 @@ class SoundboardApp:
                 # Only reconfigure if this tab's active state changed
                 if is_active or was_active:
                     display_name = f"{tab.emoji} {tab.name}" if tab.emoji else tab.name
+                    tab_anchor = "e" if _is_rtl_dominant(tab.name) else "w"
                     btn.configure(
-                        text=display_name,
+                        text=_fix_rtl_text(display_name),
                         fg_color=COLORS["blurple"] if is_active else COLORS["bg_medium"],
                         hover_color=COLORS["blurple_hover"] if is_active else COLORS["bg_light"],
                         font=self._font_sm_bold if is_active else self._font_sm,
+                        anchor=tab_anchor,
                     )
 
             # Track which tab was active for next comparison
             self._last_active_tab_idx = self.current_tab_idx
 
-        # Update scroll region and buttons after tab bar changes
-        self.root.after(10, self._on_tabs_container_configure)
+        # Only recompute scroll region when tab count actually changed
+        # (active-state-only updates do not affect the canvas bbox).
+        if len(self.tab_buttons) != len(self.tabs) or not getattr(
+            self, "_tabs_scroll_initialized", False
+        ):
+            self._tabs_scroll_initialized = True
+            self._schedule_tabs_scroll_update()
+
+    def _show_tab_only(self, tab_idx: int):
+        """Make `tab_idx` the only visible/managed tab grid frame.
+
+        Only the previously-shown tab is grid_remove()'d (tracked via
+        `_currently_shown_tab`). Iterating ALL tabs every switch is expensive
+        because each grid_remove triggers Tk geometry recomputation. Hidden
+        tabs stop receiving Configure/Map events on resize/move/minimize.
+        Widgets are kept alive so re-show is instant.
+        """
+        target = self.tab_grid_frames.get(tab_idx)
+        if target is None:
+            return
+
+        prev_idx = getattr(self, "_currently_shown_tab", None)
+        if prev_idx is not None and prev_idx != tab_idx:
+            prev_frame = self.tab_grid_frames.get(prev_idx)
+            if prev_frame is not None:
+                try:
+                    prev_frame.grid_remove()
+                except Exception:
+                    pass
+        try:
+            target.grid()
+            target.tkraise()
+        except Exception:
+            pass
+        self._currently_shown_tab = tab_idx
 
     def _switch_tab(self, tab_idx: int):
         """Switch to a different tab using tkraise() for instant switching."""
@@ -1699,9 +1984,15 @@ class SoundboardApp:
         # Ensure target tab is built (lazy build on first visit)
         self._ensure_tab_built(tab_idx)
 
-        # INSTANT SWITCH: Just raise the target tab's frame to the top
-        if tab_idx in self.tab_grid_frames:
-            self.tab_grid_frames[tab_idx].tkraise()
+        # INSTANT SWITCH: hide other tabs entirely (grid_remove) so they
+        # stop receiving Configure/Map events on resize/move/minimize.
+        self._show_tab_only(tab_idx)
+
+        # Scroll the sound grid back to the top so the first sounds are visible
+        try:
+            self.scrollable_grid._parent_canvas.yview_moveto(0)  # type: ignore[attr-defined]
+        except Exception:
+            pass
 
         # Update aliases to point at new tab's widgets
         self._update_current_tab_aliases()
@@ -1764,13 +2055,15 @@ class SoundboardApp:
             row=0, column=0, sticky="w", pady=10
         )
         name_var = tk.StringVar(value=f"Tab {len(self.tabs) + 1}")
-        ctk.CTkEntry(
+        tab_name_entry = ctk.CTkEntry(
             frame,
             textvariable=name_var,
             width=200,
             fg_color=COLORS["bg_medium"],
             border_color=COLORS["bg_light"],
-        ).grid(row=0, column=1, pady=10)
+        )
+        tab_name_entry.grid(row=0, column=1, pady=10)
+        _bind_rtl_entry(tab_name_entry, name_var)
 
         # Emoji field
         ctk.CTkLabel(frame, text="Emoji:", text_color=COLORS["text_primary"]).grid(
@@ -1807,9 +2100,7 @@ class SoundboardApp:
             # Build widgets for the new tab
             self._build_tab_widgets(new_tab_idx)
             self.current_tab_idx = new_tab_idx
-            # Raise new tab to top
-            if new_tab_idx in self.tab_grid_frames:
-                self.tab_grid_frames[new_tab_idx].tkraise()
+            self._show_tab_only(new_tab_idx)
             self._update_current_tab_aliases()
             self._refresh_tab_bar()
             self._save_config()
@@ -1858,13 +2149,15 @@ class SoundboardApp:
             row=0, column=0, sticky="w", pady=10
         )
         name_var = tk.StringVar(value=tab.name)
-        ctk.CTkEntry(
+        edit_tab_name_entry = ctk.CTkEntry(
             frame,
             textvariable=name_var,
             width=200,
             fg_color=COLORS["bg_medium"],
             border_color=COLORS["bg_light"],
-        ).grid(row=0, column=1, pady=10)
+        )
+        edit_tab_name_entry.grid(row=0, column=1, pady=10)
+        _bind_rtl_entry(edit_tab_name_entry, name_var)
 
         # Emoji field
         ctk.CTkLabel(frame, text="Emoji:", text_color=COLORS["text_primary"]).grid(
@@ -1923,8 +2216,7 @@ class SoundboardApp:
 
                 self._refresh_tab_bar()
                 self._ensure_tab_built(self.current_tab_idx)
-                if self.current_tab_idx in self.tab_grid_frames:
-                    self.tab_grid_frames[self.current_tab_idx].tkraise()
+                self._show_tab_only(self.current_tab_idx)
                 self._update_current_tab_aliases()
                 self._register_hotkeys()
                 self._save_config()
@@ -2040,6 +2332,7 @@ class SoundboardApp:
             corner_radius=6,
         )
         self._search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+        _bind_rtl_entry(self._search_entry, self._search_var)
 
         self._filter_group_var = tk.StringVar(value="All Groups")
         group_values = ["All Groups"]  # Updated after config load via _refresh_group_combo
@@ -2143,9 +2436,16 @@ class SoundboardApp:
         self.tab_slot_image_paths[tab_idx] = {}
         self._tab_slot_filled_cache[tab_idx] = {}
 
-        # Create grid frame for this tab, stacked with others at position (0,0)
+        # Create grid frame for this tab, stacked with others at position (0,0).
+        # IMPORTANT: only the active tab is left grid()'d at any moment;
+        # all other tabs are grid_remove()'d to stop Tk from sending Configure /
+        # Map / Unmap events to their entire widget subtrees on every window
+        # resize/move/minimize. With many tabs/slots that's a HUGE perf win.
         tab_grid = ctk.CTkFrame(self.grid_frame, fg_color=COLORS["bg_dark"])
         tab_grid.grid(row=0, column=0, sticky="nsew")
+        if tab_idx != self.current_tab_idx:
+            # Hide non-current tabs immediately so they never receive layout events.
+            tab_grid.grid_remove()
         self.tab_grid_frames[tab_idx] = tab_grid
 
         # Configure columns for even distribution (flex layout)
@@ -2161,10 +2461,13 @@ class SoundboardApp:
         for i in range(num_slots):
             row, col = divmod(i, UI["grid_columns"])
 
+            # corner_radius=0 puts CTk on the fast rectangle-render path,
+            # skipping the expensive rounded-polygon Canvas math on every
+            # resize/show. Critical for slot grid perf with many slots.
             slot_frame = ctk.CTkFrame(
                 tab_grid,
                 fg_color=COLORS["bg_medium"],
-                corner_radius=UI["slot_corner_radius"],
+                corner_radius=0,
                 height=UI["slot_height"],
             )
             slot_frame.grid(
@@ -2189,7 +2492,7 @@ class SoundboardApp:
                 fg_color=COLORS["red"],
                 hover_color=COLORS["red_hover"],
                 font=self._font_sm,
-                corner_radius=4,
+                corner_radius=0,
                 width=28,
                 height=24,
                 cursor="hand2",
@@ -2198,40 +2501,38 @@ class SoundboardApp:
             stop_btn.configure(command=stop_handler)
             stop_btn.bind("<Button-1>", stop_handler)
 
-            preview_btn = ctk.CTkButton(
-                bottom_frame,
-                text="🔊",
-                fg_color=COLORS["bg_light"],
-                hover_color=COLORS["bg_lighter"],
-                text_color=COLORS["text_muted"],
-                font=self._font_xs,
-                corner_radius=4,
-                width=28,
-                height=24,
-                command=lambda t=tab_idx, idx=i: self._preview_slot_for_tab(t, idx),
-            )
-            preview_btn.pack(side=tk.RIGHT, padx=(2, 0))
+            # Single "⋯" menu button replaces preview + edit buttons.
+            # Reduces widget count per slot from 5 to 4 (significant for many slots).
+            def make_menu_handler(t_idx, slot_id):
+                def handler():
+                    self._show_slot_menu(t_idx, slot_id)
+                return handler
 
-            edit_btn = ctk.CTkButton(
+            menu_btn = ctk.CTkButton(
                 bottom_frame,
-                text="✏️",
+                text="⋯",
                 fg_color=COLORS["bg_light"],
                 hover_color=COLORS["bg_lighter"],
                 text_color=COLORS["text_muted"],
-                font=self._font_xs,
-                corner_radius=4,
+                font=self._font_sm_bold,
+                corner_radius=0,
                 width=28,
                 height=24,
-                command=lambda t=tab_idx, idx=i: self._configure_slot_for_tab(t, idx),
+                command=make_menu_handler(tab_idx, i),
             )
-            edit_btn.pack(side=tk.RIGHT, padx=(2, 0))
+            menu_btn.pack(side=tk.RIGHT, padx=(2, 0))
+
+            # Keep separate dict references pointing to the same widget so the
+            # existing per-state color-update code still works without changes.
+            preview_btn = menu_btn
+            edit_btn = menu_btn
 
             progress = ctk.CTkProgressBar(
                 bottom_frame,
                 height=6,
                 fg_color=COLORS["bg_light"],
                 progress_color=COLORS["playing"],
-                corner_radius=3,
+                corner_radius=0,
             )
             progress.set(0)
             progress.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
@@ -2243,7 +2544,7 @@ class SoundboardApp:
                 hover_color=COLORS["bg_light"],
                 text_color=COLORS["text_muted"],
                 font=self._font_xl_bold,
-                corner_radius=UI["slot_corner_radius"],
+                corner_radius=0,
                 anchor="center",
                 cursor="hand2",
                 compound="top",
@@ -2280,6 +2581,49 @@ class SoundboardApp:
         # Update slot appearances
         for i in range(num_slots):
             self._update_slot_button_for_tab(tab_idx, i)
+
+        # Warm-up: force Tk to lay out and CTk to draw all widgets NOW so the
+        # first switch to this tab doesn't trigger a layout/draw cascade.
+        # Only needed for non-current tabs (current tab is already visible).
+        if tab_idx != self.current_tab_idx:
+            try:
+                # The grid is currently grid_remove()'d; re-add briefly to
+                # force layout, flush, then remove again. This pre-warms
+                # widget sizes and CTk Canvas renders.
+                tab_grid.grid()
+                tab_grid.lower()  # Ensure it stays beneath the visible tab
+                self.root.update_idletasks()
+                tab_grid.grid_remove()
+            except Exception:
+                pass
+
+    def _show_slot_menu(self, tab_idx: int, slot_idx: int):
+        """Show a popup menu with Preview and Edit options for a slot.
+
+        Replaces the previous separate preview/edit buttons to reduce per-slot
+        widget count (4 widgets per slot instead of 5).
+        """
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.add_command(
+            label="🔊 Preview",
+            command=lambda: self._preview_slot_for_tab(tab_idx, slot_idx),
+        )
+        menu.add_command(
+            label="✏️ Edit",
+            command=lambda: self._configure_slot_for_tab(tab_idx, slot_idx),
+        )
+        # Position the menu just below/right of the menu button.
+        try:
+            btn = self.tab_slot_preview_buttons.get(tab_idx, {}).get(slot_idx)
+            if btn is not None and btn.winfo_exists():
+                x = btn.winfo_rootx()
+                y = btn.winfo_rooty() + btn.winfo_height()
+                menu.tk_popup(x, y)
+            else:
+                # Fallback: pointer position
+                menu.tk_popup(self.root.winfo_pointerx(), self.root.winfo_pointery())
+        finally:
+            menu.grab_release()
 
     def _ensure_tab_built(self, tab_idx: int):
         """Ensure a tab's widgets are built. Builds lazily if needed."""
@@ -2366,27 +2710,71 @@ class SoundboardApp:
         tab switching is instant (other tabs are pre-built before user clicks them).
         """
         self._build_tab_widgets(self.current_tab_idx)
-        # Raise current tab to top
-        if self.current_tab_idx in self.tab_grid_frames:
-            self.tab_grid_frames[self.current_tab_idx].tkraise()
+        self._show_tab_only(self.current_tab_idx)
         self._update_current_tab_aliases()
 
-        # Build remaining tabs in background, one per event loop tick
+        # Build remaining tabs in background.
+        # Use after(15ms) instead of after_idle so the queue actually drains
+        # in a few hundred ms — after_idle can stall indefinitely if the user
+        # is interacting, leaving first-time tab switches laggy.
         remaining = [i for i in range(len(self.tabs)) if i != self.current_tab_idx]
-        self._build_tabs_incrementally(remaining)
+        if remaining:
+            self.root.after(50, lambda: self._build_tabs_incrementally(remaining))
 
     def _build_tabs_incrementally(self, remaining: list):
-        """Build one tab per event loop tick to avoid blocking the UI."""
+        """Build one tab per ~15ms tick to avoid blocking the UI.
+
+        Uses after(15) instead of after_idle so the queue drains predictably
+        even while the user is moving/resizing the window. This guarantees
+        all tabs are pre-built within ~N*15ms of startup, so first-time tab
+        switches don't trigger a synchronous build on the UI thread.
+        """
         if not remaining:
+            return
+        # Don't fight resize/move; defer until window is settled.
+        if time.time() < getattr(self, "_resize_active_until", 0.0):
+            self.root.after(150, lambda: self._build_tabs_incrementally(remaining))
             return
         tab_idx = remaining.pop(0)
         if not self._tab_built.get(tab_idx, False):
             self._build_tab_widgets(tab_idx)
-        # Schedule next tab build on next idle tick
-        self.root.after_idle(lambda: self._build_tabs_incrementally(remaining))
+        if remaining:
+            self.root.after(15, lambda: self._build_tabs_incrementally(remaining))
+
+    def _prioritize_tab_build(self, tab_idx: int):
+        """If `tab_idx` is in the background-build queue, build it now.
+
+        Called from `_switch_tab` so first-time switches aren't laggy.
+        """
+        if not self._tab_built.get(tab_idx, False):
+            self._build_tab_widgets(tab_idx)
 
     def _animate_progress(self):
-        """Update progress bars for playing sounds."""
+        """Update progress bars for playing sounds.
+
+        Performance: When nothing is playing and the DJ Looper panel has nothing
+        to show, sleep for 250ms instead of 50ms. This drops idle CPU usage to
+        near zero and removes the per-frame widget work that used to compound
+        with Configure events during window resize/move/minimize.
+        """
+        # Resize/move backoff: while the user is dragging the window, skip
+        # all per-frame widget work and reschedule far in the future. This
+        # prevents progress-bar `.set()` calls from interleaving with CTk's
+        # Canvas redraws on every Configure event.
+        if time.time() < getattr(self, "_resize_active_until", 0.0):
+            self.root.after(150, self._animate_progress)
+            return
+
+        # Idle fast-path: no sounds playing anywhere, nothing to animate.
+        if not self.playing_slots and not self.preview_slots:
+            # Make sure the DJ Looper panel reflects the empty state, but only
+            # once (not every 250ms) — only if it still thinks sounds are playing.
+            panel = getattr(self, "now_playing_panel", None)
+            if panel is not None and panel.is_visible and panel.sound_items:
+                panel.update([], {})
+            self.root.after(250, self._animate_progress)
+            return
+
         current_time = time.time()
         finished = []
 
@@ -2409,22 +2797,9 @@ class SoundboardApp:
         for slot_idx in finished:
             tab_idx = self.playing_slots[slot_idx]["tab_idx"]
             del self.playing_slots[slot_idx]
-
-            # Update the slot's tab directly (not just current tab)
-            # This ensures stop button is hidden even if we're on a different tab
-            if tab_idx in self.tab_slot_buttons and slot_idx in self.tab_slot_buttons.get(
-                tab_idx, {}
-            ):
-                self._update_slot_button_for_tab(tab_idx, slot_idx)
-            if tab_idx in self.tab_slot_progress and slot_idx in self.tab_slot_progress.get(
-                tab_idx, {}
-            ):
-                self.tab_slot_progress[tab_idx][slot_idx].set(0)
-            if (
-                tab_idx in self.tab_slot_stop_buttons
-                and slot_idx in self.tab_slot_stop_buttons.get(tab_idx, {})
-            ):
-                self.tab_slot_stop_buttons[tab_idx][slot_idx].pack_forget()
+            # Cheap visual reset: color + hide stop button + reset progress.
+            # Avoids disk I/O (image reload) that full _update_slot_button_for_tab does.
+            self._reset_slot_visual(tab_idx, slot_idx)
 
         # Handle preview slots (same logic but with green color)
         preview_finished = []
@@ -2448,27 +2823,63 @@ class SoundboardApp:
         for slot_idx in preview_finished:
             tab_idx = self.preview_slots[slot_idx]["tab_idx"]
             del self.preview_slots[slot_idx]
+            self._reset_slot_visual(tab_idx, slot_idx)
 
-            # Update the slot's tab directly (not just current tab)
-            if tab_idx in self.tab_slot_buttons and slot_idx in self.tab_slot_buttons.get(
-                tab_idx, {}
-            ):
-                self._update_slot_button_for_tab(tab_idx, slot_idx)
-            if tab_idx in self.tab_slot_progress and slot_idx in self.tab_slot_progress.get(
-                tab_idx, {}
-            ):
-                self.tab_slot_progress[tab_idx][slot_idx].set(0)
-
-        # Update Now Playing panel if visible
-        if hasattr(self, "now_playing_panel") and self.now_playing_panel.is_visible:
-            if self.mixer and self.mixer.running:
+        # Update Now Playing panel if visible — only if there's something
+        # to show OR the panel still has items from the previous frame.
+        panel = getattr(self, "now_playing_panel", None)
+        if panel is not None and panel.is_visible:
+            if self.mixer and self.mixer.running and self.playing_slots:
                 playing_sounds = self.mixer.get_playing_sounds()
-                self.now_playing_panel.update(playing_sounds, self.playing_slots)
-            else:
-                self.now_playing_panel.update([], {})
+                panel.update(playing_sounds, self.playing_slots)
+            elif panel.sound_items:
+                panel.update([], {})
 
         # Schedule next frame (20fps is enough for progress bars)
         self.root.after(50, self._animate_progress)
+
+    def _reset_slot_visual(self, tab_idx: int, slot_idx: int):
+        """Lightweight visual reset for a slot that just finished playing.
+
+        Cheaper than a full `_update_slot_button_for_tab()` call because it only
+        touches color/progress/stop-button instead of reloading the slot image
+        and reconfiguring every property. Called from the animation loop.
+        """
+        try:
+            if tab_idx < 0 or tab_idx >= len(self.tabs):
+                return
+            tab = self.tabs[tab_idx]
+            slot = tab.slots.get(slot_idx)
+
+            # Reset button color to its default (filled = slot color, empty = transparent)
+            btn = self.tab_slot_buttons.get(tab_idx, {}).get(slot_idx)
+            if btn is not None:
+                if slot is not None:
+                    fg = slot.color if slot.color else COLORS["blurple"]
+                else:
+                    fg = "transparent"
+                try:
+                    btn.configure(fg_color=fg)
+                except Exception:
+                    pass
+
+            # Reset progress bar to 0
+            pb = self.tab_slot_progress.get(tab_idx, {}).get(slot_idx)
+            if pb is not None:
+                try:
+                    pb.set(0)
+                except Exception:
+                    pass
+
+            # Hide stop button if present
+            stop_btn = self.tab_slot_stop_buttons.get(tab_idx, {}).get(slot_idx)
+            if stop_btn is not None:
+                try:
+                    stop_btn.pack_forget()
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _calculate_slots_for_tab(self, tab: SoundTab) -> int:
         """Calculate how many slots a tab needs (max slot index + 2, minimum 12)."""
@@ -2590,6 +3001,7 @@ class SoundboardApp:
             corner_radius=6,
         )
         new_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+        _bind_rtl_entry(new_entry, new_var)
 
         def _add():
             name = new_var.get().strip()
@@ -2846,12 +3258,8 @@ class SoundboardApp:
 
         self._search_result_widgets = []
 
-        # Re-show all tab grid frames and raise current
-        for frame in self.tab_grid_frames.values():
-            frame.grid()
-
-        if self.current_tab_idx in self.tab_grid_frames:
-            self.tab_grid_frames[self.current_tab_idx].tkraise()
+        # Re-show only the current tab (hides everything else)
+        self._show_tab_only(self.current_tab_idx)
 
     def _play_slot_from_search(self, tab_idx: int, slot_idx: int):
         """Play a sound from a search result (may be on a different tab)."""
@@ -2931,9 +3339,8 @@ class SoundboardApp:
                 del self.tab_grid_frames[tab_idx]
             self._build_tab_widgets(tab_idx)
 
-            # Re-raise current tab's frame to keep it on top
-            if self.current_tab_idx in self.tab_grid_frames:
-                self.tab_grid_frames[self.current_tab_idx].tkraise()
+            # Re-show only the current tab (hides everything else)
+            self._show_tab_only(self.current_tab_idx)
 
             # Update aliases if this is the current tab
             if tab_idx == self.current_tab_idx:
@@ -2976,6 +3383,12 @@ class SoundboardApp:
                     ptt_key = self.ptt_key_var.get().strip()
                     if ptt_key:
                         self.mixer.set_ptt_key(ptt_key)
+                # Apply noise suppression settings
+                if hasattr(self, "noise_suppress_var"):
+                    self.mixer.noise_suppressor.enabled = self.noise_suppress_var.get()
+                    self.mixer.noise_suppressor.set_strength(
+                        self.ns_strength_var.get() / 100.0
+                    )
                 self.mixer.start()
                 # Save device selection
                 self._save_config()
@@ -3001,6 +3414,23 @@ class SoundboardApp:
         """Toggle local speaker monitoring (hear sounds through speakers)."""
         if self.mixer:
             self.mixer.set_monitor_enabled(self.monitor_var.get())
+
+    def _toggle_noise_suppression(self):
+        """Toggle mic noise suppression (Krisp replacement)."""
+        enabled = self.noise_suppress_var.get()
+        if self.mixer:
+            self.mixer.noise_suppressor.enabled = enabled
+            self.mixer.noise_suppressor.set_strength(self.ns_strength_var.get() / 100.0)
+            # Reset context buffer so we don't carry stale audio when toggling
+            self.mixer.noise_suppressor.reset()
+        self._save_config()
+
+    def _update_ns_strength(self, _=None):
+        """Update noise suppression strength from slider (0-100 → 0.0-1.0)."""
+        if self.mixer:
+            self.mixer.noise_suppressor.set_strength(self.ns_strength_var.get() / 100.0)
+        # Debounced save (slider drag triggers many calls)
+        self._save_config()
 
     def _toggle_now_playing_panel(self):
         """Toggle the DJ Looper side panel visibility."""
@@ -3908,26 +4338,30 @@ class SoundboardApp:
             row=0, column=0, sticky="w", pady=8
         )
         name_var = tk.StringVar(value=existing.name if existing else "")
-        ctk.CTkEntry(
+        name_entry = ctk.CTkEntry(
             frame,
             textvariable=name_var,
             width=250,
             fg_color=COLORS["bg_medium"],
             border_color=COLORS["bg_light"],
-        ).grid(row=0, column=1, pady=8)
+        )
+        name_entry.grid(row=0, column=1, pady=8)
+        _bind_rtl_entry(name_entry, name_var)
 
         # File path field
         ctk.CTkLabel(frame, text="Sound File:", text_color=COLORS["text_primary"]).grid(
             row=1, column=0, sticky="w", pady=8
         )
         path_var = tk.StringVar(value=existing.file_path if existing else "")
-        ctk.CTkEntry(
+        path_entry = ctk.CTkEntry(
             frame,
             textvariable=path_var,
             width=250,
             fg_color=COLORS["bg_medium"],
             border_color=COLORS["bg_light"],
-        ).grid(row=1, column=1, pady=8)
+        )
+        path_entry.grid(row=1, column=1, pady=8)
+        _bind_rtl_entry(path_entry, path_var)
 
         # Edit status label
         edit_status_var = tk.StringVar(value="")
@@ -4645,6 +5079,7 @@ class SoundboardApp:
                 hover_color=hover_color,
                 text_color=COLORS["text_primary"],
                 font=self._font_sm,
+                anchor="center",
             )
 
             # Only update preview/edit buttons if filled state changed (optimization)
@@ -4790,6 +5225,7 @@ class SoundboardApp:
                 hover_color=hover_color,
                 text_color=COLORS["text_primary"],
                 font=self._font_sm,
+                anchor="center",
             )
 
             if filled_state_changed:
@@ -4840,39 +5276,62 @@ class SoundboardApp:
                     )
 
     def _register_hotkeys(self):
-        """Register global hotkeys for all slots across all tabs."""
+        """Register global hotkeys for all slots across all tabs.
+
+        Diff-based: only unregister hotkeys that went away and only register
+        hotkeys that are new. Called frequently (on every save), so avoiding
+        unnecessary keyboard.add_hotkey / remove_hotkey system calls is a
+        meaningful perf win.
+        """
         if not HOTKEYS_AVAILABLE:
             return
 
-        # Unregister existing hotkeys
-        for hk in self.registered_hotkeys:
-            try:
-                keyboard.remove_hotkey(hk)  # type: ignore
-            except Exception:
-                pass
-        self.registered_hotkeys.clear()
-
-        # Register hotkeys for all tabs
+        # Build desired hotkey -> (tab_idx, slot_idx) map from current config
+        desired: Dict[str, tuple] = {}
         for tab_idx, tab in enumerate(self.tabs):
             for slot_idx, slot in tab.slots.items():
                 if slot.hotkey:
-                    try:
-                        # CRITICAL: Use root.after() to schedule playback on main thread!
-                        # Running play_sound inside the keyboard hook callback blocks the
-                        # Windows low-level keyboard hook, freezing ALL Windows input.
-                        def make_hotkey_handler(t: int, s: int):
-                            def handler():
-                                self.root.after(0, lambda: self._play_slot_from_tab(t, s))
+                    # Last-wins if a hotkey is duplicated across slots.
+                    desired[slot.hotkey] = (tab_idx, slot_idx)
 
-                            return handler
+        # Normalise existing registrations into a dict for easy comparison.
+        # Older code stored a flat list of hotkey strings; preserve that shape.
+        current: Dict[str, tuple] = getattr(self, "_hotkey_map", {})
 
-                        keyboard.add_hotkey(
-                            slot.hotkey,
-                            make_hotkey_handler(tab_idx, slot_idx),
-                        )
-                        self.registered_hotkeys.append(slot.hotkey)
-                    except Exception:
-                        pass
+        # Unregister hotkeys that are gone or whose target changed
+        for hk, target in list(current.items()):
+            if desired.get(hk) != target:
+                try:
+                    keyboard.remove_hotkey(hk)  # type: ignore
+                except Exception:
+                    pass
+                current.pop(hk, None)
+
+        # Register hotkeys that are new or changed
+        def make_hotkey_handler(t: int, s: int):
+            # CRITICAL: use root.after() to schedule playback on main thread;
+            # running it inline in the keyboard hook freezes Windows input.
+            def handler():
+                try:
+                    self.root.after(0, lambda: self._play_slot_from_tab(t, s))
+                except Exception:
+                    pass
+
+            return handler
+
+        for hk, (tab_idx, slot_idx) in desired.items():
+            if current.get(hk) == (tab_idx, slot_idx):
+                continue
+            try:
+                keyboard.add_hotkey(hk, make_hotkey_handler(tab_idx, slot_idx))
+                current[hk] = (tab_idx, slot_idx)
+            except Exception:
+                pass
+
+        # Persist the new map; keep the legacy list in sync for any callers
+        # that still inspect `registered_hotkeys`.
+        self._hotkey_map = current
+        self.registered_hotkeys = list(current.keys())
 
     def _play_slot_from_tab(self, tab_idx: int, slot_idx: int):
         """Play a sound from a specific tab (for hotkeys)."""
@@ -4927,8 +5386,395 @@ class SoundboardApp:
                 except RuntimeError:
                     pass
 
+    # ------------------------------------------------------------------
+    # YouTube → MP3 download
+    # ------------------------------------------------------------------
+    def _show_youtube_download_dialog(self):
+        """Prompt for a YouTube URL and start a download in the background.
+
+        Auto-pastes from the clipboard if the clipboard contains what looks
+        like a YouTube URL, so the common case is just one click → Enter.
+        """
+        # Try to auto-fill from clipboard
+        prefill = ""
+        try:
+            clip = self.root.clipboard_get()
+            if isinstance(clip, str) and ("youtube.com" in clip or "youtu.be" in clip):
+                prefill = clip.strip()
+        except Exception:
+            pass
+
+        dialog = ctk.CTkToplevel(self.root)
+        dialog.title("Download from YouTube")
+        dialog.geometry("560x260")
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.after(10, lambda: dialog.focus_force())
+
+        frame = ctk.CTkFrame(dialog, fg_color=COLORS["bg_dark"], corner_radius=0)
+        frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=16)
+
+        ctk.CTkLabel(
+            frame,
+            text="YouTube URL:",
+            text_color=COLORS["text_primary"],
+            font=self._font_sm,
+        ).pack(anchor="w")
+
+        url_var = tk.StringVar(value=prefill)
+        url_entry = ctk.CTkEntry(
+            frame,
+            textvariable=url_var,
+            fg_color=COLORS["bg_medium"],
+            border_color=COLORS["bg_light"],
+            height=34,
+        )
+        url_entry.pack(fill=tk.X, pady=(4, 8))
+        url_entry.focus_set()
+        if prefill:
+            url_entry.select_range(0, "end")
+
+        # Optional cookies file (for age-restricted / login-only videos)
+        ctk.CTkLabel(
+            frame,
+            text="Cookies file (optional, for age-restricted videos):",
+            text_color=COLORS["text_secondary"],
+            font=ctk.CTkFont(family=FONTS["family"], size=11),
+        ).pack(anchor="w")
+
+        cookies_row = ctk.CTkFrame(frame, fg_color="transparent")
+        cookies_row.pack(fill=tk.X, pady=(2, 10))
+
+        cookies_var = tk.StringVar(value=getattr(self, "_youtube_cookies_path", "") or "")
+        cookies_entry = ctk.CTkEntry(
+            cookies_row,
+            textvariable=cookies_var,
+            fg_color=COLORS["bg_medium"],
+            border_color=COLORS["bg_light"],
+            height=28,
+        )
+        cookies_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        def browse_cookies():
+            fp = filedialog.askopenfilename(
+                title="Select cookies.txt",
+                filetypes=[("Cookies file", "*.txt"), ("All files", "*.*")],
+            )
+            if fp:
+                cookies_var.set(fp)
+
+        ctk.CTkButton(
+            cookies_row,
+            text="...",
+            width=32,
+            height=28,
+            command=browse_cookies,
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_lighter"],
+        ).pack(side=tk.LEFT, padx=(4, 0))
+
+        btn_row = ctk.CTkFrame(frame, fg_color="transparent")
+        btn_row.pack(fill=tk.X)
+
+        def start():
+            url = url_var.get().strip()
+            if not url:
+                messagebox.showwarning("YouTube", "Please paste a YouTube URL.")
+                return
+            cookies_path = cookies_var.get().strip() or None
+            if cookies_path and not os.path.isfile(cookies_path):
+                messagebox.showwarning("YouTube", "Cookies file not found.")
+                return
+            # Persist cookies path for next time
+            self._youtube_cookies_path = cookies_path or ""
+            self._save_config()
+            dialog.destroy()
+            self._start_youtube_download(url, cookies_path, self.current_tab_idx)
+
+        ctk.CTkButton(
+            btn_row,
+            text="Cancel",
+            command=dialog.destroy,
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_lighter"],
+            width=90,
+            height=32,
+        ).pack(side=tk.RIGHT, padx=(6, 0))
+
+        ctk.CTkButton(
+            btn_row,
+            text="Download",
+            command=start,
+            fg_color=COLORS["blurple"],
+            hover_color=COLORS["blurple_hover"],
+            width=110,
+            height=32,
+        ).pack(side=tk.RIGHT)
+
+        url_entry.bind("<Return>", lambda e: start())
+
+    def _start_youtube_download(
+        self, url: str, cookies_path: Optional[str], target_tab_idx: int
+    ):
+        """Show progress dialog and download a single YouTube video as MP3."""
+        try:
+            import yt_dlp  # type: ignore
+        except ImportError:
+            messagebox.showerror(
+                "yt-dlp missing",
+                "yt-dlp is not installed.\n\nRun:\n  pip install yt-dlp",
+            )
+            return
+
+        try:
+            from static_ffmpeg import run as _sff_run  # type: ignore
+
+            ffmpeg_exe, _ffprobe_exe = _sff_run.get_or_fetch_platform_executables_else_raise()
+            ffmpeg_dir = os.path.dirname(ffmpeg_exe)
+        except Exception:
+            # Fallback: imageio-ffmpeg ships ffmpeg only (no ffprobe), so the
+            # MP3 postprocessor will fail. We try anyway and surface the error.
+            try:
+                import imageio_ffmpeg  # type: ignore
+
+                ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+                ffmpeg_dir = os.path.dirname(ffmpeg_path)
+            except Exception:
+                ffmpeg_dir = None
+
+        # Progress dialog
+        prog = ctk.CTkToplevel(self.root)
+        prog.title("Downloading...")
+        prog.geometry("420x150")
+        prog.transient(self.root)
+        prog.grab_set()
+        prog.protocol("WM_DELETE_WINDOW", lambda: None)  # disable close
+
+        pframe = ctk.CTkFrame(prog, fg_color=COLORS["bg_dark"], corner_radius=0)
+        pframe.pack(fill=tk.BOTH, expand=True, padx=18, pady=14)
+
+        status_var = tk.StringVar(value="Fetching info...")
+        ctk.CTkLabel(
+            pframe,
+            textvariable=status_var,
+            text_color=COLORS["text_primary"],
+            font=self._font_sm,
+            anchor="w",
+        ).pack(fill=tk.X, pady=(0, 8))
+
+        bar = ctk.CTkProgressBar(
+            pframe,
+            fg_color=COLORS["bg_medium"],
+            progress_color=COLORS["blurple"],
+            height=14,
+        )
+        bar.pack(fill=tk.X)
+        bar.set(0)
+
+        cancel_flag = {"cancel": False}
+
+        def on_cancel():
+            cancel_flag["cancel"] = True
+            status_var.set("Cancelling...")
+
+        ctk.CTkButton(
+            pframe,
+            text="Cancel",
+            command=on_cancel,
+            fg_color=COLORS["red"],
+            hover_color=COLORS["red_hover"],
+            width=90,
+            height=28,
+        ).pack(pady=(10, 0))
+
+        result: Dict[str, Any] = {"path": None, "title": None, "error": None}
+
+        # Output template — yt-dlp will replace .ext with .mp3 after postprocessing
+        out_template = str(Path(SOUNDS_DIR).absolute() / "yt_%(id)s.%(ext)s")
+        os.makedirs(SOUNDS_DIR, exist_ok=True)
+
+        def hook(d):
+            if cancel_flag["cancel"]:
+                raise Exception("Cancelled by user")
+            try:
+                if d.get("status") == "downloading":
+                    total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+                    downloaded = d.get("downloaded_bytes") or 0
+                    pct = (downloaded / total) if total else 0
+                    title = (d.get("info_dict") or {}).get("title", "")
+                    msg = f"Downloading: {int(pct * 100)}%"
+                    if title:
+                        short = title if len(title) <= 50 else title[:47] + "..."
+                        msg = f"{short}\n{msg}"
+                    self.root.after(0, lambda m=msg, p=pct: (status_var.set(m), bar.set(p)))
+                elif d.get("status") == "finished":
+                    self.root.after(0, lambda: (status_var.set("Converting to MP3..."), bar.set(1.0)))
+            except Exception:
+                pass
+
+        def worker():
+            ydl_opts: Dict[str, Any] = {
+                "format": "bestaudio/best",
+                "outtmpl": out_template,
+                "noplaylist": True,  # critical: only download single video
+                "quiet": True,
+                "no_warnings": True,
+                "progress_hooks": [hook],
+                "postprocessors": [
+                    {
+                        "key": "FFmpegExtractAudio",
+                        "preferredcodec": "mp3",
+                        "preferredquality": "192",
+                    }
+                ],
+            }
+            if ffmpeg_dir:
+                ydl_opts["ffmpeg_location"] = ffmpeg_dir
+            if cookies_path:
+                ydl_opts["cookiefile"] = cookies_path
+
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:  # type: ignore[arg-type]
+                    info = ydl.extract_info(url, download=True)
+                    # If a playlist URL slipped through, take the first entry
+                    if info and "entries" in info:
+                        entries = list(info.get("entries") or [])
+                        info = entries[0] if entries else None
+                    if not info:
+                        result["error"] = "No video info returned."
+                        return
+                    video_id = info.get("id", "")
+                    title = info.get("title", "Sound") or "Sound"
+                    final_path = str(Path(SOUNDS_DIR).absolute() / f"yt_{video_id}.mp3")
+                    if not os.path.exists(final_path):
+                        # Some versions name the postprocessed file differently;
+                        # fall back to scanning sounds/ for the freshest yt_<id>.* file.
+                        candidates = list(Path(SOUNDS_DIR).glob(f"yt_{video_id}.*"))
+                        if candidates:
+                            final_path = str(candidates[0].absolute())
+                    result["path"] = final_path
+                    result["title"] = title
+            except Exception as e:
+                if cancel_flag["cancel"]:
+                    result["error"] = "Cancelled."
+                else:
+                    # Strip ANSI color codes from yt-dlp error messages
+                    msg = re.sub(r"\x1b?\[[0-9;]*m", "", str(e))
+                    result["error"] = msg
+
+        def on_done():
+            try:
+                prog.grab_release()
+            except Exception:
+                pass
+            try:
+                prog.destroy()
+            except Exception:
+                pass
+
+            if result["error"]:
+                if result["error"] != "Cancelled.":
+                    messagebox.showerror("Download failed", result["error"])
+                # Clean up partial yt_*.* files for cancelled downloads
+                return
+
+            path = result["path"]
+            title = result["title"] or "Sound"
+            if not path or not os.path.exists(path):
+                messagebox.showerror(
+                    "Download failed",
+                    "The download finished but the MP3 file could not be found.",
+                )
+                return
+
+            self._create_slot_from_downloaded_file(path, title, target_tab_idx)
+
+        def thread_target():
+            try:
+                worker()
+            finally:
+                self.root.after(0, on_done)
+
+        threading.Thread(target=thread_target, daemon=True).start()
+
+    def _create_slot_from_downloaded_file(
+        self, file_path: str, title: str, target_tab_idx: int
+    ):
+        """Add the downloaded MP3 to the cache and open the configure dialog."""
+        try:
+            local_path = self.sound_cache.add_sound(file_path)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to add downloaded sound:\n{e}")
+            return
+
+        # Remove the original yt_*.mp3 file (add_sound copies to a hashed name)
+        try:
+            if os.path.abspath(file_path) != os.path.abspath(local_path):
+                os.remove(file_path)
+        except Exception:
+            pass
+
+        if target_tab_idx < 0 or target_tab_idx >= len(self.tabs):
+            target_tab_idx = self.current_tab_idx
+        tab = self.tabs[target_tab_idx]
+
+        # Find first empty slot in the target tab (or grow)
+        slot_idx = 0
+        while slot_idx in tab.slots:
+            slot_idx += 1
+
+        tab.slots[slot_idx] = SoundSlot(
+            name=title,
+            file_path=local_path,
+            hotkey=None,
+            volume=1.0,
+        )
+
+        # Switch to the target tab if not already there
+        if self.current_tab_idx != target_tab_idx:
+            self._switch_tab(target_tab_idx)
+
+        self._ensure_slots_for_tab(target_tab_idx)
+        self._update_slot_button_for_tab(target_tab_idx, slot_idx)
+        self._save_config()
+
+        # Open configure dialog so user can tweak name/hotkey/trim
+        if target_tab_idx == self.current_tab_idx:
+            self._configure_slot(slot_idx)
+
     def _save_config(self):
-        """Save configuration to JSON file using atomic write to prevent corruption."""
+        """Debounced save. Actual disk I/O happens in `_save_config_now()`.
+
+        Many UI interactions (slider drags, drag-reorder, speed/volume
+        changes) call `_save_config()` dozens of times per second. Writing
+        JSON to disk on every call stalls the UI thread. Debouncing
+        coalesces bursts into a single write ~400ms after activity stops.
+        """
+        # If we are shutting down or root is gone, save immediately and exit.
+        if not getattr(self, "root", None):
+            self._save_config_now()
+            return
+        if getattr(self, "_save_after_id", None):
+            try:
+                self.root.after_cancel(self._save_after_id)  # type: ignore[arg-type]
+            except Exception:
+                pass
+        self._save_after_id = self.root.after(400, self._save_config_now)
+
+    def _flush_save_config(self):
+        """Force an immediate save (used on shutdown). Cancels any pending debounce."""
+        if getattr(self, "_save_after_id", None):
+            try:
+                self.root.after_cancel(self._save_after_id)  # type: ignore[arg-type]
+            except Exception:
+                pass
+            self._save_after_id = None
+        self._save_config_now()
+
+    def _save_config_now(self):
+        """Write configuration to JSON file using atomic write to prevent corruption."""
+        self._save_after_id = None
         config = {
             "tabs": [t.to_dict() for t in self.tabs],
             "current_tab": self.current_tab_idx,
@@ -4945,6 +5791,13 @@ class SoundboardApp:
                 self.now_playing_panel.panel_side if hasattr(self, "now_playing_panel") else "right"
             ),
             "custom_groups": self._custom_groups,
+            "youtube_cookies_path": getattr(self, "_youtube_cookies_path", "") or "",
+            "noise_suppression": (
+                self.noise_suppress_var.get() if hasattr(self, "noise_suppress_var") else False
+            ),
+            "noise_suppression_strength": (
+                self.ns_strength_var.get() if hasattr(self, "ns_strength_var") else 85
+            ),
         }
 
         # Atomic write: write to temp file first, then rename
@@ -5032,6 +5885,14 @@ class SoundboardApp:
             self.auto_start_var.set(auto_start)
             self.monitor_var.set(monitor_enabled)
 
+            # Load noise suppression settings
+            ns_enabled = bool(config.get("noise_suppression", False))
+            ns_strength = float(config.get("noise_suppression_strength", 85))
+            if hasattr(self, "noise_suppress_var"):
+                self.noise_suppress_var.set(ns_enabled)
+            if hasattr(self, "ns_strength_var"):
+                self.ns_strength_var.set(ns_strength)
+
             # Load Now Playing panel settings
             now_playing_visible = config.get("now_playing_visible", False)
             now_playing_side = config.get("now_playing_side", "right")
@@ -5039,6 +5900,9 @@ class SoundboardApp:
             # Load custom groups
             self._custom_groups = config.get("custom_groups", [])
             self._refresh_group_combo()
+
+            # Load YouTube downloader cookies path
+            self._youtube_cookies_path = config.get("youtube_cookies_path", "") or ""
 
             if hasattr(self, "now_playing_panel"):
                 self.now_playing_panel.set_side(now_playing_side)
@@ -5117,9 +5981,10 @@ class SoundboardApp:
         kill_thread = threading.Thread(target=force_kill, daemon=True)
         kill_thread.start()
 
-        # Save config (quick operation)
+        # Save config (quick operation) — force a synchronous write so any
+        # pending debounced save is not lost on shutdown.
         try:
-            self._save_config()
+            self._flush_save_config()
         except Exception:
             pass
 
