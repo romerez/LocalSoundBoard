@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import threading
 import time
 import tkinter as tk
@@ -130,6 +131,125 @@ def _fix_rtl_text(text: str) -> str:
     return "\n".join(result)
 
 
+def _bind_clipboard_shortcuts(entry_widget) -> None:
+    """
+    Make Ctrl+V/C/X/A/Z/Y work regardless of the active keyboard layout.
+
+    Tk's default class bindings are tied to the *keysym* (`v`, `c`, ...).
+    On non-Latin layouts (Hebrew, Russian, Arabic, Greek, ...) Ctrl+V emits
+    a different keysym (e.g. `ה`), so the built-in <<Paste>> binding never
+    fires and the entry stays empty. We bind on the physical *keycode*
+    instead, which is layout-independent on Windows.
+
+    Also handles right-click → Paste/Copy/Cut context menu.
+
+    Accepts either a CTkEntry (uses its inner ._entry) or a raw tk.Entry.
+    Safe to call multiple times; safe if widget is None.
+    """
+    if entry_widget is None:
+        return
+    # Resolve the underlying tk.Entry
+    inner = getattr(entry_widget, "_entry", entry_widget)
+    if inner is None:
+        return
+
+    # Windows virtual-key codes (also match Tk's event.keycode on Windows)
+    KC_A, KC_C, KC_V, KC_X, KC_Y, KC_Z = 65, 67, 86, 88, 89, 90
+
+    def _do_paste(w):
+        try:
+            # Replace selection if any
+            try:
+                if w.selection_present():
+                    w.delete("sel.first", "sel.last")
+            except tk.TclError:
+                pass
+            try:
+                clip = w.clipboard_get()
+            except tk.TclError:
+                return
+            if clip:
+                w.insert("insert", clip)
+        except Exception:
+            pass
+
+    def _do_copy(w):
+        try:
+            if w.selection_present():
+                text = w.selection_get()
+                w.clipboard_clear()
+                w.clipboard_append(text)
+        except Exception:
+            pass
+
+    def _do_cut(w):
+        try:
+            if w.selection_present():
+                text = w.selection_get()
+                w.clipboard_clear()
+                w.clipboard_append(text)
+                w.delete("sel.first", "sel.last")
+        except Exception:
+            pass
+
+    def _do_select_all(w):
+        try:
+            w.select_range(0, "end")
+            w.icursor("end")
+        except Exception:
+            pass
+
+    def _on_ctrl_key(event):
+        # On Windows, event.state bit 0x4 = Control. Tk also fires this
+        # handler only for Control-KeyPress, so trust the binding.
+        kc = getattr(event, "keycode", 0)
+        w = event.widget
+        if kc == KC_V:
+            _do_paste(w)
+            return "break"
+        if kc == KC_C:
+            _do_copy(w)
+            return "break"
+        if kc == KC_X:
+            _do_cut(w)
+            return "break"
+        if kc == KC_A:
+            _do_select_all(w)
+            return "break"
+        # Z/Y: let Tk's built-in undo/redo run
+        return None
+
+    try:
+        inner.bind("<Control-KeyPress>", _on_ctrl_key, add="+")
+        # Some IMEs / RTL layouts emit Control-Shift combos; cover those too
+        inner.bind("<Control-Shift-KeyPress>", _on_ctrl_key, add="+")
+    except Exception:
+        pass
+
+    # Right-click context menu (Paste / Copy / Cut / Select All)
+    def _show_context_menu(event):
+        try:
+            menu = tk.Menu(inner, tearoff=0)
+            menu.add_command(label="Cut", command=lambda: _do_cut(inner))
+            menu.add_command(label="Copy", command=lambda: _do_copy(inner))
+            menu.add_command(label="Paste", command=lambda: _do_paste(inner))
+            menu.add_separator()
+            menu.add_command(label="Select All", command=lambda: _do_select_all(inner))
+            menu.tk_popup(event.x_root, event.y_root)
+        except Exception:
+            pass
+        finally:
+            try:
+                menu.grab_release()  # type: ignore[name-defined]
+            except Exception:
+                pass
+
+    try:
+        inner.bind("<Button-3>", _show_context_menu, add="+")
+    except Exception:
+        pass
+
+
 def _bind_rtl_entry(entry_widget: "ctk.CTkEntry", str_var: "tk.StringVar") -> None:
     """
     Force LTR display in a CTkEntry, even when the text contains Hebrew.
@@ -139,6 +259,9 @@ def _bind_rtl_entry(entry_widget: "ctk.CTkEntry", str_var: "tk.StringVar") -> No
     field to display right-to-left. Setting justify='left' (ES_LEFT style)
     keeps the paragraph in LTR mode so the text appears in logical order,
     matching the button display and what the user typed.
+
+    Also installs layout-independent clipboard shortcuts so paste works on
+    Hebrew / Russian / etc. keyboard layouts.
     """
     def _set_ltr(*_args: object) -> None:
         try:
@@ -148,6 +271,7 @@ def _bind_rtl_entry(entry_widget: "ctk.CTkEntry", str_var: "tk.StringVar") -> No
 
     str_var.trace_add("write", _set_ltr)
     _set_ltr()  # Apply immediately
+    _bind_clipboard_shortcuts(entry_widget)
 
 
 # Configure CustomTkinter appearance
@@ -5431,6 +5555,7 @@ class SoundboardApp:
             height=34,
         )
         url_entry.pack(fill=tk.X, pady=(4, 8))
+        _bind_clipboard_shortcuts(url_entry)
         url_entry.focus_set()
         if prefill:
             url_entry.select_range(0, "end")
@@ -5455,6 +5580,7 @@ class SoundboardApp:
             height=28,
         )
         cookies_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        _bind_clipboard_shortcuts(cookies_entry)
 
         def browse_cookies():
             fp = filedialog.askopenfilename(
@@ -5533,8 +5659,26 @@ class SoundboardApp:
             ffmpeg_exe, _ffprobe_exe = _sff_run.get_or_fetch_platform_executables_else_raise()
             ffmpeg_dir = os.path.dirname(ffmpeg_exe)
         except Exception:
-            # Fallback: imageio-ffmpeg ships ffmpeg only (no ffprobe), so the
-            # MP3 postprocessor will fail. We try anyway and surface the error.
+            ffmpeg_dir = None
+
+        # When running as a PyInstaller EXE, prefer the bundled ffmpeg+ffprobe
+        # under sys._MEIPASS/ffmpeg_bin (see soundboard.spec). static-ffmpeg's
+        # auto-download path may be unwritable inside the frozen bundle.
+        try:
+            meipass = getattr(sys, "_MEIPASS", None)
+            if meipass:
+                bundled = os.path.join(meipass, "ffmpeg_bin")
+                if os.path.isdir(bundled) and (
+                    os.path.exists(os.path.join(bundled, "ffmpeg.exe"))
+                    or os.path.exists(os.path.join(bundled, "ffmpeg"))
+                ):
+                    ffmpeg_dir = bundled
+        except Exception:
+            pass
+
+        if not ffmpeg_dir:
+            # Last-resort fallback: imageio-ffmpeg ships ffmpeg only (no ffprobe),
+            # so the MP3 postprocessor will fail. Try anyway and surface the error.
             try:
                 import imageio_ffmpeg  # type: ignore
 

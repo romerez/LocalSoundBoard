@@ -61,7 +61,9 @@ class SoundEditor:
         self.is_paused: bool = False
         self.play_stream: Optional[sd.OutputStream] = None
         self.play_position: int = 0
-        self.play_start_sample: int = 0  # Absolute sample where playback started (frozen at play-start)
+        self.play_start_sample: int = (
+            0  # Absolute sample where playback started (frozen at play-start)
+        )
         self.play_lock = threading.Lock()
         self.selected_audio: Optional[np.ndarray] = None  # Prepared audio for playback
 

@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 # starts if the user hasn't installed noisereduce yet.
 try:
     import noisereduce as _nr  # type: ignore
+
     NOISEREDUCE_AVAILABLE = True
 except Exception:  # pragma: no cover - import-time guard
     _nr = None
@@ -92,7 +93,7 @@ class NoiseSuppressor:
             # Slide buffer forward and append the new block at the end so
             # noisereduce has previous context to estimate the noise floor.
             if n >= self._buffer_size:
-                self._buffer = mic_block[-self._buffer_size:].astype(np.float32, copy=True)
+                self._buffer = mic_block[-self._buffer_size :].astype(np.float32, copy=True)
             else:
                 self._buffer[:-n] = self._buffer[n:]
                 self._buffer[-n:] = mic_block.astype(np.float32, copy=False)
@@ -1040,13 +1041,16 @@ class AudioMixer:
             # Sounds are playing - reset countdown
             self._ptt_release_countdown = 0
 
-        # Safety timeout: force release if PTT has been held too long
-        # Catches all edge cases (worker crash, race conditions, zombie sounds, etc.)
-        if self.ptt_active:
+        # Safety timeout: force release if PTT has been held too long with NO
+        # sounds playing (catches zombie state from worker crash / race conditions).
+        # Only counts cycles while PTT is active AND nothing is playing — otherwise
+        # long sounds, looping sounds, or rapid back-to-back plays would trip the
+        # timeout mid-playback and cut PTT while audio is still being mixed.
+        if self.ptt_active and all_sounds_finished and self.sound_queue.empty():
             self._ptt_active_cycles += 1
             if self._ptt_active_cycles >= self._ptt_max_hold_cycles:
                 logger.warning(
-                    "PTT safety timeout reached (%d cycles), force releasing",
+                    "PTT safety timeout reached (%d cycles, no sounds playing), force releasing",
                     self._ptt_active_cycles,
                 )
                 # Use direct release (bypass queue) for maximum reliability
@@ -1577,9 +1581,7 @@ class AudioMixer:
                     return
                 old_data_len = len(sound.get("data", []))
                 old_pos = sound.get("position", 0)
-                progress_ratio = (
-                    old_pos / old_data_len if old_data_len > 0 else 0.0
-                )
+                progress_ratio = old_pos / old_data_len if old_data_len > 0 else 0.0
                 new_pos = int(progress_ratio * new_len)
                 if new_pos >= new_len:
                     new_pos = new_len - 1

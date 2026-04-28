@@ -29,11 +29,20 @@ echo.
 REM Build EXE
 echo [2/3] Building executable...
 echo.
+REM Kill any running SoundBoard.exe so PyInstaller can overwrite dist\
+taskkill /F /IM SoundBoard.exe >nul 2>&1
 pyinstaller soundboard.spec --noconfirm
+set PYI_EXIT=%ERRORLEVEL%
 echo.
 
 REM Verify output
 echo [3/3] Verifying build...
+if not %PYI_EXIT%==0 (
+    echo ERROR: PyInstaller failed with exit code %PYI_EXIT%.
+    echo        ^(If you saw "Access is denied", close any running SoundBoard.exe and try again.^)
+    pause
+    exit /b 1
+)
 if exist "dist\SoundBoard\SoundBoard.exe" (
     echo.
     echo ========================================
@@ -43,7 +52,7 @@ if exist "dist\SoundBoard\SoundBoard.exe" (
     echo.
     echo   Run the app:  launch.bat
     echo   Dev mode  :   run.bat
-    echo   (Both share the same config + sounds)
+    echo   ^(Both share the same config + sounds^)
     echo ========================================
 ) else (
     echo ERROR: Build failed - SoundBoard.exe not found in dist\SoundBoard\

@@ -8,6 +8,7 @@ if not exist "dist\SoundBoard\SoundBoard.exe" (
     exit /b 1
 )
 
-REM Launch EXE with workspace root as working directory.
-REM This makes it share soundboard_config.json, sounds\ and images\ with dev mode.
-start "" /D "%~dp0" "%~dp0dist\SoundBoard\SoundBoard.exe"
+REM Spawn the EXE detached so this cmd window can close immediately.
+REM /B = no new console window, cwd is inherited from this script (workspace root).
+start "" /B "%~dp0dist\SoundBoard\SoundBoard.exe"
+exit

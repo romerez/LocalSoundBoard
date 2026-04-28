@@ -3,6 +3,7 @@ Bump the patch version in soundboard/__init__.py.
 Prints the new version string to stdout.
 Run from the workspace root.
 """
+
 import re
 import sys
 from pathlib import Path

@@ -23,10 +23,21 @@ sd_data_path = get_pkg_dir('_sounddevice_data')
 sf_data_path = get_pkg_dir('_soundfile_data')
 emoji_data_path = get_pkg_dir('emoji_data_python')
 
-# ffmpeg binary
+# ffmpeg binary (imageio-ffmpeg ships ffmpeg only, no ffprobe)
 import imageio_ffmpeg
 ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
 ffmpeg_dir = os.path.dirname(ffmpeg_exe)
+
+# static-ffmpeg ships BOTH ffmpeg and ffprobe (required for yt-dlp MP3 postprocess).
+# Pre-fetch at build time so the EXE doesn't need to download on first run.
+try:
+    from static_ffmpeg import run as _sff_run
+    _sff_ffmpeg, _sff_ffprobe = _sff_run.get_or_fetch_platform_executables_else_raise()
+    static_ffmpeg_dir = os.path.dirname(_sff_ffmpeg)
+    print(f"[spec] Bundling static-ffmpeg from: {static_ffmpeg_dir}")
+except Exception as _e:
+    print(f"[spec] WARNING: static-ffmpeg fetch failed ({_e}); ffprobe will be missing in EXE")
+    static_ffmpeg_dir = None
 
 a = Analysis(
     ['main.py'],
@@ -45,7 +56,7 @@ a = Analysis(
         (ffmpeg_dir, 'imageio_ffmpeg/binaries'),
         # emoji_picker.py needs to be accessible as a script for subprocess
         ('soundboard/emoji_picker.py', 'soundboard'),
-    ],
+    ] + ([(static_ffmpeg_dir, 'ffmpeg_bin')] if static_ffmpeg_dir else []),
     hiddenimports=[
         # Core audio
         'sounddevice',
@@ -68,6 +79,9 @@ a = Analysis(
         'pydub.audio_segment',
         'imageio_ffmpeg',
         'imageio_ffmpeg.binaries',
+        'static_ffmpeg',
+        'static_ffmpeg.run',
+        'yt_dlp',
 
         # librosa and its dependencies
         'librosa',

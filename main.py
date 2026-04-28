@@ -10,10 +10,13 @@ import logging
 import os
 import sys
 
-# When running as a frozen exe, set the working directory to the exe's folder
-# so that sounds/, images/, and config files are found correctly.
+# When running as a frozen exe, anchor the working directory to the workspace
+# root (two levels up from the exe inside dist\SoundBoard\) so that
+# soundboard_config.json, sounds\, and images\ are shared with dev mode.
 if getattr(sys, 'frozen', False):
-    os.chdir(os.path.dirname(sys.executable))
+    exe_dir = os.path.dirname(sys.executable)            # ...\dist\SoundBoard
+    workspace_root = os.path.dirname(os.path.dirname(exe_dir))  # ...\(workspace)
+    os.chdir(workspace_root)
 
 logging.basicConfig(
     filename="debug.log",
