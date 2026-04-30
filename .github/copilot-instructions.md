@@ -1,6 +1,6 @@
 # Copilot Instructions - Discord Soundboard Project
 
-> **Last Updated:** 2026-04
+> **Last Updated:** 2026-04-30
 > **Status:** Active Development
 > **Language:** Python 3.x
 
@@ -150,10 +150,12 @@ LocalSoundBoardProject/
 ├── test_soundboard.py          # Unit tests
 ├── soundboard/                 # Main package
 │   ├── __init__.py             # Package exports
+│   ├── _shared.py              # Shared resize-state dict (breaks gui<->slot_widget circular import)
 │   ├── constants.py            # All configuration values
 │   ├── models.py               # Data structures
 │   ├── audio.py                # Audio engine
 │   ├── editor.py               # Sound trimmer
+│   ├── slot_widget.py          # Single-Canvas slot widget + proxy classes (replaces 7 CTk widgets/slot)
 │   └── gui.py                  # Main UI
 ├── sounds/                     # Sound file storage (auto-created)
 ├── images/                     # Custom images (auto-created)
@@ -1275,6 +1277,10 @@ When asked to add a feature:
 | Save on every keystroke is expensive | `_save_config` writes to disk on every config change | Debounce: `_save_config` schedules `_save_config_now` via `after(400)`. Add `_flush_save_config()` for shutdown to write any pending change. |
 | `_register_hotkeys` re-registers ALL hotkeys on every config save | `keyboard.add_hotkey`/`remove_hotkey` are slow; full re-registration on every change is wasteful | Diff-based: track `_hotkey_map: Dict[str, Tuple[tab_idx, slot_idx]]`. Only add/remove hotkeys that actually changed. |
 | `<Configure>` handlers run expensive work synchronously | `bbox("all")`, `itemconfig`, scroll region updates all run on every Configure event during resize | Debounce all Configure handlers with `after(80)` pattern: handler cancels previous `after_id`, schedules `_apply_*` to do the actual work. Applies to NowPlayingPanel and the tabs sidebar. |
+| 7 CTk widgets per slot (frame, button, emoji label, image label, progress bar, stop btn, ⋯ btn) compound layout/redraw cost on every resize | Each CTk widget is its own Canvas with its own `_draw()`. With ~60 slots/tab × 7 widgets = 420 Canvases per tab — every Configure cascades through all of them. | Replace the entire stack with `SlotWidget(tk.Canvas)` in `soundboard/slot_widget.py` — ONE Canvas per slot draws everything (border, bg, image, text, emoji, progress, overlay buttons). Proxy classes (`FrameProxy`, `ButtonProxy`, `ProgressProxy`, etc.) keep the existing `gui.py` API working unchanged. |
+| Circular import between `gui.py` and `slot_widget.py` | SlotWidget needs `_SHARED_RESIZE_STATE` to know when to defer redraws; that dict was defined in `gui.py` which itself imports SlotWidget. | Move the resize state into a third module: `soundboard/_shared.py` exports `RESIZE_STATE = {"until": 0.0}`. Both `gui.py` and `slot_widget.py` import from `_shared` — no cycle. |
+| Slots flash at stale (small) size after resizing window then switching tabs | `_switch_tab` was pre-arming `_SHARED_RESIZE_STATE["until"] = time.time()+0.20` to batch CTk redraws during the swap. SlotWidget honors that flag and defers its first redraw 220ms — so the freshly-shown tab's slots paint at the previous Canvas dimensions until the deferred redraw fires. | Do NOT pre-arm `_SHARED_RESIZE_STATE` in `_switch_tab` (or any discrete UI swap). With the SlotWidget refactor there's nothing left to batch — each slot is one Canvas that needs to redraw immediately at its new size. The flag is exclusively for true window resize/move driven by root `<Configure>`. |
+| CTkFont not rendering at correct size on raw tk.Canvas text | `CTkFont` is a CTk wrapper, not a `tkinter.font.Font` — `canvas.create_text(font=ctk_font)` falls back to default. | In SlotWidget, call `_resolve_font()` which extracts `family/size/weight/slant` via `ctk_font.actual()` and returns a `(family, size, style)` tuple Tk understands. |
 
 ### Environment & Python
 
@@ -1311,4 +1317,6 @@ When asked to add a feature:
 14. **Always fix Pylance errors before finishing** - Use `# type: ignore[attr-defined]` for dynamic attributes, `Optional[T]` for nullable parameters, explicit casts for scipy/librosa returns. Never leave red squiggles.
 15. **App shutdown must be bulletproof** - Use `_shutting_down` flag checked in ALL background threads and slow operations. App close handler must use `os._exit(0)` as failsafe after timeout. Stream shutdown uses `abort()` not `stop()` for non-blocking behavior. All daemon threads check shutdown flag before AND during expensive operations.
 16. **Limit concurrent CPU-intensive operations** - Use `_processing_lock` to ensure only ONE librosa operation runs at a time. Multiple concurrent librosa calls can saturate all CPU cores and freeze the entire Windows system. Skip duplicate requests using `_speed_processing` dict to avoid queue buildup when sliders are dragged rapidly.
-17. **Perf with many CTk widgets** - The dominant cost is per-widget Canvas rounded-corner redraws on every `<Configure>`. Use `corner_radius=0` on the slot grid for the rectangle fast path. Defer per-widget redraws during active resize via the `_SHARED_RESIZE_STATE` monkeypatch. `grid_remove()` hidden tabs (not `tkraise()`).
+17. **Perf with many CTk widgets** - The dominant cost is per-widget Canvas rounded-corner redraws on every `<Configure>`. Use `corner_radius=0` on the slot grid for the rectangle fast path. Defer per-widget redraws during active resize via the `_SHARED_RESIZE_STATE` monkeypatch (now lives in `soundboard/_shared.py` to avoid circular imports). `grid_remove()` hidden tabs (not `tkraise()`).
+18. **Slot grid is a single tk.Canvas per slot** - `SlotWidget` (in `soundboard/slot_widget.py`) replaces the old 7-CTk-widget stack (frame + button + emoji label + image + progress + stop + ⋯). It paints everything on one Canvas and exposes proxy objects (`FrameProxy`, `ButtonProxy`, `ProgressProxy`, etc.) so the rest of `gui.py` keeps using the same `.configure()` / `.set()` / `.pack()` API. When touching slot rendering, edit `slot_widget.py` — don't try to add CTk widgets back to the grid.
+19. **Never pre-arm `_SHARED_RESIZE_STATE` around tab switches or other discrete UI swaps** - SlotWidget honors the resize-defer flag and will skip its first redraw at the new size, causing slots to flash at stale dimensions. The flag is only for *actual* window resize/move (driven by root `<Configure>`). `_switch_tab` must NOT set `_SHARED_RESIZE_STATE['until']`.

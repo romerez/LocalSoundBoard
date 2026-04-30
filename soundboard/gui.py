@@ -36,6 +36,15 @@ from .constants import (
 )
 from .editor import SoundEditor
 from .models import SoundSlot, SoundTab
+from .slot_widget import (
+    ButtonProxy,
+    EmojiLabelProxy,
+    FrameProxy,
+    MenuButtonProxy,
+    ProgressProxy,
+    SlotWidget,
+    StopButtonProxy,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +65,8 @@ from .models import SoundSlot, SoundTab
 try:
     from customtkinter.windows.widgets.core_widget_classes import ctk_base_class as _ctk_base
 
-    _SHARED_RESIZE_STATE: Dict[str, Any] = {"until": 0.0}
+    # Shared with slot_widget via _shared module to avoid circular import.
+    from ._shared import RESIZE_STATE as _SHARED_RESIZE_STATE
 
     _orig_update_dimensions_event = _ctk_base.CTkBaseClass._update_dimensions_event
 
@@ -89,7 +99,7 @@ try:
     _ctk_base.CTkBaseClass._update_dimensions_event = _patched_update_dimensions_event
 except Exception:
     # If CTk internals change, silently fall back to default behavior.
-    _SHARED_RESIZE_STATE = {"until": 0.0}
+    from ._shared import RESIZE_STATE as _SHARED_RESIZE_STATE  # type: ignore[no-redef]
 
 
 # Regex matching Hebrew, Arabic, Persian RTL characters
@@ -2165,18 +2175,12 @@ class SoundboardApp:
         # Ensure target tab is built (lazy build on first visit)
         self._ensure_tab_built(tab_idx)
 
-        # Pre-arm resize state so the swap of grid frames (un-map old, map new)
-        # batches all per-widget CTk redraws into a single post-sweep instead of
-        # firing _draw() on every slot widget mid-switch.
-        until = time.time() + 0.20
-        self._resize_active_until = until
-        _SHARED_RESIZE_STATE["until"] = until
-        if self._resize_sweep_after_id is not None:
-            try:
-                self.root.after_cancel(self._resize_sweep_after_id)  # type: ignore[arg-type]
-            except Exception:
-                pass
-        self._resize_sweep_after_id = self.root.after(220, self._post_resize_sweep)
+        # NOTE: do NOT pre-arm _SHARED_RESIZE_STATE here. Doing so used to
+        # batch CTk per-widget redraws during the tab swap, but with the
+        # SlotWidget refactor each slot is a single tk.Canvas that needs to
+        # redraw IMMEDIATELY at its new size when the tab is shown — otherwise
+        # users see slots flash at the previous window's size for ~200ms after
+        # switching tabs post-resize.
 
         # INSTANT SWITCH: hide other tabs entirely (grid_remove) so they
         # stop receiving Configure/Map events on resize/move/minimize.
@@ -2655,112 +2659,46 @@ class SoundboardApp:
         for i in range(num_slots):
             row, col = divmod(i, UI["grid_columns"])
 
-            # corner_radius=0 puts CTk on the fast rectangle-render path,
-            # skipping the expensive rounded-polygon Canvas math on every
-            # resize/show. Critical for slot grid perf with many slots.
-            slot_frame = ctk.CTkFrame(
+            # ---- Unified single-Canvas slot widget --------------------------
+            # Replaces the previous stack of (slot_frame + bottom_frame +
+            # main_button + stop_button + menu_button + progress_bar +
+            # emoji_label) — 7 Tk widgets per slot — with ONE tk.Canvas that
+            # paints all of these itself. With 60+ slots per tab this drops
+            # Tk's per-resize layout cost by an order of magnitude and is the
+            # single biggest UI perf win in the project.
+            #
+            # The various tab_slot_* dicts below all point at proxy objects
+            # that route legacy `.configure()` / `.set()` / `.pack()` /
+            # `.lift()` calls back to the right setter on the SlotWidget, so
+            # the rest of the codebase keeps working without changes.
+            slot_widget = SlotWidget(
                 tab_grid,
-                fg_color=COLORS["bg_medium"],
-                corner_radius=0,
+                on_click=lambda t=tab_idx, idx=i: self._on_slot_command_for_tab(t, idx),
+                on_right_click=lambda e, t=tab_idx, idx=i: self._show_quick_popup_for_tab(
+                    e, t, idx
+                ),
+                on_menu=lambda t=tab_idx, idx=i: self._show_slot_menu(t, idx),
+                on_stop=lambda t=tab_idx, idx=i: self._stop_slot_with_flag_for_tab(t, idx),
                 height=UI["slot_height"],
             )
-            slot_frame.grid(
-                row=row, column=col, padx=UI["slot_padding"], pady=UI["slot_padding"], sticky="nsew"
+            slot_widget.grid(
+                row=row,
+                column=col,
+                padx=UI["slot_padding"],
+                pady=UI["slot_padding"],
+                sticky="nsew",
             )
-            slot_frame.pack_propagate(False)
 
-            bottom_frame = ctk.CTkFrame(slot_frame, fg_color="transparent", height=BOTTOM_HEIGHT)
-            bottom_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=6, pady=(0, 6))
-
-            # Closures capture tab_idx to route to correct tab
-            def make_stop_handler(t_idx, slot_id):
-                def handler(event=None):
-                    self._stop_slot_with_flag_for_tab(t_idx, slot_id)
-                    return "break"
-
-                return handler
-
-            stop_btn = ctk.CTkButton(
-                bottom_frame,
-                text="⏹",
-                fg_color=COLORS["red"],
-                hover_color=COLORS["red_hover"],
-                font=self._font_sm,
-                corner_radius=0,
-                width=28,
-                height=24,
-                cursor="hand2",
-            )
-            stop_handler = make_stop_handler(tab_idx, i)
-            stop_btn.configure(command=stop_handler)
-            stop_btn.bind("<Button-1>", stop_handler)
-
-            # Single "⋯" menu button replaces preview + edit buttons.
-            # Reduces widget count per slot from 5 to 4 (significant for many slots).
-            def make_menu_handler(t_idx, slot_id):
-                def handler():
-                    self._show_slot_menu(t_idx, slot_id)
-
-                return handler
-
-            menu_btn = ctk.CTkButton(
-                bottom_frame,
-                text="⋯",
-                fg_color=COLORS["bg_light"],
-                hover_color=COLORS["bg_lighter"],
-                text_color=COLORS["text_muted"],
-                font=self._font_sm_bold,
-                corner_radius=0,
-                width=28,
-                height=24,
-                command=make_menu_handler(tab_idx, i),
-            )
-            menu_btn.pack(side=tk.RIGHT, padx=(2, 0))
-
-            # Keep separate dict references pointing to the same widget so the
-            # existing per-state color-update code still works without changes.
-            preview_btn = menu_btn
+            # Proxies — same SlotWidget instance, different facets of the API.
+            slot_frame = FrameProxy(slot_widget)
+            btn = ButtonProxy(slot_widget)
+            progress = ProgressProxy(slot_widget)
+            stop_btn = StopButtonProxy(slot_widget)
+            menu_btn = MenuButtonProxy(slot_widget)
+            preview_btn = menu_btn  # menu replaced both preview + edit
             edit_btn = menu_btn
-
-            progress = ctk.CTkProgressBar(
-                bottom_frame,
-                height=6,
-                fg_color=COLORS["bg_light"],
-                progress_color=COLORS["playing"],
-                corner_radius=0,
-            )
-            progress.set(0)
-            progress.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
-
-            btn = ctk.CTkButton(
-                slot_frame,
-                text="+",
-                fg_color="transparent",
-                hover_color=COLORS["bg_light"],
-                text_color=COLORS["text_muted"],
-                font=self._font_xl_bold,
-                corner_radius=0,
-                anchor="center",
-                cursor="hand2",
-                compound="top",
-                command=lambda t=tab_idx, idx=i: self._on_slot_command_for_tab(t, idx),
-            )
-            btn.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=4, pady=(0, 0))
-            btn.bind(
-                "<Button-3>", lambda e, t=tab_idx, idx=i: self._show_quick_popup_for_tab(e, t, idx)
-            )
-
-            emoji_label = ctk.CTkLabel(
-                slot_frame,
-                text="",
-                font=ctk.CTkFont(family="Segoe UI Emoji", size=18),
-                text_color=COLORS["text_primary"],
-                fg_color="transparent",
-                width=24,
-                height=24,
-            )
-            emoji_label.place(x=6, y=4)
-            emoji_label.lower()
+            emoji_label = EmojiLabelProxy(slot_widget)
+            bottom_frame = menu_btn  # legacy ref; never poked directly
 
             self.tab_slot_frames[tab_idx][i] = slot_frame
             self.tab_slot_buttons[tab_idx][i] = btn
