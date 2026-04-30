@@ -403,6 +403,7 @@ Example: `airhorn_8f3a2b1c.mp3`
 - [x] Drag-and-drop image from file explorer onto sound slots
 - [x] Paste clipboard image (Ctrl+V) onto hovered sound slot
 - [x] "Paste Image", "Set Image…", "Clear Image" entries in slot ⋯ menu
+- [x] Configurable slot grid columns (4 / 6 / 8 / 10) via segmented picker in audio options
 - [x] Sound groups/types for organization and filtering (Effects, Music, Voice, Meme, etc.)
 - [x] Multiple groups per sound (a sound can belong to several groups)
 - [x] Custom group creation (add your own group names, persisted in config)
@@ -1014,7 +1015,8 @@ edit_sound_file(
   "auto_start": true,
   "now_playing_visible": false,
   "now_playing_side": "right",
-  "custom_groups": ["MyCustomGroup"]
+  "custom_groups": ["MyCustomGroup"],
+  "grid_columns": 4
 }
 ```
 
@@ -1032,6 +1034,7 @@ edit_sound_file(
 | `auto_start` | `bool` | `true` | Auto-start audio stream on launch |
 | `now_playing_visible` | `bool` | `false` | DJ Looper side panel visible |
 | `now_playing_side` | `string` | `"right"` | Panel position ("left" or "right") |
+| `grid_columns` | `int` | `4` | Slot grid columns per row (must be one of 4, 6, 8, 10) |
 
 ### SoundTab Schema
 
@@ -1067,6 +1070,7 @@ The config format has evolved. Old configs are auto-migrated:
 - **v1.2 → v1.3:** Added `preserve_pitch` to SoundSlot
 - **v1.3 → v1.4:** Added `loop`, `loop_count`, `loop_delay` to SoundSlot; added `now_playing_visible`, `now_playing_side` to root config
 - **v1.4 → v1.5:** Changed `group` (single string) to `groups` (list of strings); added `custom_groups` to root config
+- **v1.5 → v1.6:** Added `grid_columns` (4/6/8/10) to root config for user-configurable slot grid width
 ```
 
 ---

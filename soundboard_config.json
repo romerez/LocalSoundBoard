@@ -1453,13 +1453,12 @@
   "auto_start": true,
   "monitor_enabled": true,
   "now_playing_visible": true,
-  "now_playing_side": "right",
+  "now_playing_side": "left",
   "custom_groups": [
     "קללות",
     "סתום"
   ],
   "youtube_cookies_path": "",
   "noise_suppression": false,
-  "noise_suppression_strength": 21.818181818181817,
-  "grid_columns": 8
+  "noise_suppression_strength": 21.818181818181817
 }

@@ -294,14 +294,6 @@ try:
 except ImportError:
     PIL_AVAILABLE = False
 
-# ImageGrab is used for clipboard image paste. On Windows it ships with Pillow.
-try:
-    from PIL import ImageGrab  # type: ignore[attr-defined]
-
-    IMAGEGRAB_AVAILABLE = True
-except ImportError:
-    IMAGEGRAB_AVAILABLE = False
-
 # Try to import windnd for drag-and-drop file support (Windows only)
 try:
     import windnd
@@ -1280,10 +1272,6 @@ class SoundboardApp:
         self._last_active_tab_idx: int = 0  # Track last active tab for tab bar optimization
         self.registered_hotkeys: list = []
 
-        # Number of slot columns per row (user-configurable, default from constants).
-        # Loaded from config in _load_config; persisted via _save_config.
-        self.grid_columns: int = UI["grid_columns"]
-
         # Debounced save handle (see _save_config / _save_config_now)
         self._save_after_id: Optional[str] = None
 
@@ -1303,6 +1291,16 @@ class SoundboardApp:
 
         # Preview state tracking: slot_idx -> {start_time, duration}
         self.preview_slots: Dict[int, Dict] = {}
+
+        # Animation-loop micro-caches: skip work when nothing changed visibly.
+        # `_last_progress_values` maps slot_idx (or ("preview", slot_idx)) -> last
+        # rounded ratio set on the progress bar. `_last_panel_update` is the wall
+        # time of the most recent NowPlayingPanel.update() call (throttle).
+        self._last_progress_values: Dict[Any, float] = {}
+        self._last_panel_update: float = 0.0
+        # Last text written to the status bar — skip StringVar.set when unchanged
+        # to avoid the trace-callback chain firing for identical values.
+        self._last_status_text: str = ""
 
         # Click / drag state machine  (IDLE → PRESSED → DRAGGING | click)
         # All fields are reset together via _reset_click_state().
@@ -1334,6 +1332,18 @@ class SoundboardApp:
 
         self._setup_styles()
         self._create_ui()
+
+        # Force the chrome (window frame, tab sidebar, action bar, status bar)
+        # to paint NOW before we spend time building the slot grid. Without this
+        # the window stays invisible until __init__ returns and mainloop pumps
+        # the first idle queue, which makes the app feel like it has a long
+        # "Generate" startup. update_idletasks only flushes layout/paint, not
+        # user events, so it's safe.
+        try:
+            self.root.update_idletasks()
+        except Exception:
+            pass
+
         self._load_config()
         self._preload_sounds()  # Preload all sounds into memory
 
@@ -1371,7 +1381,13 @@ class SoundboardApp:
         self._resize_sweep_after_id = self.root.after(180, self._post_resize_sweep)
 
     def _post_resize_sweep(self):
-        """Redraw all CTk widgets that were skipped during the resize."""
+        """Redraw CTk widgets that were skipped during the resize.
+
+        Done in chunks via after(0) so we don't block the UI for one big stall
+        right after the user releases the mouse. With many slot widgets visible
+        a single-shot sweep produced a visible ~50ms hitch; chunking keeps each
+        tick under a single frame budget.
+        """
         self._resize_sweep_after_id = None
         # Bail if another resize started in the meantime; the next sweep will catch it.
         if time.time() < self._resize_active_until:
@@ -1384,12 +1400,25 @@ class SoundboardApp:
         )
         if not dirty:
             return
-        for widget in list(dirty):
+        # Drain in chunks to keep each tick's work bounded.
+        self._sweep_drain(list(dirty))
+
+    def _sweep_drain(self, widgets: list, chunk: int = 16):
+        """Redraw up to `chunk` widgets, then yield to the event loop."""
+        # If a new resize started while we were draining, abandon this sweep —
+        # the new sweep will pick up the (re-populated) dirty set.
+        if time.time() < self._resize_active_until:
+            return
+        end = min(chunk, len(widgets))
+        for widget in widgets[:end]:
             try:
                 if widget.winfo_exists():
                     widget._draw(no_color_updates=True)  # type: ignore[attr-defined]
             except Exception:
                 pass
+        rest = widgets[end:]
+        if rest:
+            self.root.after(0, lambda: self._sweep_drain(rest, chunk))
 
     def _setup_styles(self):
         """Configure ttk styles for Discord-like appearance (legacy support)."""
@@ -1442,62 +1471,9 @@ class SoundboardApp:
             on_stop_callback=self._on_panel_stop_sound,
         )
 
-        # Hook drag-and-drop for image/sound files from file explorer.
-        # NOTE: passing `self.root` directly to windnd makes it call
-        # `root.winfo_id()`, which on modern Tk/CustomTkinter returns the
-        # *inner* Tk frame's id rather than the actual top-level Win32 HWND
-        # that receives WM_DROPFILES. We must resolve the real HWND via
-        # `wm frame` (or fall back to GetAncestor), otherwise drops are
-        # silently dropped on the floor.
+        # Hook drag-and-drop for image/sound files from file explorer
         if WINDND_AVAILABLE:
-            try:
-                hwnd = None
-                try:
-                    hwnd = int(self.root.frame(), 16)  # Tk: real toplevel HWND
-                except Exception:
-                    pass
-                if not hwnd:
-                    try:
-                        import ctypes as _ct
-
-                        # GA_ROOT = 2 — climb to the top-level window
-                        hwnd = _ct.windll.user32.GetAncestor(self.root.winfo_id(), 2)
-                    except Exception:
-                        hwnd = self.root.winfo_id()
-
-                # CRITICAL: when running as Administrator (which we recommend
-                # for global hotkeys), Windows UIPI silently blocks drag-drop
-                # messages from lower-integrity processes like Explorer. We
-                # have to whitelist WM_DROPFILES + WM_COPYDATA + WM_COPYGLOBALDATA
-                # via ChangeWindowMessageFilterEx, otherwise drops never arrive.
-                try:
-                    import ctypes as _ct
-
-                    MSGFLT_ALLOW = 1
-                    WM_DROPFILES = 0x0233
-                    WM_COPYDATA = 0x004A
-                    WM_COPYGLOBALDATA = 0x0049
-                    cwmfx = _ct.windll.user32.ChangeWindowMessageFilterEx
-                    for msg in (WM_DROPFILES, WM_COPYDATA, WM_COPYGLOBALDATA):
-                        cwmfx(hwnd, msg, MSGFLT_ALLOW, None)
-                except Exception:
-                    # Older Windows or non-admin: not needed / not available.
-                    pass
-
-                windnd.hook_dropfiles(hwnd, func=self._on_files_dropped)
-            except Exception as e:
-                print(f"[DragDrop] Hook failed: {e}")
-
-        # Global Ctrl+V → paste clipboard image onto whichever slot the mouse
-        # is hovering. Bound on root with add="+" so it doesn't clobber the
-        # layout-safe paste handlers installed on Entry widgets.
-        # Note: bind to <Control-KeyPress> covers v/V plus non-Latin layouts
-        # where the Ctrl modifier is what matters, not the keysym.
-        try:
-            self.root.bind("<Control-v>", self._paste_image_from_clipboard, add="+")
-            self.root.bind("<Control-V>", self._paste_image_from_clipboard, add="+")
-        except Exception:
-            pass
+            windnd.hook_dropfiles(self.root, func=self._on_files_dropped)
 
     def _create_device_section(self, parent):
         """Create the collapsible audio device selection and PTT section."""
@@ -1690,29 +1666,6 @@ class SoundboardApp:
         )
         self.auto_start_checkbox.pack(side=tk.LEFT)
 
-        # Columns per row picker (4 / 6 / 8 / 10)
-        ctk.CTkLabel(
-            controls_row,
-            text="  Columns:",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
-            text_color=COLORS["text_secondary"],
-        ).pack(side=tk.LEFT, padx=(15, 4))
-
-        self.grid_cols_var = tk.StringVar(value=str(self.grid_columns))
-        self.grid_cols_picker = ctk.CTkSegmentedButton(
-            controls_row,
-            values=["4", "6", "8", "10"],
-            variable=self.grid_cols_var,
-            command=self._on_grid_columns_changed,
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
-            selected_color=COLORS["blurple"],
-            selected_hover_color=COLORS["blurple_hover"],
-            unselected_color=COLORS["bg_medium"],
-            unselected_hover_color=COLORS["bg_light"],
-            corner_radius=6,
-        )
-        self.grid_cols_picker.pack(side=tk.LEFT)
-
         # Noise suppression (replaces Discord's Krisp - which is bypassed
         # when routing through the virtual cable)
         self.noise_suppress_var = tk.BooleanVar(value=False)
@@ -1832,6 +1785,20 @@ class SoundboardApp:
 
     def _toggle_audio_options(self):
         """Toggle the audio options visibility."""
+        # Pre-arm resize state so the cascade of CTk child redraws triggered by
+        # mapping/unmapping ~15 widgets is batched into a single post-sweep
+        # instead of N per-widget Canvas redraws. This makes the toggle feel
+        # instant even on slower machines.
+        until = time.time() + 0.20
+        self._resize_active_until = until
+        _SHARED_RESIZE_STATE["until"] = until
+        if self._resize_sweep_after_id is not None:
+            try:
+                self.root.after_cancel(self._resize_sweep_after_id)  # type: ignore[arg-type]
+            except Exception:
+                pass
+        self._resize_sweep_after_id = self.root.after(220, self._post_resize_sweep)
+
         if self.audio_options_expanded.get():
             self.audio_options_frame.pack_forget()
             self.toggle_audio_btn.configure(text="▶ Audio Options")
@@ -2151,7 +2118,9 @@ class SoundboardApp:
                     pass
         try:
             target.grid()
-            target.tkraise()
+            # No tkraise() needed: with all other tab grids grid_remove()'d
+            # the target is already the only managed child at row=0,col=0.
+            # Calling tkraise() forces extra CTk state updates for nothing.
         except Exception:
             pass
         self._currently_shown_tab = tab_idx
@@ -2195,6 +2164,19 @@ class SoundboardApp:
 
         # Ensure target tab is built (lazy build on first visit)
         self._ensure_tab_built(tab_idx)
+
+        # Pre-arm resize state so the swap of grid frames (un-map old, map new)
+        # batches all per-widget CTk redraws into a single post-sweep instead of
+        # firing _draw() on every slot widget mid-switch.
+        until = time.time() + 0.20
+        self._resize_active_until = until
+        _SHARED_RESIZE_STATE["until"] = until
+        if self._resize_sweep_after_id is not None:
+            try:
+                self.root.after_cancel(self._resize_sweep_after_id)  # type: ignore[arg-type]
+            except Exception:
+                pass
+        self._resize_sweep_after_id = self.root.after(220, self._post_resize_sweep)
 
         # INSTANT SWITCH: hide other tabs entirely (grid_remove) so they
         # stop receiving Configure/Map events on resize/move/minimize.
@@ -2661,8 +2643,7 @@ class SoundboardApp:
         self.tab_grid_frames[tab_idx] = tab_grid
 
         # Configure columns for even distribution (flex layout)
-        cols = self.grid_columns
-        for c in range(cols):
+        for c in range(UI["grid_columns"]):
             tab_grid.grid_columnconfigure(c, weight=1, uniform="slot")
 
         # Calculate slots needed
@@ -2672,7 +2653,7 @@ class SoundboardApp:
         BOTTOM_HEIGHT = 32
 
         for i in range(num_slots):
-            row, col = divmod(i, cols)
+            row, col = divmod(i, UI["grid_columns"])
 
             # corner_radius=0 puts CTk on the fast rectangle-render path,
             # skipping the expensive rounded-polygon Canvas math on every
@@ -2799,7 +2780,12 @@ class SoundboardApp:
         # Warm-up: force Tk to lay out and CTk to draw all widgets NOW so the
         # first switch to this tab doesn't trigger a layout/draw cascade.
         # Only needed for non-current tabs (current tab is already visible).
-        if tab_idx != self.current_tab_idx:
+        # SKIP entirely if the user is currently moving/resizing the window —
+        # update_idletasks() is synchronous and would stall the resize. The
+        # tab will warm up lazily on first visit instead (acceptable trade-off).
+        if tab_idx != self.current_tab_idx and time.time() >= getattr(
+            self, "_resize_active_until", 0.0
+        ):
             try:
                 # The grid is currently grid_remove()'d; re-add briefly to
                 # force layout, flush, then remove again. This pre-warms
@@ -2826,26 +2812,6 @@ class SoundboardApp:
             label="✏️ Edit",
             command=lambda: self._configure_slot_for_tab(tab_idx, slot_idx),
         )
-
-        # Image options (only for filled slots).
-        slot = None
-        if 0 <= tab_idx < len(self.tabs):
-            slot = self.tabs[tab_idx].slots.get(slot_idx)
-        if slot is not None:
-            menu.add_separator()
-            menu.add_command(
-                label="📋 Paste Image",
-                command=lambda: self._paste_image_to_slot(tab_idx, slot_idx),
-            )
-            menu.add_command(
-                label="🖼 Set Image…",
-                command=lambda: self._pick_image_for_slot(tab_idx, slot_idx),
-            )
-            if slot.image_path:
-                menu.add_command(
-                    label="🗑 Clear Image",
-                    command=lambda: self._clear_slot_image(tab_idx, slot_idx),
-                )
         # Position the menu just below/right of the menu button.
         try:
             btn = self.tab_slot_preview_buttons.get(tab_idx, {}).get(slot_idx)
@@ -2880,28 +2846,6 @@ class SoundboardApp:
         self.slot_image_paths = self.tab_slot_image_paths.get(tab_idx, {})
         self.slot_emoji_labels = self.tab_slot_emoji_labels.get(tab_idx, {})
         self._slot_filled_cache = self._tab_slot_filled_cache.get(tab_idx, {})
-
-    def _on_grid_columns_changed(self, value):
-        """Handle column-count picker change. Rebuilds all tab grids."""
-        try:
-            new_cols = int(value)
-        except (TypeError, ValueError):
-            return
-        if new_cols not in (4, 6, 8, 10) or new_cols == self.grid_columns:
-            return
-
-        self.grid_columns = new_cols
-
-        # Rebuild every tab's slot grid with the new column count.
-        # Snapshot tab indices because _cleanup_tab_widgets mutates the dict.
-        for tab_idx in list(self.tab_grid_frames.keys()):
-            self._cleanup_tab_widgets(tab_idx)
-
-        # Rebuild current tab now, others lazily in background (same path
-        # as initial startup).
-        self._build_all_tab_widgets()
-        self._refresh_slot_buttons()
-        self._save_config()
 
     def _cleanup_tab_widgets(self, tab_idx: int):
         """Clean up all widget storage for a tab that's being deleted."""
@@ -3034,6 +2978,12 @@ class SoundboardApp:
         current_time = time.time()
         finished = []
 
+        # Cache of last-set progress values (per slot_idx). Only call .set()
+        # when the rounded value has actually changed, otherwise CTk does a
+        # full Canvas redraw of the progress bar 20× per second for nothing.
+        # 1% granularity is invisible to the eye and cuts redraws by ~80%.
+        last_progress = self._last_progress_values  # alias for speed
+
         for slot_idx, play_info in self.playing_slots.items():
             elapsed = current_time - play_info["start_time"]
             duration = play_info["duration"]
@@ -3041,9 +2991,12 @@ class SoundboardApp:
 
             # Only update progress bar if this slot's sound is from the current tab
             if play_info["tab_idx"] == self.current_tab_idx:
-                if slot_idx in self.slot_progress:
-                    # Just update the value - color is set when playback starts
-                    self.slot_progress[slot_idx].set(progress_ratio)
+                pb = self.slot_progress.get(slot_idx)
+                if pb is not None:
+                    rounded = round(progress_ratio, 2)
+                    if last_progress.get(slot_idx) != rounded:
+                        pb.set(progress_ratio)
+                        last_progress[slot_idx] = rounded
 
             # Check if finished
             if progress_ratio >= 1.0:
@@ -3053,6 +3006,7 @@ class SoundboardApp:
         for slot_idx in finished:
             tab_idx = self.playing_slots[slot_idx]["tab_idx"]
             del self.playing_slots[slot_idx]
+            last_progress.pop(slot_idx, None)
             # Cheap visual reset: color + hide stop button + reset progress.
             # Avoids disk I/O (image reload) that full _update_slot_button_for_tab does.
             self._reset_slot_visual(tab_idx, slot_idx)
@@ -3067,9 +3021,14 @@ class SoundboardApp:
 
             # Only update progress bar if this slot's sound is from the current tab
             if play_info["tab_idx"] == self.current_tab_idx:
-                if slot_idx in self.slot_progress:
-                    # Just update the value - color is set when preview starts
-                    self.slot_progress[slot_idx].set(progress_ratio)
+                pb = self.slot_progress.get(slot_idx)
+                if pb is not None:
+                    rounded = round(progress_ratio, 2)
+                    # Use a separate key to not collide with playing-slots cache
+                    cache_key = ("preview", slot_idx)
+                    if last_progress.get(cache_key) != rounded:
+                        pb.set(progress_ratio)
+                        last_progress[cache_key] = rounded
 
             # Check if finished
             if progress_ratio >= 1.0:
@@ -3079,17 +3038,22 @@ class SoundboardApp:
         for slot_idx in preview_finished:
             tab_idx = self.preview_slots[slot_idx]["tab_idx"]
             del self.preview_slots[slot_idx]
+            last_progress.pop(("preview", slot_idx), None)
             self._reset_slot_visual(tab_idx, slot_idx)
 
-        # Update Now Playing panel if visible — only if there's something
-        # to show OR the panel still has items from the previous frame.
+        # Update Now Playing panel if visible — but throttled to ~5fps because
+        # _update_item reconfigures ~15 CTk widgets per playing sound and each
+        # .configure() triggers a Canvas redraw. At 20fps with 3 sounds open
+        # that's 900 widget redraws/sec on top of CTk's own resize redraws.
         panel = getattr(self, "now_playing_panel", None)
         if panel is not None and panel.is_visible:
-            if self.mixer and self.mixer.running and self.playing_slots:
-                playing_sounds = self.mixer.get_playing_sounds()
-                panel.update(playing_sounds, self.playing_slots)
-            elif panel.sound_items:
-                panel.update([], {})
+            if current_time - self._last_panel_update >= 0.2:
+                if self.mixer and self.mixer.running and self.playing_slots:
+                    playing_sounds = self.mixer.get_playing_sounds()
+                    panel.update(playing_sounds, self.playing_slots)
+                elif panel.sound_items:
+                    panel.update([], {})
+                self._last_panel_update = current_time
 
         # Schedule next frame (20fps is enough for progress bars)
         self.root.after(50, self._animate_progress)
@@ -3385,8 +3349,7 @@ class SoundboardApp:
         self._search_results_frame.grid(row=0, column=0, sticky="nsew")
         self._search_results_frame.tkraise()
 
-        cols = self.grid_columns
-        for c in range(cols):
+        for c in range(UI["grid_columns"]):
             self._search_results_frame.grid_columnconfigure(c, weight=1, uniform="slot")
 
         results = self._search_results or []
@@ -3398,7 +3361,7 @@ class SoundboardApp:
                 font=self._font_sm,
                 text_color=COLORS["text_muted"],
             )
-            no_results.grid(row=0, column=0, columnspan=cols, pady=40)
+            no_results.grid(row=0, column=0, columnspan=UI["grid_columns"], pady=40)
             return
 
         # Header showing result count
@@ -3409,14 +3372,14 @@ class SoundboardApp:
             text_color=COLORS["text_muted"],
         )
         count_label.grid(
-            row=0, column=0, columnspan=cols, sticky="w", padx=8, pady=(4, 2)
+            row=0, column=0, columnspan=UI["grid_columns"], sticky="w", padx=8, pady=(4, 2)
         )
 
         self._search_result_widgets = []
 
         for i, result in enumerate(results):
-            row = (i // cols) + 1  # +1 for count label row
-            col = i % cols
+            row = (i // UI["grid_columns"]) + 1  # +1 for count label row
+            col = i % UI["grid_columns"]
             slot: SoundSlot = result["slot"]
 
             slot_color = slot.color or COLORS["blurple"]
@@ -3612,6 +3575,19 @@ class SoundboardApp:
         status_frame.pack_propagate(False)
 
         self.status_var = tk.StringVar(value="Ready - Select devices and click Start")
+        self._last_status_text = self.status_var.get()
+        # Skip StringVar.set() when text hasn't changed — Tk still fires write
+        # traces and the bound CTkLabel redraws even if the value is identical.
+        # With many _play_slot/_stop_slot calls this adds up. Wrap once.
+        _orig_status_set = self.status_var.set
+
+        def _dedup_status_set(value, *a, **kw):
+            if value == self._last_status_text:
+                return
+            self._last_status_text = value
+            _orig_status_set(value, *a, **kw)
+
+        self.status_var.set = _dedup_status_set  # type: ignore[method-assign]
         self.status_label = ctk.CTkLabel(
             status_frame,
             textvariable=self.status_var,
@@ -5344,168 +5320,6 @@ class SoundboardApp:
 
         return local_path
 
-    # ------------------------------------------------------------------
-    # Clipboard / quick-image helpers
-    # ------------------------------------------------------------------
-    def _save_pil_image_to_storage(self, img) -> Optional[str]:
-        """Save a PIL Image to the local images/ folder as PNG. Returns path."""
-        if not PIL_AVAILABLE:
-            return None
-        try:
-            Path(IMAGES_DIR).mkdir(exist_ok=True)
-            # Hash the raw bytes so identical pastes dedupe.
-            try:
-                buf = img.tobytes()
-            except Exception:
-                buf = str(img.size).encode()
-            file_hash = hashlib.md5(buf).hexdigest()[:8]
-            local_path = str(Path(IMAGES_DIR) / f"clipboard_{file_hash}.png")
-            if not os.path.exists(local_path):
-                # Convert to RGBA for safe PNG save (handles 'P' mode etc.)
-                save_img = img
-                if save_img.mode not in ("RGB", "RGBA"):
-                    save_img = save_img.convert("RGBA")
-                save_img.save(local_path, "PNG")
-            return local_path
-        except Exception as e:
-            print(f"[Clipboard Image] Save failed: {e}")
-            return None
-
-    def _apply_image_to_slot(self, tab_idx: int, slot_idx: int, image_path: str):
-        """Assign image_path to a slot, refresh UI, and save config."""
-        if not (0 <= tab_idx < len(self.tabs)):
-            return
-        slot = self.tabs[tab_idx].slots.get(slot_idx)
-        if slot is None:
-            return
-        slot.image_path = image_path
-        try:
-            self._update_slot_button_for_tab(tab_idx, slot_idx)
-        except Exception:
-            pass
-        if tab_idx == self.current_tab_idx:
-            try:
-                self._update_slot_button(slot_idx)
-            except Exception:
-                pass
-        self._save_config()
-        self.status_var.set(f"Image set for: {slot.name}")
-
-    def _clear_slot_image(self, tab_idx: int, slot_idx: int):
-        """Remove the image from a slot."""
-        if not (0 <= tab_idx < len(self.tabs)):
-            return
-        slot = self.tabs[tab_idx].slots.get(slot_idx)
-        if slot is None or not slot.image_path:
-            return
-        slot.image_path = None
-        # Drop cached image so refresh picks up the change.
-        self.tab_slot_image_paths.get(tab_idx, {}).pop(slot_idx, None)
-        self.tab_slot_images.get(tab_idx, {}).pop(slot_idx, None)
-        try:
-            self._update_slot_button_for_tab(tab_idx, slot_idx)
-        except Exception:
-            pass
-        if tab_idx == self.current_tab_idx:
-            try:
-                self._update_slot_button(slot_idx)
-            except Exception:
-                pass
-        self._save_config()
-        self.status_var.set(f"Image cleared: {slot.name}")
-
-    def _pick_image_for_slot(self, tab_idx: int, slot_idx: int):
-        """Open a file dialog to choose an image for a specific slot."""
-        if not (0 <= tab_idx < len(self.tabs)):
-            return
-        slot = self.tabs[tab_idx].slots.get(slot_idx)
-        if slot is None:
-            return
-        filetypes = [("Images", " ".join(SUPPORTED_IMAGE_FORMATS)), ("All files", "*.*")]
-        path = filedialog.askopenfilename(title="Choose image", filetypes=filetypes)
-        if not path:
-            return
-        local_path = self._copy_image_to_storage(path)
-        self._apply_image_to_slot(tab_idx, slot_idx, local_path)
-
-    def _paste_image_to_slot(self, tab_idx: int, slot_idx: int):
-        """Paste clipboard content (image or file path) onto a specific slot."""
-        if not PIL_AVAILABLE or not IMAGEGRAB_AVAILABLE:
-            self.status_var.set("Pillow ImageGrab not available — can't paste image")
-            return
-
-        try:
-            grab = ImageGrab.grabclipboard()
-        except Exception as e:
-            self.status_var.set(f"Clipboard read failed: {e}")
-            return
-
-        local_path: Optional[str] = None
-
-        # Case 1: clipboard contains a list of file paths (e.g. copied from Explorer)
-        if isinstance(grab, list):
-            image_exts = {".png", ".jpg", ".jpeg", ".jfif", ".gif", ".bmp", ".ico", ".webp"}
-            for fp in grab:
-                try:
-                    if Path(fp).suffix.lower() in image_exts and os.path.isfile(fp):
-                        local_path = self._copy_image_to_storage(fp)
-                        break
-                except Exception:
-                    continue
-            if local_path is None:
-                self.status_var.set("Clipboard has no image file")
-                return
-
-        # Case 2: clipboard contains a raw image (e.g. screenshot, copied from browser)
-        elif grab is not None and hasattr(grab, "save"):
-            local_path = self._save_pil_image_to_storage(grab)
-            if local_path is None:
-                self.status_var.set("Could not save clipboard image")
-                return
-
-        else:
-            self.status_var.set("No image on clipboard")
-            return
-
-        self._apply_image_to_slot(tab_idx, slot_idx, local_path)
-
-    def _paste_image_from_clipboard(self, event=None):
-        """Global Ctrl+V handler: paste clipboard image onto hovered slot.
-
-        If the focus is in an Entry/Text widget we let Tk's built-in paste
-        handle it — this only kicks in when nothing text-y has focus.
-        """
-        # Don't hijack paste when typing in entry/text widgets.
-        try:
-            focused = self.root.focus_get()
-            if focused is not None:
-                cls = focused.winfo_class()
-                if cls in ("Entry", "TEntry", "Text", "TText", "CTkEntry", "Combobox", "TCombobox"):
-                    return None
-        except Exception:
-            pass
-
-        # Find slot under pointer.
-        try:
-            px = self.root.winfo_pointerx()
-            py = self.root.winfo_pointery()
-        except Exception:
-            return None
-        target = self._find_slot_at_position(px, py)
-        if target is None:
-            return None
-
-        tab_idx, slot_idx = target
-        # Only paste onto filled slots.
-        if not (0 <= tab_idx < len(self.tabs)):
-            return None
-        if slot_idx not in self.tabs[tab_idx].slots:
-            self.status_var.set("Hover a filled slot to paste an image")
-            return None
-
-        self._paste_image_to_slot(tab_idx, slot_idx)
-        return "break"
-
     def _open_sound_editor(
         self,
         file_path: str,
@@ -6388,7 +6202,6 @@ class SoundboardApp:
             "noise_suppression_strength": (
                 self.ns_strength_var.get() if hasattr(self, "ns_strength_var") else 85
             ),
-            "grid_columns": self.grid_columns,
         }
 
         # Atomic write: write to temp file first, then rename
@@ -6412,7 +6225,8 @@ class SoundboardApp:
         if not os.path.exists(CONFIG_FILE):
             # Create default tab
             self.tabs = [SoundTab(name="Main", emoji="🎵")]
-            self._build_all_tab_widgets()
+            # Defer the slot-grid build so the window can paint first.
+            self.root.after(1, self._build_all_tab_widgets)
             self._refresh_tab_bar()
             return
 
@@ -6476,18 +6290,6 @@ class SoundboardApp:
             self.auto_start_var.set(auto_start)
             self.monitor_var.set(monitor_enabled)
 
-            # Load grid column count (4/6/8/10). Validate against allowed set.
-            saved_cols = config.get("grid_columns", UI["grid_columns"])
-            try:
-                saved_cols = int(saved_cols)
-            except (TypeError, ValueError):
-                saved_cols = UI["grid_columns"]
-            if saved_cols not in (4, 6, 8, 10):
-                saved_cols = UI["grid_columns"]
-            self.grid_columns = saved_cols
-            if hasattr(self, "grid_cols_var"):
-                self.grid_cols_var.set(str(saved_cols))
-
             # Load noise suppression settings
             ns_enabled = bool(config.get("noise_suppression", False))
             ns_strength = float(config.get("noise_suppression_strength", 85))
@@ -6516,8 +6318,11 @@ class SoundboardApp:
                         hover_color=COLORS["blurple_hover"],
                     )
 
-            # Build widgets for ALL tabs upfront (for instant tab switching)
-            self._build_all_tab_widgets()
+            # Build widgets for ALL tabs upfront (for instant tab switching).
+            # Deferred via after(1) so the chrome can paint first — building
+            # the slot grid synchronously here adds visible "Generate" lag at
+            # startup. The grid will appear ~1 frame after the window opens.
+            self.root.after(1, self._build_all_tab_widgets)
             self._refresh_tab_bar()
             self._register_hotkeys()
 
@@ -6529,7 +6334,7 @@ class SoundboardApp:
             print(f"Error loading config: {e}")
             # Create default tab on error
             self.tabs = [SoundTab(name="Main", emoji="🎵")]
-            self._build_all_tab_widgets()
+            self.root.after(1, self._build_all_tab_widgets)
             self._refresh_tab_bar()
 
     def _auto_start_stream(self):
