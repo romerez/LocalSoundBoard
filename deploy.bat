@@ -62,3 +62,4 @@ if exist "dist\SoundBoard\SoundBoard.exe" (
 
 echo.
 pause
+

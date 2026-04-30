@@ -401,6 +401,8 @@ Example: `airhorn_8f3a2b1c.mp3`
 - [x] Pitch preservation option for speed changes (uses librosa time-stretch)
 - [x] Modern UI with CustomTkinter (rounded corners, modern styling)
 - [x] Drag-and-drop image from file explorer onto sound slots
+- [x] Paste clipboard image (Ctrl+V) onto hovered sound slot
+- [x] "Paste Image", "Set Image…", "Clear Image" entries in slot ⋯ menu
 - [x] Sound groups/types for organization and filtering (Effects, Music, Voice, Meme, etc.)
 - [x] Multiple groups per sound (a sound can belong to several groups)
 - [x] Custom group creation (add your own group names, persisted in config)
@@ -1275,6 +1277,7 @@ When asked to add a feature:
 | Issue | Cause | Fix |
 |-------|-------|-----|
 | Hebrew/RTL text inconsistent in buttons | Naive word-reversal in `_fix_rtl_text` doesn't implement the Unicode BiDi algorithm; CustomTkinter Canvas rendering is LTR-only | Use `python-bidi` (`bidi.algorithm.get_display`) for all display labels/buttons; set `anchor="e"` for RTL-dominant text; use `justify="right"` for entry fields via `_bind_rtl_entry()` helper |
+| Drag-and-drop from Explorer silently does nothing | App runs as Administrator (for global hotkeys), Explorer runs as standard user. Windows UIPI blocks `WM_DROPFILES` (and related messages) from lower-integrity processes by default. windnd's `DragAcceptFiles` succeeds but the message never reaches the WndProc. | Call `ChangeWindowMessageFilterEx(hwnd, msg, MSGFLT_ALLOW, NULL)` for `WM_DROPFILES (0x0233)`, `WM_COPYDATA (0x004A)`, and `WM_COPYGLOBALDATA (0x0049)` before `windnd.hook_dropfiles(...)`. Also resolve the real top-level HWND via `int(root.frame(), 16)` (or `GetAncestor(... , GA_ROOT)`) instead of relying on `winfo_id()`. |
 
 | Issue | Cause | Fix |
 |-------|-------|-----|

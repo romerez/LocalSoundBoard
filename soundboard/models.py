@@ -25,6 +25,12 @@ class SoundSlot:
     loop_count: int = 0  # Number of times to loop (0 = infinite)
     loop_delay: float = 0.0  # Delay between loops in seconds
     groups: List[str] = field(default_factory=list)  # Sound groups/types for filtering
+    # Path to the ORIGINAL un-trimmed source audio. When the slot's audio was
+    # produced by trimming in the editor, file_path points at the trimmed
+    # output and source_file_path points at the original full-length file.
+    # This lets the user "Clone (re-trim)" the slot and pick a different cut
+    # from the same original source. None means file_path is itself the source.
+    source_file_path: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -42,6 +48,7 @@ class SoundSlot:
             "loop_count": self.loop_count,
             "loop_delay": self.loop_delay,
             "groups": self.groups,
+            "source_file_path": self.source_file_path,
         }
 
     @classmethod
@@ -61,6 +68,7 @@ class SoundSlot:
             loop_count=data.get("loop_count", 0),
             loop_delay=data.get("loop_delay", 0.0),
             groups=_migrate_groups(data),
+            source_file_path=data.get("source_file_path"),
         )
 
 

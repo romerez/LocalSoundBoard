@@ -68,9 +68,8 @@ try:
         try:
             new_w = self._reverse_widget_scaling(event.width)
             new_h = self._reverse_widget_scaling(event.height)
-            if (
-                round(self._current_width) != round(new_w)
-                or round(self._current_height) != round(new_h)
+            if round(self._current_width) != round(new_w) or round(self._current_height) != round(
+                new_h
             ):
                 self._current_width = new_w
                 self._current_height = new_h
@@ -263,6 +262,7 @@ def _bind_rtl_entry(entry_widget: "ctk.CTkEntry", str_var: "tk.StringVar") -> No
     Also installs layout-independent clipboard shortcuts so paste works on
     Hebrew / Russian / etc. keyboard layouts.
     """
+
     def _set_ltr(*_args: object) -> None:
         try:
             entry_widget._entry.configure(justify="left")  # type: ignore[attr-defined]
@@ -293,6 +293,14 @@ try:
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
+
+# ImageGrab is used for clipboard image paste. On Windows it ships with Pillow.
+try:
+    from PIL import ImageGrab  # type: ignore[attr-defined]
+
+    IMAGEGRAB_AVAILABLE = True
+except ImportError:
+    IMAGEGRAB_AVAILABLE = False
 
 # Try to import windnd for drag-and-drop file support (Windows only)
 try:
@@ -737,9 +745,7 @@ class NowPlayingPanel:
             # Keep override briefly so the label doesn't snap before the
             # background thread finishes publishing the new speed.
             if self.frame is not None:
-                self.frame.after(
-                    400, lambda: speed_user_override.__setitem__(0, False)
-                )
+                self.frame.after(400, lambda: speed_user_override.__setitem__(0, False))
 
         def _on_speed_change(val):
             # Fires on every drag tick. Update label live, debounce apply.
@@ -819,9 +825,7 @@ class NowPlayingPanel:
                     daemon=True,
                 ).start()
             if self.frame is not None:
-                self.frame.after(
-                    400, lambda: speed_user_override.__setitem__(0, False)
-                )
+                self.frame.after(400, lambda: speed_user_override.__setitem__(0, False))
 
         reset_speed_btn = ctk.CTkButton(
             row4b,
@@ -1276,6 +1280,10 @@ class SoundboardApp:
         self._last_active_tab_idx: int = 0  # Track last active tab for tab bar optimization
         self.registered_hotkeys: list = []
 
+        # Number of slot columns per row (user-configurable, default from constants).
+        # Loaded from config in _load_config; persisted via _save_config.
+        self.grid_columns: int = UI["grid_columns"]
+
         # Debounced save handle (see _save_config / _save_config_now)
         self._save_after_id: Optional[str] = None
 
@@ -1369,7 +1377,11 @@ class SoundboardApp:
         if time.time() < self._resize_active_until:
             self._resize_sweep_after_id = self.root.after(60, self._post_resize_sweep)
             return
-        dirty = _SHARED_RESIZE_STATE.pop("dirty", None) if isinstance(_SHARED_RESIZE_STATE, dict) else None
+        dirty = (
+            _SHARED_RESIZE_STATE.pop("dirty", None)
+            if isinstance(_SHARED_RESIZE_STATE, dict)
+            else None
+        )
         if not dirty:
             return
         for widget in list(dirty):
@@ -1430,9 +1442,62 @@ class SoundboardApp:
             on_stop_callback=self._on_panel_stop_sound,
         )
 
-        # Hook drag-and-drop for image/sound files from file explorer
+        # Hook drag-and-drop for image/sound files from file explorer.
+        # NOTE: passing `self.root` directly to windnd makes it call
+        # `root.winfo_id()`, which on modern Tk/CustomTkinter returns the
+        # *inner* Tk frame's id rather than the actual top-level Win32 HWND
+        # that receives WM_DROPFILES. We must resolve the real HWND via
+        # `wm frame` (or fall back to GetAncestor), otherwise drops are
+        # silently dropped on the floor.
         if WINDND_AVAILABLE:
-            windnd.hook_dropfiles(self.root, func=self._on_files_dropped)
+            try:
+                hwnd = None
+                try:
+                    hwnd = int(self.root.frame(), 16)  # Tk: real toplevel HWND
+                except Exception:
+                    pass
+                if not hwnd:
+                    try:
+                        import ctypes as _ct
+
+                        # GA_ROOT = 2 — climb to the top-level window
+                        hwnd = _ct.windll.user32.GetAncestor(self.root.winfo_id(), 2)
+                    except Exception:
+                        hwnd = self.root.winfo_id()
+
+                # CRITICAL: when running as Administrator (which we recommend
+                # for global hotkeys), Windows UIPI silently blocks drag-drop
+                # messages from lower-integrity processes like Explorer. We
+                # have to whitelist WM_DROPFILES + WM_COPYDATA + WM_COPYGLOBALDATA
+                # via ChangeWindowMessageFilterEx, otherwise drops never arrive.
+                try:
+                    import ctypes as _ct
+
+                    MSGFLT_ALLOW = 1
+                    WM_DROPFILES = 0x0233
+                    WM_COPYDATA = 0x004A
+                    WM_COPYGLOBALDATA = 0x0049
+                    cwmfx = _ct.windll.user32.ChangeWindowMessageFilterEx
+                    for msg in (WM_DROPFILES, WM_COPYDATA, WM_COPYGLOBALDATA):
+                        cwmfx(hwnd, msg, MSGFLT_ALLOW, None)
+                except Exception:
+                    # Older Windows or non-admin: not needed / not available.
+                    pass
+
+                windnd.hook_dropfiles(hwnd, func=self._on_files_dropped)
+            except Exception as e:
+                print(f"[DragDrop] Hook failed: {e}")
+
+        # Global Ctrl+V → paste clipboard image onto whichever slot the mouse
+        # is hovering. Bound on root with add="+" so it doesn't clobber the
+        # layout-safe paste handlers installed on Entry widgets.
+        # Note: bind to <Control-KeyPress> covers v/V plus non-Latin layouts
+        # where the Ctrl modifier is what matters, not the keysym.
+        try:
+            self.root.bind("<Control-v>", self._paste_image_from_clipboard, add="+")
+            self.root.bind("<Control-V>", self._paste_image_from_clipboard, add="+")
+        except Exception:
+            pass
 
     def _create_device_section(self, parent):
         """Create the collapsible audio device selection and PTT section."""
@@ -1624,6 +1689,29 @@ class SoundboardApp:
             corner_radius=4,
         )
         self.auto_start_checkbox.pack(side=tk.LEFT)
+
+        # Columns per row picker (4 / 6 / 8 / 10)
+        ctk.CTkLabel(
+            controls_row,
+            text="  Columns:",
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            text_color=COLORS["text_secondary"],
+        ).pack(side=tk.LEFT, padx=(15, 4))
+
+        self.grid_cols_var = tk.StringVar(value=str(self.grid_columns))
+        self.grid_cols_picker = ctk.CTkSegmentedButton(
+            controls_row,
+            values=["4", "6", "8", "10"],
+            variable=self.grid_cols_var,
+            command=self._on_grid_columns_changed,
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            selected_color=COLORS["blurple"],
+            selected_hover_color=COLORS["blurple_hover"],
+            unselected_color=COLORS["bg_medium"],
+            unselected_hover_color=COLORS["bg_light"],
+            corner_radius=6,
+        )
+        self.grid_cols_picker.pack(side=tk.LEFT)
 
         # Noise suppression (replaces Discord's Krisp - which is bypassed
         # when routing through the virtual cable)
@@ -2573,7 +2661,8 @@ class SoundboardApp:
         self.tab_grid_frames[tab_idx] = tab_grid
 
         # Configure columns for even distribution (flex layout)
-        for c in range(UI["grid_columns"]):
+        cols = self.grid_columns
+        for c in range(cols):
             tab_grid.grid_columnconfigure(c, weight=1, uniform="slot")
 
         # Calculate slots needed
@@ -2583,7 +2672,7 @@ class SoundboardApp:
         BOTTOM_HEIGHT = 32
 
         for i in range(num_slots):
-            row, col = divmod(i, UI["grid_columns"])
+            row, col = divmod(i, cols)
 
             # corner_radius=0 puts CTk on the fast rectangle-render path,
             # skipping the expensive rounded-polygon Canvas math on every
@@ -2630,6 +2719,7 @@ class SoundboardApp:
             def make_menu_handler(t_idx, slot_id):
                 def handler():
                     self._show_slot_menu(t_idx, slot_id)
+
                 return handler
 
             menu_btn = ctk.CTkButton(
@@ -2736,6 +2826,26 @@ class SoundboardApp:
             label="✏️ Edit",
             command=lambda: self._configure_slot_for_tab(tab_idx, slot_idx),
         )
+
+        # Image options (only for filled slots).
+        slot = None
+        if 0 <= tab_idx < len(self.tabs):
+            slot = self.tabs[tab_idx].slots.get(slot_idx)
+        if slot is not None:
+            menu.add_separator()
+            menu.add_command(
+                label="📋 Paste Image",
+                command=lambda: self._paste_image_to_slot(tab_idx, slot_idx),
+            )
+            menu.add_command(
+                label="🖼 Set Image…",
+                command=lambda: self._pick_image_for_slot(tab_idx, slot_idx),
+            )
+            if slot.image_path:
+                menu.add_command(
+                    label="🗑 Clear Image",
+                    command=lambda: self._clear_slot_image(tab_idx, slot_idx),
+                )
         # Position the menu just below/right of the menu button.
         try:
             btn = self.tab_slot_preview_buttons.get(tab_idx, {}).get(slot_idx)
@@ -2770,6 +2880,28 @@ class SoundboardApp:
         self.slot_image_paths = self.tab_slot_image_paths.get(tab_idx, {})
         self.slot_emoji_labels = self.tab_slot_emoji_labels.get(tab_idx, {})
         self._slot_filled_cache = self._tab_slot_filled_cache.get(tab_idx, {})
+
+    def _on_grid_columns_changed(self, value):
+        """Handle column-count picker change. Rebuilds all tab grids."""
+        try:
+            new_cols = int(value)
+        except (TypeError, ValueError):
+            return
+        if new_cols not in (4, 6, 8, 10) or new_cols == self.grid_columns:
+            return
+
+        self.grid_columns = new_cols
+
+        # Rebuild every tab's slot grid with the new column count.
+        # Snapshot tab indices because _cleanup_tab_widgets mutates the dict.
+        for tab_idx in list(self.tab_grid_frames.keys()):
+            self._cleanup_tab_widgets(tab_idx)
+
+        # Rebuild current tab now, others lazily in background (same path
+        # as initial startup).
+        self._build_all_tab_widgets()
+        self._refresh_slot_buttons()
+        self._save_config()
 
     def _cleanup_tab_widgets(self, tab_idx: int):
         """Clean up all widget storage for a tab that's being deleted."""
@@ -3253,7 +3385,8 @@ class SoundboardApp:
         self._search_results_frame.grid(row=0, column=0, sticky="nsew")
         self._search_results_frame.tkraise()
 
-        for c in range(UI["grid_columns"]):
+        cols = self.grid_columns
+        for c in range(cols):
             self._search_results_frame.grid_columnconfigure(c, weight=1, uniform="slot")
 
         results = self._search_results or []
@@ -3265,7 +3398,7 @@ class SoundboardApp:
                 font=self._font_sm,
                 text_color=COLORS["text_muted"],
             )
-            no_results.grid(row=0, column=0, columnspan=UI["grid_columns"], pady=40)
+            no_results.grid(row=0, column=0, columnspan=cols, pady=40)
             return
 
         # Header showing result count
@@ -3276,14 +3409,14 @@ class SoundboardApp:
             text_color=COLORS["text_muted"],
         )
         count_label.grid(
-            row=0, column=0, columnspan=UI["grid_columns"], sticky="w", padx=8, pady=(4, 2)
+            row=0, column=0, columnspan=cols, sticky="w", padx=8, pady=(4, 2)
         )
 
         self._search_result_widgets = []
 
         for i, result in enumerate(results):
-            row = (i // UI["grid_columns"]) + 1  # +1 for count label row
-            col = i % UI["grid_columns"]
+            row = (i // cols) + 1  # +1 for count label row
+            col = i % cols
             slot: SoundSlot = result["slot"]
 
             slot_color = slot.color or COLORS["blurple"]
@@ -3510,9 +3643,7 @@ class SoundboardApp:
                 # Apply noise suppression settings
                 if hasattr(self, "noise_suppress_var"):
                     self.mixer.noise_suppressor.enabled = self.noise_suppress_var.get()
-                    self.mixer.noise_suppressor.set_strength(
-                        self.ns_strength_var.get() / 100.0
-                    )
+                    self.mixer.noise_suppressor.set_strength(self.ns_strength_var.get() / 100.0)
                 self.mixer.start()
                 # Save device selection
                 self._save_config()
@@ -4245,7 +4376,7 @@ class SoundboardApp:
         # Position popup near the click location
         x = event.x_root + 10
         y = event.y_root + 10
-        popup.geometry(f"280x260+{x}+{y}")
+        popup.geometry(f"340x260+{x}+{y}")
 
         # Main frame with rounded corners
         main_frame = ctk.CTkFrame(popup, fg_color=COLORS["bg_medium"], corner_radius=12)
@@ -4381,6 +4512,11 @@ class SoundboardApp:
             popup.destroy()
             self._configure_slot(slot_idx)
 
+        def clone_for_retrim():
+            """Clone slot to next empty slot, opening editor for a new cut."""
+            popup.destroy()
+            self._clone_slot_for_retrim(slot_idx)
+
         def delete_sound():
             """Delete the sound with confirmation."""
             popup.destroy()
@@ -4406,6 +4542,15 @@ class SoundboardApp:
             command=open_full_edit,
             fg_color=COLORS["blurple"],
             hover_color=COLORS["blurple_hover"],
+            width=70,
+        ).pack(side=tk.LEFT, padx=2)
+
+        ctk.CTkButton(
+            btn_frame,
+            text="📋 Clone",
+            command=clone_for_retrim,
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_lighter"],
             width=70,
         ).pack(side=tk.LEFT, padx=2)
 
@@ -4437,6 +4582,103 @@ class SoundboardApp:
 
         popup.bind("<FocusOut>", on_focus_out)
         popup.focus_set()
+
+    def _clone_slot_for_retrim(self, slot_idx: int):
+        """Clone an existing slot into a new slot with a different cut.
+
+        Opens the sound editor on the original (un-trimmed) source if one was
+        tracked, otherwise on the slot's current file. Saves the new cut as
+        an independent file, then creates a new slot that copies the original
+        slot's settings (color, emoji, image, volume, speed, loop, groups).
+        Hotkey is intentionally NOT copied to avoid duplicate bindings.
+        """
+        tab = self._get_current_tab()
+        original = tab.slots.get(slot_idx)
+        if not original:
+            return
+
+        # Pick the best source to re-trim from. Prefer the tracked original
+        # source so the user can pick any range from the full file. Fall back
+        # to the current (already-trimmed) file if no source was tracked.
+        candidate_paths = []
+        if original.source_file_path:
+            candidate_paths.append(original.source_file_path)
+        candidate_paths.append(original.file_path)
+
+        source_for_editor: Optional[str] = None
+        for p in candidate_paths:
+            try:
+                if p and os.path.isfile(p):
+                    source_for_editor = p
+                    break
+            except Exception:
+                continue
+
+        if not source_for_editor:
+            messagebox.showwarning(
+                "Clone",
+                "Cannot find the original audio file for this sound.",
+            )
+            return
+
+        # Open the editor and let the user pick a new cut.
+        try:
+            editor = SoundEditor(self.root, source_for_editor, output_device=None)
+            result = editor.show()
+        except Exception as e:
+            messagebox.showerror("Editor Error", f"Failed to open sound editor:\n{e}")
+            return
+
+        if result is None:
+            return  # User cancelled
+
+        audio_data, sample_rate = result
+
+        # Save the new cut as an independent file in the local sounds folder.
+        try:
+            new_file_path = self.sound_cache.add_sound_data(
+                audio_data,
+                sample_rate,
+                Path(source_for_editor).name,
+            )
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save cloned sound:\n{e}")
+            return
+
+        # Find the next empty slot in the current tab.
+        new_slot_idx = 0
+        while new_slot_idx in tab.slots:
+            new_slot_idx += 1
+
+        # Build a unique-ish name: "<original> (copy)", "(copy 2)", ...
+        existing_names = {s.name for s in tab.slots.values()}
+        base_name = original.name or Path(source_for_editor).stem
+        candidate = f"{base_name} (copy)"
+        n = 2
+        while candidate in existing_names:
+            candidate = f"{base_name} (copy {n})"
+            n += 1
+
+        tab.slots[new_slot_idx] = SoundSlot(
+            name=candidate,
+            file_path=new_file_path,
+            hotkey=None,  # don't copy hotkey to avoid duplicate bindings
+            volume=original.volume,
+            emoji=original.emoji,
+            image_path=original.image_path,
+            color=original.color,
+            speed=original.speed,
+            preserve_pitch=original.preserve_pitch,
+            loop=original.loop,
+            loop_count=original.loop_count,
+            loop_delay=original.loop_delay,
+            groups=list(original.groups),
+            source_file_path=source_for_editor,
+        )
+
+        self._ensure_slots_for_tab(self.current_tab_idx)
+        self._update_slot_button_for_tab(self.current_tab_idx, new_slot_idx)
+        self._save_config()
 
     def _configure_slot(self, slot_idx: int):
         """Open configuration dialog for a slot."""
@@ -4869,6 +5111,49 @@ class SoundboardApp:
                 messagebox.showerror("Error", f"Failed to add sound:\n{e}")
                 return
 
+            # Determine source_file_path: track the original un-trimmed file
+            # so that "Clone (re-trim)" can re-cut from the original.
+            #  - If we just trimmed via the editor, persist the original full
+            #    file in our local sounds/ folder so it can never be lost
+            #    (user might delete the file from Downloads, etc).
+            #  - Prefer an already-tracked source from the existing slot.
+            new_source_file_path: Optional[str] = None
+            if (
+                edited_audio_data["data"] is not None
+                and edited_audio_data["sample_rate"] is not None
+            ):
+                if existing and existing.source_file_path \
+                        and os.path.isfile(existing.source_file_path):
+                    # Existing slot already has a tracked original — keep it.
+                    new_source_file_path = existing.source_file_path
+                elif source_path:
+                    # Whatever path the user picked / the slot was pointing
+                    # at BEFORE this save IS the original we want to keep.
+                    # (If they re-trimmed an existing slot's file, source_path
+                    # equals existing.file_path which is the original full
+                    # file we previously copied to sounds/.)
+                    try:
+                        src_abs = str(Path(source_path).absolute())
+                        sounds_abs = str(Path(SOUNDS_DIR).absolute())
+                        already_local = (
+                            source_path.startswith(SOUNDS_DIR + "/")
+                            or source_path.startswith(SOUNDS_DIR + "\\")
+                            or src_abs.startswith(sounds_abs)
+                        )
+                        if already_local:
+                            # Already in sounds/, just reference it.
+                            new_source_file_path = source_path
+                        else:
+                            # Copy the original full-length source into local
+                            # storage so it survives even if the user deletes
+                            # the original from Downloads/etc.
+                            new_source_file_path = self.sound_cache.add_sound(source_path)
+                    except Exception:
+                        # If we can't persist the source, fall back to the
+                        # raw path so Clone may still work while the file
+                        # remains where the user picked it.
+                        new_source_file_path = source_path
+
             tab.slots[slot_idx] = SoundSlot(
                 name=name_var.get() or Path(source_path).stem,
                 file_path=local_path,
@@ -4883,6 +5168,7 @@ class SoundboardApp:
                 loop_count=loop_count_var.get(),
                 loop_delay=loop_delay_var.get(),
                 groups=[g for g, v in group_check_vars.items() if v.get()],
+                source_file_path=new_source_file_path,
             )
             self._update_slot_button_for_tab(
                 self.current_tab_idx, slot_idx
@@ -5057,6 +5343,168 @@ class SoundboardApp:
             shutil.copy2(source_path, local_path)
 
         return local_path
+
+    # ------------------------------------------------------------------
+    # Clipboard / quick-image helpers
+    # ------------------------------------------------------------------
+    def _save_pil_image_to_storage(self, img) -> Optional[str]:
+        """Save a PIL Image to the local images/ folder as PNG. Returns path."""
+        if not PIL_AVAILABLE:
+            return None
+        try:
+            Path(IMAGES_DIR).mkdir(exist_ok=True)
+            # Hash the raw bytes so identical pastes dedupe.
+            try:
+                buf = img.tobytes()
+            except Exception:
+                buf = str(img.size).encode()
+            file_hash = hashlib.md5(buf).hexdigest()[:8]
+            local_path = str(Path(IMAGES_DIR) / f"clipboard_{file_hash}.png")
+            if not os.path.exists(local_path):
+                # Convert to RGBA for safe PNG save (handles 'P' mode etc.)
+                save_img = img
+                if save_img.mode not in ("RGB", "RGBA"):
+                    save_img = save_img.convert("RGBA")
+                save_img.save(local_path, "PNG")
+            return local_path
+        except Exception as e:
+            print(f"[Clipboard Image] Save failed: {e}")
+            return None
+
+    def _apply_image_to_slot(self, tab_idx: int, slot_idx: int, image_path: str):
+        """Assign image_path to a slot, refresh UI, and save config."""
+        if not (0 <= tab_idx < len(self.tabs)):
+            return
+        slot = self.tabs[tab_idx].slots.get(slot_idx)
+        if slot is None:
+            return
+        slot.image_path = image_path
+        try:
+            self._update_slot_button_for_tab(tab_idx, slot_idx)
+        except Exception:
+            pass
+        if tab_idx == self.current_tab_idx:
+            try:
+                self._update_slot_button(slot_idx)
+            except Exception:
+                pass
+        self._save_config()
+        self.status_var.set(f"Image set for: {slot.name}")
+
+    def _clear_slot_image(self, tab_idx: int, slot_idx: int):
+        """Remove the image from a slot."""
+        if not (0 <= tab_idx < len(self.tabs)):
+            return
+        slot = self.tabs[tab_idx].slots.get(slot_idx)
+        if slot is None or not slot.image_path:
+            return
+        slot.image_path = None
+        # Drop cached image so refresh picks up the change.
+        self.tab_slot_image_paths.get(tab_idx, {}).pop(slot_idx, None)
+        self.tab_slot_images.get(tab_idx, {}).pop(slot_idx, None)
+        try:
+            self._update_slot_button_for_tab(tab_idx, slot_idx)
+        except Exception:
+            pass
+        if tab_idx == self.current_tab_idx:
+            try:
+                self._update_slot_button(slot_idx)
+            except Exception:
+                pass
+        self._save_config()
+        self.status_var.set(f"Image cleared: {slot.name}")
+
+    def _pick_image_for_slot(self, tab_idx: int, slot_idx: int):
+        """Open a file dialog to choose an image for a specific slot."""
+        if not (0 <= tab_idx < len(self.tabs)):
+            return
+        slot = self.tabs[tab_idx].slots.get(slot_idx)
+        if slot is None:
+            return
+        filetypes = [("Images", " ".join(SUPPORTED_IMAGE_FORMATS)), ("All files", "*.*")]
+        path = filedialog.askopenfilename(title="Choose image", filetypes=filetypes)
+        if not path:
+            return
+        local_path = self._copy_image_to_storage(path)
+        self._apply_image_to_slot(tab_idx, slot_idx, local_path)
+
+    def _paste_image_to_slot(self, tab_idx: int, slot_idx: int):
+        """Paste clipboard content (image or file path) onto a specific slot."""
+        if not PIL_AVAILABLE or not IMAGEGRAB_AVAILABLE:
+            self.status_var.set("Pillow ImageGrab not available — can't paste image")
+            return
+
+        try:
+            grab = ImageGrab.grabclipboard()
+        except Exception as e:
+            self.status_var.set(f"Clipboard read failed: {e}")
+            return
+
+        local_path: Optional[str] = None
+
+        # Case 1: clipboard contains a list of file paths (e.g. copied from Explorer)
+        if isinstance(grab, list):
+            image_exts = {".png", ".jpg", ".jpeg", ".jfif", ".gif", ".bmp", ".ico", ".webp"}
+            for fp in grab:
+                try:
+                    if Path(fp).suffix.lower() in image_exts and os.path.isfile(fp):
+                        local_path = self._copy_image_to_storage(fp)
+                        break
+                except Exception:
+                    continue
+            if local_path is None:
+                self.status_var.set("Clipboard has no image file")
+                return
+
+        # Case 2: clipboard contains a raw image (e.g. screenshot, copied from browser)
+        elif grab is not None and hasattr(grab, "save"):
+            local_path = self._save_pil_image_to_storage(grab)
+            if local_path is None:
+                self.status_var.set("Could not save clipboard image")
+                return
+
+        else:
+            self.status_var.set("No image on clipboard")
+            return
+
+        self._apply_image_to_slot(tab_idx, slot_idx, local_path)
+
+    def _paste_image_from_clipboard(self, event=None):
+        """Global Ctrl+V handler: paste clipboard image onto hovered slot.
+
+        If the focus is in an Entry/Text widget we let Tk's built-in paste
+        handle it — this only kicks in when nothing text-y has focus.
+        """
+        # Don't hijack paste when typing in entry/text widgets.
+        try:
+            focused = self.root.focus_get()
+            if focused is not None:
+                cls = focused.winfo_class()
+                if cls in ("Entry", "TEntry", "Text", "TText", "CTkEntry", "Combobox", "TCombobox"):
+                    return None
+        except Exception:
+            pass
+
+        # Find slot under pointer.
+        try:
+            px = self.root.winfo_pointerx()
+            py = self.root.winfo_pointery()
+        except Exception:
+            return None
+        target = self._find_slot_at_position(px, py)
+        if target is None:
+            return None
+
+        tab_idx, slot_idx = target
+        # Only paste onto filled slots.
+        if not (0 <= tab_idx < len(self.tabs)):
+            return None
+        if slot_idx not in self.tabs[tab_idx].slots:
+            self.status_var.set("Hover a filled slot to paste an image")
+            return None
+
+        self._paste_image_to_slot(tab_idx, slot_idx)
+        return "break"
 
     def _open_sound_editor(
         self,
@@ -5640,9 +6088,7 @@ class SoundboardApp:
 
         url_entry.bind("<Return>", lambda e: start())
 
-    def _start_youtube_download(
-        self, url: str, cookies_path: Optional[str], target_tab_idx: int
-    ):
+    def _start_youtube_download(self, url: str, cookies_path: Optional[str], target_tab_idx: int):
         """Show progress dialog and download a single YouTube video as MP3."""
         try:
             import yt_dlp  # type: ignore
@@ -5753,7 +6199,9 @@ class SoundboardApp:
                         msg = f"{short}\n{msg}"
                     self.root.after(0, lambda m=msg, p=pct: (status_var.set(m), bar.set(p)))
                 elif d.get("status") == "finished":
-                    self.root.after(0, lambda: (status_var.set("Converting to MP3..."), bar.set(1.0)))
+                    self.root.after(
+                        0, lambda: (status_var.set("Converting to MP3..."), bar.set(1.0))
+                    )
             except Exception:
                 pass
 
@@ -5842,9 +6290,7 @@ class SoundboardApp:
 
         threading.Thread(target=thread_target, daemon=True).start()
 
-    def _create_slot_from_downloaded_file(
-        self, file_path: str, title: str, target_tab_idx: int
-    ):
+    def _create_slot_from_downloaded_file(self, file_path: str, title: str, target_tab_idx: int):
         """Add the downloaded MP3 to the cache and open the configure dialog."""
         try:
             local_path = self.sound_cache.add_sound(file_path)
@@ -5942,6 +6388,7 @@ class SoundboardApp:
             "noise_suppression_strength": (
                 self.ns_strength_var.get() if hasattr(self, "ns_strength_var") else 85
             ),
+            "grid_columns": self.grid_columns,
         }
 
         # Atomic write: write to temp file first, then rename
@@ -6028,6 +6475,18 @@ class SoundboardApp:
 
             self.auto_start_var.set(auto_start)
             self.monitor_var.set(monitor_enabled)
+
+            # Load grid column count (4/6/8/10). Validate against allowed set.
+            saved_cols = config.get("grid_columns", UI["grid_columns"])
+            try:
+                saved_cols = int(saved_cols)
+            except (TypeError, ValueError):
+                saved_cols = UI["grid_columns"]
+            if saved_cols not in (4, 6, 8, 10):
+                saved_cols = UI["grid_columns"]
+            self.grid_columns = saved_cols
+            if hasattr(self, "grid_cols_var"):
+                self.grid_cols_var.set(str(saved_cols))
 
             # Load noise suppression settings
             ns_enabled = bool(config.get("noise_suppression", False))

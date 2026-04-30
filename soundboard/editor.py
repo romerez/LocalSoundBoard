@@ -149,6 +149,9 @@ class SoundEditor:
         self.dialog.protocol("WM_DELETE_WINDOW", self._on_cancel)
         # Undo trim markers
         self.dialog.bind("<Control-z>", self._undo_marker)
+        # Spacebar toggles play/pause (works regardless of focused widget)
+        self.dialog.bind("<space>", self._on_space_key)
+        self.dialog.bind("<KeyPress-space>", self._on_space_key)
 
         # Main container with padding
         main_frame = tk.Frame(self.dialog, bg=COLORS["bg_dark"], padx=20, pady=15)
@@ -831,6 +834,17 @@ class SoundEditor:
             self._pause_playback()
         else:
             self._start_playback()
+
+    def _on_space_key(self, event):
+        """Spacebar shortcut: play/pause. Ignored when typing in an Entry."""
+        try:
+            focused = self.dialog.focus_get()
+            if isinstance(focused, (tk.Entry, tk.Text)):
+                return None
+        except Exception:
+            pass
+        self._toggle_playback()
+        return "break"
 
     def _pause_playback(self):
         """Pause playback (keep position for resume)."""
