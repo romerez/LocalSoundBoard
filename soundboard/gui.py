@@ -722,9 +722,7 @@ class NowPlayingPanel:
             # Release override after a short window so _update_item can
             # resync to the mixer's value if it diverges.
             if self.items_frame is not None:
-                self.items_frame.after(
-                    600, lambda: speed_user_override.__setitem__(0, False)
-                )
+                self.items_frame.after(600, lambda: speed_user_override.__setitem__(0, False))
 
         speed_slider = ctk.CTkSlider(
             row4b,
@@ -1208,6 +1206,9 @@ class SoundboardApp:
         # Call recorder (WASAPI loopback). Lazy-created when user clicks Record.
         self.recorder: Optional[Recorder] = None
         self._recording_after_id: Optional[str] = None
+        # System tray icon (lazy — only started when window is hidden).
+        self._tray = None  # type: ignore[assignment]
+        self._tray_hidden: bool = False
         self.tabs: List[SoundTab] = []  # List of all tabs
         self.current_tab_idx = 0  # Currently active tab index
 
@@ -1641,6 +1642,20 @@ class SoundboardApp:
         )
         self.auto_start_checkbox.pack(side=tk.LEFT)
 
+        # Minimize to tray
+        self.minimize_to_tray_var = tk.BooleanVar(value=False)
+        self.minimize_to_tray_checkbox = ctk.CTkCheckBox(
+            controls_row,
+            text="🔻 Minimize to tray",
+            variable=self.minimize_to_tray_var,
+            command=self._on_toggle_tray_setting,
+            fg_color=COLORS["blurple"],
+            hover_color=COLORS["blurple_hover"],
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            corner_radius=4,
+        )
+        self.minimize_to_tray_checkbox.pack(side=tk.LEFT, padx=(15, 0))
+
         # Noise suppression (replaces Discord's Krisp - which is bypassed
         # when routing through the virtual cable)
         self.noise_suppress_var = tk.BooleanVar(value=False)
@@ -1922,9 +1937,7 @@ class SoundboardApp:
                     fg_color=COLORS["red"],
                     hover_color=COLORS["red_hover"],
                 )
-                self.recording_timer_label.configure(
-                    text="0:00", text_color=COLORS["text_muted"]
-                )
+                self.recording_timer_label.configure(text="0:00", text_color=COLORS["text_muted"])
             if saved_path:
                 # Brief "saved" confirmation in the status bar
                 self.status_var.set(f"💾 Saved recording: {os.path.basename(saved_path)}")
@@ -2678,19 +2691,15 @@ class SoundboardApp:
         ).pack(side=tk.LEFT, padx=5)
 
     def _show_emoji_picker(self, target_var: tk.StringVar, parent):
-        """Show emoji picker dialog with colored emojis using PyQt6."""
-        # Import the PyQt6-based emoji picker
-        from .emoji_picker import pick_emoji, PYQT_AVAILABLE
+        """Show the native Tk emoji picker (no PyQt6, no subprocess)."""
+        from .emoji_picker import pick_emoji
 
-        if not PYQT_AVAILABLE:
-            # Fallback: show a message that PyQt6 is required
-            messagebox.showinfo(
-                "PyQt6 Required", "For colored emojis, install PyQt6:\npip install PyQt6"
-            )
+        # Run the native Tk picker — modal, blocks until closed.
+        try:
+            result = pick_emoji(parent if parent is not None else self.root)
+        except Exception as e:
+            messagebox.showerror("Emoji picker error", str(e))
             return
-
-        # Run the PyQt6 picker
-        result = pick_emoji()
 
         if result is not None:
             target_var.set(result)
@@ -3752,9 +3761,7 @@ class SoundboardApp:
         status_frame.pack_propagate(False)
 
         font_xs = ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"])
-        font_xs_bold = ctk.CTkFont(
-            family=FONTS["family"], size=FONTS["size_xs"], weight="bold"
-        )
+        font_xs_bold = ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"], weight="bold")
 
         # Stream indicator (colored dot + label)
         self.status_stream_label = ctk.CTkLabel(
@@ -3854,13 +3861,9 @@ class SoundboardApp:
         # --- Stream state ---
         running = bool(self.mixer and self.mixer.running)
         if running:
-            self.status_stream_label.configure(
-                text="● Live", text_color=COLORS["green"]
-            )
+            self.status_stream_label.configure(text="● Live", text_color=COLORS["green"])
         else:
-            self.status_stream_label.configure(
-                text="○ Stopped", text_color=COLORS["text_muted"]
-            )
+            self.status_stream_label.configure(text="○ Stopped", text_color=COLORS["text_muted"])
 
         # --- Devices ---
         mic_raw = self.input_var.get() if hasattr(self, "input_var") else ""
@@ -3880,21 +3883,12 @@ class SoundboardApp:
         )
         self.status_output_label.configure(
             text=f"🔊 {out_short}",
-            text_color=(
-                COLORS["text_secondary"] if running else COLORS["text_muted"]
-            ),
+            text_color=(COLORS["text_secondary"] if running else COLORS["text_muted"]),
         )
 
         # --- PTT ---
-        ptt_enabled = bool(
-            getattr(self, "ptt_enabled_var", None)
-            and self.ptt_enabled_var.get()
-        )
-        ptt_key = (
-            self.ptt_key_var.get().strip()
-            if hasattr(self, "ptt_key_var")
-            else ""
-        )
+        ptt_enabled = bool(getattr(self, "ptt_enabled_var", None) and self.ptt_enabled_var.get())
+        ptt_key = self.ptt_key_var.get().strip() if hasattr(self, "ptt_key_var") else ""
         if ptt_enabled and ptt_key:
             self.status_ptt_label.configure(
                 text=f"🎙 PTT: {ptt_key}",
@@ -3912,9 +3906,7 @@ class SoundboardApp:
                 t = f"{h}:{m:02d}:{s:02d}"
             else:
                 t = f"{m}:{s:02d}"
-            self.status_rec_label.configure(
-                text=f"🔴 REC {t}", text_color=COLORS["red"]
-            )
+            self.status_rec_label.configure(text=f"🔴 REC {t}", text_color=COLORS["red"])
         else:
             self.status_rec_label.configure(text="")
 
@@ -6214,8 +6206,19 @@ class SoundboardApp:
             font=ctk.CTkFont(family=FONTS["family"], size=11),
         ).pack(anchor="w", pady=(4, 0))
 
-        browser_choices = ["None", "chrome", "firefox", "edge", "brave", "opera", "vivaldi", "chromium"]
-        browser_var = tk.StringVar(value=getattr(self, "_youtube_cookies_browser", "None") or "None")
+        browser_choices = [
+            "None",
+            "chrome",
+            "firefox",
+            "edge",
+            "brave",
+            "opera",
+            "vivaldi",
+            "chromium",
+        ]
+        browser_var = tk.StringVar(
+            value=getattr(self, "_youtube_cookies_browser", "None") or "None"
+        )
         browser_menu = ctk.CTkOptionMenu(
             frame,
             variable=browser_var,
@@ -6284,7 +6287,13 @@ class SoundboardApp:
 
         url_entry.bind("<Return>", lambda e: start())
 
-    def _start_youtube_download(self, url: str, cookies_path: Optional[str], target_tab_idx: int, cookies_browser: Optional[str] = None):
+    def _start_youtube_download(
+        self,
+        url: str,
+        cookies_path: Optional[str],
+        target_tab_idx: int,
+        cookies_browser: Optional[str] = None,
+    ):
         """Show progress dialog and download a single YouTube video as MP3."""
         try:
             import yt_dlp  # type: ignore
@@ -6466,7 +6475,7 @@ class SoundboardApp:
                             "Fix (pick one):\n"
                             "  1. Switch the browser dropdown to firefox and sign "
                             "into YouTube there. Firefox cookies still work.\n"
-                            "  2. Install the \"Get cookies.txt LOCALLY\" Chrome "
+                            '  2. Install the "Get cookies.txt LOCALLY" Chrome '
                             "extension, export youtube.com cookies to a .txt file, "
                             "and use the Cookies file field instead of the browser "
                             "dropdown."
@@ -6482,7 +6491,7 @@ class SoundboardApp:
                             "  2. Or switch to Firefox in the browser dropdown — "
                             "Firefox doesn't lock its cookies file.\n"
                             "  3. Or export a cookies.txt with a browser extension "
-                            "(\"Get cookies.txt LOCALLY\") and use the Cookies file "
+                            '("Get cookies.txt LOCALLY") and use the Cookies file '
                             "field instead."
                         )
                     elif "sign in to confirm your age" in low:
@@ -6612,6 +6621,11 @@ class SoundboardApp:
             "output_device": self.output_var.get() if self.output_var.get() else None,
             "auto_start": self.auto_start_var.get() if hasattr(self, "auto_start_var") else True,
             "monitor_enabled": self.monitor_var.get() if hasattr(self, "monitor_var") else True,
+            "minimize_to_tray": (
+                self.minimize_to_tray_var.get()
+                if hasattr(self, "minimize_to_tray_var")
+                else False
+            ),
             "now_playing_visible": (
                 self.now_playing_panel.is_visible if hasattr(self, "now_playing_panel") else False
             ),
@@ -6723,6 +6737,10 @@ class SoundboardApp:
             self.auto_start_var.set(auto_start)
             self.monitor_var.set(monitor_enabled)
 
+            # Load minimize-to-tray preference
+            if hasattr(self, "minimize_to_tray_var"):
+                self.minimize_to_tray_var.set(bool(config.get("minimize_to_tray", False)))
+
             # Load noise suppression settings
             ns_enabled = bool(config.get("noise_suppression", False))
             ns_strength = float(config.get("noise_suppression_strength", 85))
@@ -6754,9 +6772,7 @@ class SoundboardApp:
             if rec_dir and hasattr(self, "recording_dir_var"):
                 self.recording_dir_var.set(rec_dir)
             if hasattr(self, "recording_include_mic_var"):
-                self.recording_include_mic_var.set(
-                    bool(config.get("recording_include_mic", True))
-                )
+                self.recording_include_mic_var.set(bool(config.get("recording_include_mic", True)))
 
             if hasattr(self, "now_playing_panel"):
                 if now_playing_visible:
@@ -6821,7 +6837,34 @@ class SoundboardApp:
             self.status_var.set("Ready")
 
     def _on_close(self):
-        """Handle application close. BULLETPROOF - guarantees process termination."""
+        """Handle application close. BULLETPROOF - guarantees process termination.
+
+        If the user has enabled "minimize to tray", clicking the window's X
+        hides the window to the tray instead of quitting. The tray's own
+        Quit menu item performs the real shutdown.
+        """
+        # Honor minimize-to-tray preference (if checkbox is checked AND
+        # we're not in the middle of a real shutdown via the tray menu).
+        if (
+            getattr(self, "minimize_to_tray_var", None) is not None
+            and self.minimize_to_tray_var.get()
+            and not getattr(self, "_force_quit", False)
+        ):
+            self._minimize_to_tray()
+            return
+
+        self._real_quit()
+
+    def _real_quit(self):
+        """Actual shutdown — releases PTT, stops mixer, destroys window."""
+        # Tear down the tray icon if it's running.
+        if self._tray is not None:
+            try:
+                self._tray.stop()
+            except Exception:
+                pass
+            self._tray = None
+
         # CRITICAL: Release PTT key FIRST to prevent Windows UI freeze
         if self.mixer:
             try:
@@ -6873,6 +6916,85 @@ class SoundboardApp:
             os._exit(0)
         except Exception:
             pass
+
+    # ------------------------------------------------------------------
+    # System tray
+    # ------------------------------------------------------------------
+
+    def _on_toggle_tray_setting(self):
+        """Persist the minimize-to-tray preference."""
+        self._save_config()
+
+    def _minimize_to_tray(self):
+        """Hide the main window and show a tray icon."""
+        # Lazy-create the tray on first hide.
+        if self._tray is None:
+            try:
+                from .tray import SystemTray, is_available
+
+                if not is_available():
+                    # pystray missing — fall back to normal close.
+                    self._real_quit()
+                    return
+
+                self._tray = SystemTray(
+                    on_show=self._tray_request_show,
+                    on_quit=self._tray_request_quit,
+                    title=UI["window_title"],
+                )
+                self._tray.start()
+            except Exception:
+                # Tray failed for any reason — just quit normally.
+                self._real_quit()
+                return
+
+        # Hide the window.
+        try:
+            self.root.withdraw()
+        except Exception:
+            pass
+        self._tray_hidden = True
+
+        # First-time hint so the user knows where the app went.
+        if not getattr(self, "_tray_first_hide_notified", False):
+            try:
+                if self._tray is not None:
+                    self._tray.show_notification(
+                        "The soundboard is still running in the system tray. "
+                        "Right-click the icon to restore or quit."
+                    )
+            except Exception:
+                pass
+            self._tray_first_hide_notified = True
+
+    def _tray_request_show(self):
+        """Tray menu 'Show' clicked — schedule restore on the Tk thread."""
+        try:
+            self.root.after(0, self._restore_from_tray)
+        except Exception:
+            pass
+
+    def _tray_request_quit(self):
+        """Tray menu 'Quit' clicked — schedule a real shutdown on the Tk thread."""
+        self._force_quit = True
+        try:
+            self.root.after(0, self._real_quit)
+        except Exception:
+            # If the Tk loop is already gone, just exit hard.
+            try:
+                os._exit(0)
+            except Exception:
+                pass
+
+    def _restore_from_tray(self):
+        """Restore the main window from a tray-hidden state."""
+        try:
+            self.root.deiconify()
+            self.root.lift()
+            self.root.focus_force()
+        except Exception:
+            pass
+        self._tray_hidden = False
 
     def run(self):
         """Start the application main loop."""

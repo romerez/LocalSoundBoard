@@ -1,0 +1,154 @@
+"""Color emoji rendering for Tkinter.
+
+Tk's built-in `create_text` / `tk.Label` can render emoji glyphs but only
+with platform-default monochrome fallback (the slot widget's Canvas was
+showing emojis in white-on-color, not their real colored form). To get
+true colored emoji on the slot grid AND in the picker, we rasterise the
+glyph through Pillow using the COLR/CPAL `seguiemj.ttf` font that ships
+with Windows, then wrap the result as a `tk.PhotoImage` (via PIL's
+`ImageTk`) and cache it.
+
+Notes:
+* `seguiemj.ttf` is a bitmap-style color font; Pillow can render it when
+  `embedded_color=True` is passed and the build of FreeType in use
+  supports color tables (Pillow >= 9.1 does).
+* The font's bitmaps are baked at large sizes (109px), so we render at a
+  large size and then resize to the requested target with LANCZOS.
+* All operations are done lazily and cached by `(emoji, size)`.
+"""
+
+from __future__ import annotations
+
+import os
+from typing import Dict, Optional, Tuple
+
+try:
+    from PIL import Image, ImageDraw, ImageFont, ImageTk
+
+    _PIL_OK = True
+except Exception:
+    _PIL_OK = False
+
+
+# ---------------------------------------------------------------------------
+# Font discovery
+# ---------------------------------------------------------------------------
+
+_FONT_CANDIDATES = (
+    r"C:\Windows\Fonts\seguiemj.ttf",
+    "seguiemj.ttf",  # PIL search path
+)
+
+# Native bitmap size of seguiemj — render at this then downscale.
+_NATIVE_SIZE = 109
+
+# Cache: (emoji, size) -> ImageTk.PhotoImage. Must be kept alive as long
+# as Tk references the image, so we hold strong refs here.
+_image_cache: Dict[Tuple[str, int], "ImageTk.PhotoImage"] = {}
+_pil_cache: Dict[Tuple[str, int], "Image.Image"] = {}
+_font: Optional["ImageFont.FreeTypeFont"] = None
+_font_failed: bool = False
+
+
+def is_available() -> bool:
+    """Return True if PIL + the color emoji font are usable."""
+    if not _PIL_OK:
+        return False
+    return _get_font() is not None
+
+
+def _get_font() -> Optional["ImageFont.FreeTypeFont"]:
+    global _font, _font_failed
+    if _font is not None:
+        return _font
+    if _font_failed or not _PIL_OK:
+        return None
+    for path in _FONT_CANDIDATES:
+        try:
+            _font = ImageFont.truetype(path, _NATIVE_SIZE)
+            return _font
+        except Exception:
+            continue
+    _font_failed = True
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Rendering
+# ---------------------------------------------------------------------------
+
+
+def _render_pil(emoji: str, size: int) -> Optional["Image.Image"]:
+    """Render emoji to a square RGBA PIL image of the requested size."""
+    key = (emoji, size)
+    if key in _pil_cache:
+        return _pil_cache[key]
+
+    font = _get_font()
+    if font is None:
+        return None
+
+    try:
+        # Render at native size (much higher quality than scaling the font
+        # itself, since seguiemj's bitmaps live at this size).
+        big = Image.new("RGBA", (_NATIVE_SIZE + 16, _NATIVE_SIZE + 16), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(big)
+        try:
+            draw.text((8, 0), emoji, font=font, embedded_color=True)
+        except TypeError:
+            # Older Pillow — fall back to monochrome.
+            draw.text((8, 0), emoji, font=font, fill=(255, 255, 255, 255))
+
+        # Crop tight to non-empty bbox so different emoji are visually centred.
+        bbox = big.getbbox()
+        if bbox:
+            big = big.crop(bbox)
+
+        # Pad to square so the resize keeps aspect intact.
+        w, h = big.size
+        side = max(w, h)
+        sq = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+        sq.paste(big, ((side - w) // 2, (side - h) // 2), big)
+
+        if size != side:
+            sq = sq.resize((size, size), Image.LANCZOS)
+
+        _pil_cache[key] = sq
+        return sq
+    except Exception:
+        return None
+
+
+def get_tk_image(emoji: str, size: int = 32) -> Optional["ImageTk.PhotoImage"]:
+    """Return a cached `ImageTk.PhotoImage` for the given emoji and size.
+
+    Returns None if PIL or the emoji font are unavailable, or if the glyph
+    cannot be rasterised. The returned object is owned by the cache; do
+    not let the caller's ref drop without keeping it alive elsewhere — Tk
+    will GC the underlying photo otherwise.
+    """
+    if not emoji or not _PIL_OK:
+        return None
+
+    key = (emoji, size)
+    cached = _image_cache.get(key)
+    if cached is not None:
+        return cached
+
+    pil_img = _render_pil(emoji, size)
+    if pil_img is None:
+        return None
+
+    try:
+        photo = ImageTk.PhotoImage(pil_img)
+    except Exception:
+        return None
+
+    _image_cache[key] = photo
+    return photo
+
+
+def clear_cache() -> None:
+    """Drop all cached PhotoImages (used when shutting down)."""
+    _image_cache.clear()
+    _pil_cache.clear()

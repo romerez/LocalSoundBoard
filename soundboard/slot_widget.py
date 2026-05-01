@@ -161,6 +161,7 @@ class SlotWidget(tk.Canvas):
         self._image_tk: Any = None  # Resolved Tk image (cached)
         self._font: Any = ("Segoe UI Emoji", 11)
         self._emoji: str = ""
+        self._emoji_img: Any = None  # strong ref to current emoji PhotoImage
         self._progress: float = 0.0
         self._progress_color: str = COLORS["playing"]
         self._stop_visible: bool = False
@@ -456,17 +457,49 @@ class SlotWidget(tk.Canvas):
                     tags="text",
                 )
 
-        # Emoji top-left
+        # Emoji top-left — try rendering as a true-color image first,
+        # fall back to Tk's monochrome glyph if PIL/the font is unavailable.
         if self._emoji:
-            self.create_text(
-                10,
-                10,
-                text=self._emoji,
-                fill=COLORS["text_primary"],
-                font=("Segoe UI Emoji", 14),
-                anchor="nw",
-                tags="emoji",
-            )
+            emoji_img = None
+            try:
+                from . import emoji_render as _er
+
+                emoji_img = _er.get_tk_image(self._emoji, 22)
+            except Exception:
+                emoji_img = None
+            if emoji_img is not None:
+                # Stash a ref on the widget too — the renderer cache holds
+                # the canonical reference but this also protects against
+                # accidental cache flushes mid-frame.
+                self._emoji_img = emoji_img
+                try:
+                    self.create_image(
+                        10,
+                        10,
+                        image=emoji_img,
+                        anchor="nw",
+                        tags="emoji",
+                    )
+                except tk.TclError:
+                    self.create_text(
+                        10,
+                        10,
+                        text=self._emoji,
+                        fill=COLORS["text_primary"],
+                        font=("Segoe UI Emoji", 14),
+                        anchor="nw",
+                        tags="emoji",
+                    )
+            else:
+                self.create_text(
+                    10,
+                    10,
+                    text=self._emoji,
+                    fill=COLORS["text_primary"],
+                    font=("Segoe UI Emoji", 14),
+                    anchor="nw",
+                    tags="emoji",
+                )
 
         # Progress bar + overlays at the bottom
         self._redraw_progress()

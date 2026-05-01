@@ -121,6 +121,7 @@ Replace Discord's built-in soundboard with a standalone, local solution that:
 | `windnd` | >=0.0.7 | Windows drag-and-drop support for importing images onto sound slots from file explorer. |
 | `emoji-data-python` | >=1.6.0 | Emoji database with categories. Provides 1800+ emojis organized by category for emoji picker. |
 | `colour` | >=0.1.5 | Color manipulation utilities. Lighten, darken, saturate, generate gradients, complementary colors. |
+| `pystray` | >=0.19.5 | System tray icon for minimize-to-tray. Runs the platform tray loop on a background thread; callbacks are marshalled back to the Tk thread via `root.after(0, ...)`. |
 | `soundcard` | >=0.4.6 | WASAPI loopback recording on Windows. Used by the call recorder to capture system playback (i.e. other people on a Discord call). Stock `sounddevice 0.5.5` does NOT support `WasapiSettings(loopback=True)` — soundcard does it natively via `get_microphone(speaker.name, include_loopback=True)`. |
 | `yt-dlp` | >=2024.1.0 | YouTube/audio downloader for the in-app YouTube → MP3 button. |
 | `static-ffmpeg` | >=2.5 | Bundles ffmpeg + ffprobe for yt-dlp's MP3 postprocessor. |
@@ -159,6 +160,9 @@ LocalSoundBoardProject/
 │   ├── audio.py                # Audio engine
 │   ├── editor.py               # Sound trimmer
 │   ├── slot_widget.py          # Single-Canvas slot widget + proxy classes (replaces 7 CTk widgets/slot)
+│   ├── emoji_render.py         # PIL-based color emoji rasteriser (seguiemj.ttf -> ImageTk.PhotoImage cache)
+│   ├── emoji_picker.py         # Native Tk modal emoji picker (replaced old PyQt6 subprocess version)
+│   ├── tray.py                 # System tray icon (pystray) for minimize-to-tray
 │   └── gui.py                  # Main UI
 ├── sounds/                     # Sound file storage (auto-created)
 ├── images/                     # Custom images (auto-created)
@@ -435,6 +439,9 @@ Example: `airhorn_8f3a2b1c.mp3`
 - [x] Status bar with live indicators (● Live/○ Stopped, mic + output device name, PTT key, 🔴 REC m:ss)
 - [x] YouTube downloader supports live browser cookies (`cookiesfrombrowser`) for age-restricted videos
 - [x] Friendly YouTube error messages for common failures (DPAPI decryption / Chrome cookie lock / age-gate)
+- [x] System tray minimization (configurable via "Minimize to tray" checkbox in audio options; tray menu offers Show / Quit)
+- [x] Native Tk emoji picker (replaces unreliable PyQt6 subprocess approach)
+- [x] Colored emoji rendering on slot buttons + emoji picker (PIL rasterises `seguiemj.ttf` with `embedded_color=True` and caches as `ImageTk.PhotoImage`)
 
 ---
 
@@ -442,8 +449,6 @@ Example: `airhorn_8f3a2b1c.mp3`
 
 ### High Priority
 - [ ] Fix volume above 100% not making sounds louder (soft clipping needs work)
-- [ ] Fix emoji picker (PyQt6 subprocess approach has issues - freezing, venv conflicts, etc.)
-- [ ] Emoji display on slot buttons (Tkinter can't render colored emojis - need alternative approach)
 
 ### Medium Priority
 - [ ] Drag-and-drop sound file import (from file explorer)
@@ -453,7 +458,6 @@ Example: `airhorn_8f3a2b1c.mp3`
 
 ### Low Priority
 - [ ] Import/export config profiles (sounds, images, tabs)
-- [ ] System tray minimization
 - [ ] Auto-start with Windows
 - [ ] Discord Rich Presence
 - [ ] Emoji search by description in picker
@@ -1031,7 +1035,8 @@ edit_sound_file(
   "now_playing_visible": false,
   "now_playing_side": "right",
   "custom_groups": ["MyCustomGroup"],
-  "grid_columns": 4
+  "grid_columns": 4,
+  "minimize_to_tray": false
 }
 ```
 
@@ -1279,6 +1284,8 @@ When asked to add a feature:
 | Tab buttons unresponsive while sound plays | Slot drag handlers don't properly isolate their events from other widgets | Add `click_in_progress` flag set on `_on_drag_start`, check it in `_on_drag_end`; clear flag on tab switch; return `"break"` from all drag handlers |
 | Stop button needs double-click | Stop button used `<Button-1>` binding, hides itself mid-click causing release event to land on slot button | Use standard `command=` attribute for tk.Button; add `stop_button_clicked` flag to block slot reactions for 100ms after stop; bind both `<ButtonPress-1>` and `<ButtonRelease-1>` to return `"break"` |
 | Hotkey playback doesn't show stop button | `_play_slot_from_tab` didn't pack the stop button like `_play_slot` does | Add stop button packing logic to `_play_slot_from_tab` in the `update_ui` lambda |
+| Tk Canvas can't render colored emoji on Windows | `Canvas.create_text` with "Segoe UI Emoji" only paints the monochrome glyph layer — COLR/CPAL color tables are ignored | Pre-rasterise via Pillow: `ImageFont.truetype("seguiemj.ttf", 109)` + `ImageDraw.text(..., embedded_color=True)` → RGBA `Image` → `ImageTk.PhotoImage`. Cache by `(emoji, size)`. Resize the **rasterised image** with LANCZOS, never the font. Both the renderer cache AND the consuming widget must hold strong refs (Tk silently GCs PhotoImages with no Python ref) |
+| pystray callbacks crash or do nothing when touching Tk | pystray runs its icon loop on its own daemon thread; Tk widgets are NOT thread-safe | Always marshal back via `root.after(0, callback)`. Tray "Quit" must set a `_force_quit` flag BEFORE scheduling shutdown — otherwise the `WM_DELETE_WINDOW` handler sees `minimize_to_tray=True` and re-hides the window instead of quitting |
 
 ### Performance (CTk + many widgets)
 

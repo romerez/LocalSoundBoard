@@ -91,7 +91,7 @@
           "file_path": "sounds\\bloody-fuck-you-bloody_Jzdok0G_15502481.wav",
           "hotkey": null,
           "volume": 0.21,
-          "emoji": null,
+          "emoji": "⁉️",
           "image_path": "images\\maxresdefault_54aee3d9.jpg",
           "color": "#1ABC9C",
           "speed": 1.0,
@@ -514,7 +514,7 @@
     },
     {
       "name": "פרלמנט",
-      "emoji": null,
+      "emoji": "🤢",
       "slots": {
         "0": {
           "name": "תבוא אלי הבייתה ותביא לי ביד",
@@ -1493,13 +1493,14 @@
       }
     }
   ],
-  "current_tab": 1,
+  "current_tab": 8,
   "ptt_enabled": true,
   "ptt_key": "f9",
   "input_device": "4: Microphone (HyperX Quadcast)",
   "output_device": "13: CABLE In 16ch (VB-Audio Virtual",
   "auto_start": true,
   "monitor_enabled": true,
+  "minimize_to_tray": true,
   "now_playing_visible": true,
   "master_volume": 82.0,
   "custom_groups": [

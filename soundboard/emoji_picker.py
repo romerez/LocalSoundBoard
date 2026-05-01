@@ -1,703 +1,435 @@
+"""Native Tkinter emoji picker with true-color emoji rendering.
+
+This replaces the previous PyQt6-subprocess-based picker, which had
+recurring problems: subprocess startup latency, venv-vs-system-Python
+mismatches, frozen-EXE failures, and occasional event-loop deadlocks
+on the parent Tk window.
+
+The new picker is a plain `tk.Toplevel` (so no Qt at all) that uses
+`soundboard.emoji_render` to rasterise each glyph through Pillow +
+`seguiemj.ttf`, then displays the resulting PhotoImages on `tk.Button`
+widgets. A category bar sits at the top, plus Clear / Cancel.
+
+Public API (kept compatible with the old module):
+    pick_emoji(parent=None) -> Optional[str]
+        Returns the chosen emoji ("" if cleared, None if cancelled).
+    PYQT_AVAILABLE: bool   # legacy flag, now always True (picker works
+                            # without PyQt6).
 """
-PyQt6-based emoji picker with colored emoji support.
 
-This module provides a standalone emoji picker dialog that renders
-colored emojis properly on Windows. It can be called from the main
-Tkinter application via subprocess to avoid event loop conflicts.
-"""
+from __future__ import annotations
 
-import sys
-import subprocess
-import os
-from typing import Optional, cast
+import tkinter as tk
+from typing import Dict, List, Optional, Tuple
 
-# Try to import PyQt6
-try:
-    from PyQt6.QtWidgets import (
-        QApplication,
-        QDialog,
-        QVBoxLayout,
-        QHBoxLayout,
-        QGridLayout,
-        QScrollArea,
-        QWidget,
-        QPushButton,
-        QLabel,
-        QFrame,
-    )
-    from PyQt6.QtCore import Qt, QSize
-    from PyQt6.QtGui import QFont, QColor, QPalette
+from . import emoji_render
 
-    PYQT_AVAILABLE = True
-except ImportError:
-    PYQT_AVAILABLE = False
+# Legacy compat flag — gui.py checks this; the new picker has no Qt
+# dependency so we always advertise "available" as long as Tk is.
+PYQT_AVAILABLE = True
 
 
-# Discord-style colors
-COLORS = {
-    "bg_dark": "#1e1f22",
-    "bg_medium": "#2b2d31",
-    "bg_light": "#383a40",
-    "text_primary": "#f2f3f5",
-    "text_muted": "#949ba4",
-    "blurple": "#5865f2",
-    "red": "#da373c",
-    "green": "#23a55a",
-}
+# ---------------------------------------------------------------------------
+# Emoji set, grouped by category for tabbing.
+# ---------------------------------------------------------------------------
 
-# Full emoji set
-EMOJIS = [
-    # Faces & Emotions
-    "😀",
-    "😃",
-    "😄",
-    "😁",
-    "😆",
-    "😅",
-    "🤣",
-    "😂",
-    "🙂",
-    "😊",
-    "😇",
-    "🥰",
-    "😍",
-    "🤩",
-    "😘",
-    "😗",
-    "😚",
-    "😙",
-    "🥲",
-    "😋",
-    "😛",
-    "😜",
-    "🤪",
-    "😝",
-    "🤑",
-    "🤗",
-    "🤭",
-    "🤫",
-    "🤔",
-    "🤐",
-    "🤨",
-    "😐",
-    "😑",
-    "😶",
-    "😏",
-    "😒",
-    "🙄",
-    "😬",
-    "😮‍💨",
-    "🤥",
-    "😌",
-    "😔",
-    "😪",
-    "🤤",
-    "😴",
-    "😷",
-    "🤒",
-    "🤕",
-    "🤢",
-    "🤮",
-    "🤧",
-    "🥵",
-    "🥶",
-    "🥴",
-    "😵",
-    "🤯",
-    "🤠",
-    "🥳",
-    "🥸",
-    "😎",
-    "🤓",
-    "🧐",
-    "😕",
-    "😟",
-    "🙁",
-    "😮",
-    "😯",
-    "😲",
-    "😳",
-    "🥺",
-    "😦",
-    "😧",
-    "😨",
-    "😰",
-    "😥",
-    "😢",
-    "😭",
-    "😱",
-    "😖",
-    "😣",
-    "😞",
-    "😓",
-    "😩",
-    "😫",
-    "🥱",
-    "😤",
-    "😡",
-    "😠",
-    "🤬",
-    "😈",
-    "👿",
-    "💀",
-    "☠️",
-    "💩",
-    "🤡",
-    "👹",
-    "👺",
-    "👻",
-    "👽",
-    "👾",
-    # Gestures & Body
-    "💪",
-    "👍",
-    "👎",
-    "👊",
-    "✊",
-    "🤛",
-    "🤜",
-    "👏",
-    "🙌",
-    "👐",
-    "🤲",
-    "🤝",
-    "🙏",
-    "✌️",
-    "🤞",
-    "🤟",
-    "🤘",
-    "🤙",
-    "👌",
-    "🤌",
-    "👈",
-    "👉",
-    "👆",
-    "👇",
-    "☝️",
-    "✋",
-    "🤚",
-    "🖐️",
-    "🖖",
-    "👋",
-    "🤏",
-    "✍️",
-    "🦾",
-    "🦿",
-    "🦵",
-    "🦶",
-    "👂",
-    "🦻",
-    "👃",
-    "🧠",
-    # Hearts & Love
-    "❤️",
-    "🧡",
-    "💛",
-    "💚",
-    "💙",
-    "💜",
-    "🖤",
-    "🤍",
-    "🤎",
-    "💔",
-    "❣️",
-    "💕",
-    "💞",
-    "💓",
-    "💗",
-    "💖",
-    "💘",
-    "💝",
-    "💟",
-    "♥️",
-    # Music & Sound
-    "🎵",
-    "🎶",
-    "🎤",
-    "🎧",
-    "🎷",
-    "🎸",
-    "🎹",
-    "🎺",
-    "🎻",
-    "🥁",
-    "🔔",
-    "🔕",
-    "🔊",
-    "🔉",
-    "🔈",
-    "🔇",
-    "📢",
-    "📣",
-    "💬",
-    "💭",
-    # Activities & Sports
-    "⚽",
-    "🏀",
-    "🏈",
-    "⚾",
-    "🥎",
-    "🎾",
-    "🏐",
-    "🏉",
-    "🥏",
-    "🎱",
-    "🏓",
-    "🏸",
-    "🏒",
-    "🏑",
-    "🥍",
-    "🏏",
-    "🥅",
-    "⛳",
-    "🏹",
-    "🎣",
-    "🎮",
-    "🕹️",
-    "🎲",
-    "🧩",
-    "♟️",
-    "🎯",
-    "🎳",
-    "🎰",
-    "🃏",
-    "🀄",
-    # Stars & Effects
-    "⭐",
-    "🌟",
-    "✨",
-    "💫",
-    "🔥",
-    "💥",
-    "💢",
-    "💦",
-    "💨",
-    "🕳️",
-    "💣",
-    "💬",
-    "👁️‍🗨️",
-    "🗨️",
-    "🗯️",
-    "💭",
-    "💤",
-    "🎉",
-    "🎊",
-    "🎈",
-    # Animals
-    "🐶",
-    "🐱",
-    "🐭",
-    "🐹",
-    "🐰",
-    "🦊",
-    "🐻",
-    "🐼",
-    "🐨",
-    "🐯",
-    "🦁",
-    "🐮",
-    "🐷",
-    "🐸",
-    "🐵",
-    "🐔",
-    "🐧",
-    "🐦",
-    "🐤",
-    "🦆",
-    "🦅",
-    "🦉",
-    "🦇",
-    "🐺",
-    "🐗",
-    "🐴",
-    "🦄",
-    "🐝",
-    "🐛",
-    "🦋",
-    "🐌",
-    "🐞",
-    "🐜",
-    "🦟",
-    "🦗",
-    "🕷️",
-    "🦂",
-    "🐢",
-    "🐍",
-    "🦎",
-    # Food & Drink
-    "🍎",
-    "🍐",
-    "🍊",
-    "🍋",
-    "🍌",
-    "🍉",
-    "🍇",
-    "🍓",
-    "🫐",
-    "🍈",
-    "🍒",
-    "🍑",
-    "🥭",
-    "🍍",
-    "🥥",
-    "🥝",
-    "🍅",
-    "🥑",
-    "🍆",
-    "🌽",
-    "🍕",
-    "🍔",
-    "🍟",
-    "🌭",
-    "🍿",
-    "🧂",
-    "🥓",
-    "🥚",
-    "🍳",
-    "🧇",
-    "☕",
-    "🍵",
-    "🧃",
-    "🥤",
-    "🍶",
-    "🍺",
-    "🍻",
-    "🥂",
-    "🍷",
-    "🍸",
-    # Symbols & Signs
-    "✅",
-    "❌",
-    "⭕",
-    "🚫",
-    "⛔",
-    "❓",
-    "❗",
-    "‼️",
-    "⁉️",
-    "💯",
-    "🔴",
-    "🟠",
-    "🟡",
-    "🟢",
-    "🔵",
-    "🟣",
-    "🟤",
-    "⚫",
-    "⚪",
-    "🟥",
-    "▶️",
-    "⏸️",
-    "⏹️",
-    "⏺️",
-    "⏭️",
-    "⏮️",
-    "⏩",
-    "⏪",
-    "🔀",
-    "🔁",
-    "🔂",
-    "🔄",
-    "🔃",
-    "⬆️",
-    "⬇️",
-    "⬅️",
-    "➡️",
-    "↗️",
-    "↘️",
-    "↙️",
-    # Objects
-    "🔑",
-    "🗝️",
-    "🔨",
-    "🪓",
-    "⛏️",
-    "🔧",
-    "🔩",
-    "🗡️",
-    "⚔️",
-    "🛡️",
-    "💎",
-    "💰",
-    "💵",
-    "💴",
-    "💶",
-    "💷",
-    "💳",
-    "🏆",
-    "🥇",
-    "🥈",
-    "🥉",
-    "🎖️",
-    "🏅",
-    "📱",
-    "💻",
-    "🖥️",
-    "🖨️",
-    "⌨️",
-    "🖱️",
-    "💿",
-    "📷",
-    "📸",
-    "📹",
-    "🎥",
-    "📽️",
-    "🎬",
-    "📺",
-    "📻",
-    "🎙️",
-    "🔦",
+EMOJI_CATEGORIES: List[Tuple[str, List[str]]] = [
+    (
+        "😀 Faces",
+        [
+            "😀", "😃", "😄", "😁", "😆", "😅", "🤣", "😂", "🙂", "😊",
+            "😇", "🥰", "😍", "🤩", "😘", "😗", "😚", "😙", "🥲", "😋",
+            "😛", "😜", "🤪", "😝", "🤑", "🤗", "🤭", "🤫", "🤔", "🤐",
+            "🤨", "😐", "😑", "😶", "😏", "😒", "🙄", "😬", "🤥", "😌",
+            "😔", "😪", "🤤", "😴", "😷", "🤒", "🤕", "🤢", "🤮", "🥵",
+            "🥶", "🥴", "😵", "🤯", "🤠", "🥳", "🥸", "😎", "🤓", "🧐",
+            "😕", "😟", "🙁", "😮", "😯", "😲", "😳", "🥺", "😦", "😧",
+            "😨", "😰", "😥", "😢", "😭", "😱", "😖", "😣", "😞", "😓",
+            "😩", "😫", "🥱", "😤", "😡", "😠", "🤬", "😈", "👿", "💀",
+            "☠️", "💩", "🤡", "👹", "👺", "👻", "👽", "👾", "🤖", "😺",
+        ],
+    ),
+    (
+        "👍 Gestures",
+        [
+            "👋", "🤚", "🖐", "✋", "🖖", "👌", "🤌", "🤏", "✌️", "🤞",
+            "🤟", "🤘", "🤙", "👈", "👉", "👆", "🖕", "👇", "☝️", "👍",
+            "👎", "✊", "👊", "🤛", "🤜", "👏", "🙌", "👐", "🤲", "🤝",
+            "🙏", "✍️", "💅", "🤳", "💪", "🦾", "🦵", "🦿", "🦶", "👂",
+            "🦻", "👃", "🧠", "🫀", "🫁", "🦷", "🦴", "👀", "👁", "👅",
+            "👄", "💋", "🩸",
+        ],
+    ),
+    (
+        "🐶 Animals",
+        [
+            "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯",
+            "🦁", "🐮", "🐷", "🐸", "🐵", "🙈", "🙉", "🙊", "🐒", "🐔",
+            "🐧", "🐦", "🐤", "🐣", "🐥", "🦆", "🦅", "🦉", "🦇", "🐺",
+            "🐗", "🐴", "🦄", "🐝", "🐛", "🦋", "🐌", "🐞", "🐜", "🦟",
+            "🦗", "🕷", "🦂", "🐢", "🐍", "🦎", "🦖", "🦕", "🐙", "🦑",
+            "🦐", "🦞", "🦀", "🐡", "🐠", "🐟", "🐬", "🐳", "🐋", "🦈",
+        ],
+    ),
+    (
+        "🍔 Food",
+        [
+            "🍏", "🍎", "🍐", "🍊", "🍋", "🍌", "🍉", "🍇", "🍓", "🫐",
+            "🍈", "🍒", "🍑", "🥭", "🍍", "🥥", "🥝", "🍅", "🍆", "🥑",
+            "🥦", "🥬", "🥒", "🌶", "🌽", "🥕", "🧄", "🧅", "🥔", "🍠",
+            "🥐", "🥯", "🍞", "🥖", "🥨", "🧀", "🥚", "🍳", "🧈", "🥞",
+            "🧇", "🥓", "🥩", "🍗", "🍖", "🌭", "🍔", "🍟", "🍕", "🥪",
+            "🥙", "🧆", "🌮", "🌯", "🥗", "🥘", "🥫", "🍝", "🍜", "🍲",
+            "🍛", "🍣", "🍱", "🥟", "🦪", "🍤", "🍙", "🍚", "🍘", "🍥",
+            "🍦", "🍧", "🍨", "🍩", "🍪", "🎂", "🍰", "🧁", "🥧", "🍫",
+            "🍬", "🍭", "🍮", "🍯", "🍼", "🥛", "☕", "🍵", "🍶", "🍾",
+            "🍷", "🍸", "🍹", "🍺", "🍻", "🥂", "🥃", "🥤", "🧃", "🧉",
+        ],
+    ),
+    (
+        "⚽ Activities",
+        [
+            "⚽", "🏀", "🏈", "⚾", "🥎", "🎾", "🏐", "🏉", "🥏", "🎱",
+            "🪀", "🏓", "🏸", "🏒", "🏑", "🥍", "🏏", "🥅", "⛳", "🪁",
+            "🏹", "🎣", "🤿", "🥊", "🥋", "🎽", "🛹", "🛼", "🛷", "⛸",
+            "🥌", "🎿", "⛷", "🏂", "🪂", "🏋️", "🤼", "🤸", "⛹️", "🤺",
+            "🤾", "🏌️", "🏇", "🧘", "🏄", "🏊", "🤽", "🚣", "🧗", "🚵",
+            "🚴", "🏆", "🥇", "🥈", "🥉", "🏅", "🎖", "🏵", "🎗", "🎫",
+            "🎟", "🎪", "🤹", "🎭", "🩰", "🎨", "🎬", "🎤", "🎧", "🎼",
+            "🎹", "🥁", "🪘", "🎷", "🎺", "🪗", "🎸", "🪕", "🎻", "🎲",
+            "♟", "🎯", "🎳", "🎮", "🎰", "🧩",
+        ],
+    ),
+    (
+        "❤️ Symbols",
+        [
+            "❤️", "🧡", "💛", "💚", "💙", "💜", "🖤", "🤍", "🤎", "💔",
+            "❣️", "💕", "💞", "💓", "💗", "💖", "💘", "💝", "💟", "✨",
+            "⭐", "🌟", "💫", "💥", "🔥", "💧", "🌊", "💯", "💢", "💤",
+            "✅", "❌", "⭕", "🛑", "⛔", "🚫", "❗", "❕", "❓", "❔",
+            "‼️", "⁉️", "♻️", "🆕", "🆗", "🆙", "🆒", "🔔", "🔕", "🔆",
+            "🔅", "📶", "📵", "🔞", "0️⃣", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣",
+            "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟",
+        ],
+    ),
+    (
+        "🎵 Objects",
+        [
+            "🎶", "🎵", "🎙️", "🎚", "🎛", "🎤", "🎧", "📻", "🎷", "🎸",
+            "🎹", "🎺", "🎻", "🥁", "📞", "☎️", "💻", "🖥", "🖨", "⌨️",
+            "🖱", "💽", "💾", "💿", "📀", "🎥", "🎞", "📽", "📺", "📷",
+            "📸", "📹", "📼", "🔍", "🔎", "🕯", "💡", "🔦", "📔", "📕",
+            "📖", "📗", "📘", "📙", "📚", "📒", "📃", "📜", "📄", "📰",
+            "📑", "🔖", "🏷", "💰", "💵", "💸", "💳", "✉️", "📧", "📦",
+            "✏️", "✒️", "🖋", "🖊", "📝", "💼", "📁", "📂", "📅", "📆",
+            "📈", "📉", "📊", "📋", "📌", "📍", "📎", "📏", "📐", "✂️",
+            "🗑", "🔒", "🔓", "🔑", "🔨", "🛠", "⚙️", "🔧", "🔩", "⛓",
+            "🧰", "🧲", "🧪", "🔬", "🔭", "📡", "💉", "💊", "🚪", "🛏",
+            "🛋", "🪑", "🚽", "🚿", "🛁", "🧴", "🧹", "🧺", "🧻", "🧼",
+            "🧽", "🧯", "🛒",
+        ],
+    ),
 ]
 
 
-# Only define PyQt6 classes if available
-if PYQT_AVAILABLE:
+# ---------------------------------------------------------------------------
+# Picker dialog
+# ---------------------------------------------------------------------------
 
-    class EmojiButton(QPushButton):
-        """Custom button for emoji display with hover effects."""
 
-        def __init__(self, emoji: str, parent=None):
-            super().__init__(emoji, parent)
-            self.emoji = emoji
-            self.setFixedSize(44, 44)
-            self.setFont(QFont("Segoe UI Emoji", 22))
-            self.setCursor(Qt.CursorShape.PointingHandCursor)
-            self._update_style(False)
+# Discord-ish dark palette so the dialog matches the rest of the UI.
+_BG_DARK = "#1e1f22"
+_BG_MEDIUM = "#2b2d31"
+_BG_LIGHT = "#383a40"
+_BG_HOVER = "#42454d"
+_TEXT = "#f2f3f5"
+_BLURPLE = "#5865f2"
+_RED = "#da373c"
 
-        def _update_style(self, hovered: bool):
-            bg = COLORS["bg_light"] if hovered else COLORS["bg_dark"]
-            self.setStyleSheet(
-                f"""
-                QPushButton {{
-                    background-color: {bg};
-                    border: none;
-                    border-radius: 6px;
-                    padding: 2px;
-                }}
-            """
+
+class _EmojiPickerDialog:
+    """Modal Tk emoji picker. Use `pick_emoji(parent)` instead of this directly."""
+
+    GRID_COLS = 10
+    BUTTON_SIZE = 36  # pixels per emoji button (square-ish)
+    EMOJI_PIXELS = 26  # rasterised emoji image side length
+
+    def __init__(self, parent: Optional[tk.Misc] = None) -> None:
+        # Stand-alone Tk root if no parent provided (e.g. tests).
+        self._owns_root = False
+        if parent is None:
+            self._root = tk.Tk()
+            self._owns_root = True
+            parent = self._root
+        else:
+            self._root = parent.winfo_toplevel()  # type: ignore[union-attr]
+
+        self.result: Optional[str] = None
+        self._image_refs: List = []  # keep PhotoImages alive
+
+        self.win = tk.Toplevel(parent)
+        self.win.title("Choose Emoji")
+        self.win.configure(bg=_BG_DARK)
+        self.win.geometry("520x540")
+        self.win.minsize(420, 380)
+        try:
+            self.win.transient(parent.winfo_toplevel())  # type: ignore[union-attr]
+        except Exception:
+            pass
+        self.win.grab_set()
+        self.win.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+        self._cat_buttons: List[tk.Button] = []
+        self._build_ui()
+
+        # Render first category up front; switching renders on demand.
+        self._show_category(0)
+
+    # ------------------------------------------------------------------
+    # UI
+    # ------------------------------------------------------------------
+
+    def _build_ui(self) -> None:
+        # Header
+        header = tk.Frame(self.win, bg=_BG_DARK)
+        header.pack(fill=tk.X, padx=12, pady=(12, 6))
+        tk.Label(
+            header,
+            text="Select an emoji",
+            bg=_BG_DARK,
+            fg=_TEXT,
+            font=("Segoe UI", 12, "bold"),
+        ).pack(side=tk.LEFT)
+
+        # Category tabs
+        cat_bar = tk.Frame(self.win, bg=_BG_DARK)
+        cat_bar.pack(fill=tk.X, padx=12, pady=(0, 6))
+        for i, (label, _emojis) in enumerate(EMOJI_CATEGORIES):
+            btn = tk.Button(
+                cat_bar,
+                text=label,
+                bg=_BG_MEDIUM,
+                fg=_TEXT,
+                activebackground=_BG_HOVER,
+                activeforeground=_TEXT,
+                bd=0,
+                relief="flat",
+                font=("Segoe UI Emoji", 9),
+                padx=8,
+                pady=3,
+                cursor="hand2",
+                command=lambda idx=i: self._show_category(idx),
             )
+            btn.pack(side=tk.LEFT, padx=2)
+            self._cat_buttons.append(btn)
 
-        def enterEvent(self, event):
-            self._update_style(True)
-            super().enterEvent(event)
+        # Scrollable grid area
+        body = tk.Frame(
+            self.win, bg=_BG_DARK, highlightthickness=1, highlightbackground=_BG_MEDIUM
+        )
+        body.pack(fill=tk.BOTH, expand=True, padx=12, pady=4)
 
-        def leaveEvent(self, event):
-            self._update_style(False)
-            super().leaveEvent(event)
+        self._canvas = tk.Canvas(body, bg=_BG_DARK, highlightthickness=0, bd=0)
+        scrollbar = tk.Scrollbar(body, orient="vertical", command=self._canvas.yview)
+        self._canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self._canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-    class EmojiPickerDialog(QDialog):
-        """PyQt6 emoji picker dialog with colored emoji support."""
-
-        def __init__(self, parent=None):
-            super().__init__(parent)
-            self.selected_emoji: Optional[str] = None
-            self._setup_ui()
-
-        def _setup_ui(self):
-            self.setWindowTitle("Choose Emoji")
-            self.setFixedSize(580, 520)
-            self.setStyleSheet(
-                f"""
-                QDialog {{
-                    background-color: {COLORS["bg_dark"]};
-                }}
-                QLabel {{
-                    color: {COLORS["text_primary"]};
-                }}
-                QScrollArea {{
-                    border: 1px solid {COLORS["bg_medium"]};
-                    border-radius: 8px;
-                    background-color: {COLORS["bg_dark"]};
-                }}
-                QScrollBar:vertical {{
-                    background-color: {COLORS["bg_medium"]};
-                    width: 12px;
-                    border-radius: 6px;
-                }}
-                QScrollBar::handle:vertical {{
-                    background-color: {COLORS["bg_light"]};
-                    border-radius: 6px;
-                    min-height: 30px;
-                }}
-                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                    height: 0px;
-                }}
-            """
-            )
-
-            layout = QVBoxLayout(self)
-            layout.setContentsMargins(15, 15, 15, 15)
-            layout.setSpacing(10)
-
-            # Title
-            title = QLabel("🎨 Select an Emoji")
-            title.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
-            layout.addWidget(title)
-
-            # Scroll area for emojis
-            scroll = QScrollArea()
-            scroll.setWidgetResizable(True)
-            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-
-            # Container for emoji grid
-            container = QWidget()
-            container.setStyleSheet(f"background-color: {COLORS['bg_dark']};")
-            grid = QGridLayout(container)
-            grid.setSpacing(4)
-            grid.setContentsMargins(8, 8, 8, 8)
-
-            # Add emoji buttons
-            cols = 10
-            for idx, emoji in enumerate(EMOJIS):
-                row = idx // cols
-                col = idx % cols
-                btn = EmojiButton(emoji)
-                btn.clicked.connect(lambda checked, e=emoji: self._select_emoji(e))
-                grid.addWidget(btn, row, col)
-
-            scroll.setWidget(container)
-            layout.addWidget(scroll, 1)
-
-            # Button row
-            btn_layout = QHBoxLayout()
-            btn_layout.setSpacing(10)
-
-            clear_btn = QPushButton("Clear Emoji")
-            clear_btn.setFont(QFont("Segoe UI", 10))
-            clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            clear_btn.setStyleSheet(
-                f"""
-                QPushButton {{
-                    background-color: {COLORS["red"]};
-                    color: white;
-                    border: none;
-                    border-radius: 6px;
-                    padding: 8px 16px;
-                }}
-                QPushButton:hover {{
-                    background-color: #c92f34;
-                }}
-            """
-            )
-            clear_btn.clicked.connect(lambda: self._select_emoji(""))
-            btn_layout.addWidget(clear_btn)
-
-            btn_layout.addStretch()
-
-            cancel_btn = QPushButton("Cancel")
-            cancel_btn.setFont(QFont("Segoe UI", 10))
-            cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            cancel_btn.setStyleSheet(
-                f"""
-                QPushButton {{
-                    background-color: {COLORS["bg_medium"]};
-                    color: white;
-                    border: none;
-                    border-radius: 6px;
-                    padding: 8px 16px;
-                }}
-                QPushButton:hover {{
-                    background-color: {COLORS["bg_light"]};
-                }}
-            """
-            )
-            cancel_btn.clicked.connect(self.reject)
-            btn_layout.addWidget(cancel_btn)
-
-            layout.addLayout(btn_layout)
-
-        def _select_emoji(self, emoji: str):
-            self.selected_emoji = emoji
-            self.accept()
-
-    def get_qapp() -> QApplication:
-        """Get or create the QApplication instance."""
-        global _qapp
-        if _qapp is None:
-            # Check if QApplication already exists (e.g., in some environments)
-            existing = QApplication.instance()
-            if existing is not None and isinstance(existing, QApplication):
-                _qapp = cast(QApplication, existing)
-            else:
-                _qapp = QApplication(sys.argv)
-        return _qapp
-
-    def _run_picker_dialog() -> Optional[str]:
-        """Run the picker dialog (called in subprocess or standalone)."""
-        app = get_qapp()
-        dialog = EmojiPickerDialog()
-        result = dialog.exec()
-
-        if result == QDialog.DialogCode.Accepted:
-            return dialog.selected_emoji
-        return None
-
-
-# Global QApplication instance
-_qapp: Optional["QApplication"] = None
-
-
-def pick_emoji() -> Optional[str]:
-    """
-    Show the emoji picker dialog and return the selected emoji.
-
-    Runs the PyQt6 picker in a subprocess to avoid event loop conflicts
-    with Tkinter.
-
-    Returns:
-        The selected emoji string, empty string if cleared, or None if cancelled.
-    """
-    if not PYQT_AVAILABLE:
-        return None
-
-    # Run this module as a subprocess to avoid Tkinter/Qt event loop conflicts
-    # Get the path to this module
-    module_path = os.path.abspath(__file__)
-
-    # When running as a frozen exe, sys.executable points to the .exe, not Python.
-    # In that case, the emoji_picker.py script is bundled alongside and we need
-    # a real Python interpreter. Fall back gracefully if unavailable.
-    if getattr(sys, 'frozen', False):
-        # Frozen exe - try to find a Python interpreter
-        # The emoji picker won't work in frozen mode without a system Python
-        # For now, return None to skip the emoji picker gracefully
-        return None
-
-    python_exe = sys.executable
-
-    try:
-        # Run the picker as a subprocess
-        result = subprocess.run(
-            [python_exe, module_path],
-            capture_output=True,
-            text=True,
-            timeout=300,  # 5 minute timeout
+        # Inner frame that holds the emoji buttons; gets re-built per category.
+        self._grid_frame = tk.Frame(self._canvas, bg=_BG_DARK)
+        self._grid_window = self._canvas.create_window(
+            (0, 0), window=self._grid_frame, anchor="nw"
+        )
+        self._grid_frame.bind(
+            "<Configure>",
+            lambda e: self._canvas.configure(scrollregion=self._canvas.bbox("all")),
+        )
+        self._canvas.bind(
+            "<Configure>",
+            lambda e: self._canvas.itemconfigure(self._grid_window, width=e.width),
         )
 
-        # Parse the output
-        output = result.stdout.strip()
-        if output.startswith("EMOJI:"):
-            emoji = output[6:]  # Remove "EMOJI:" prefix
-            return emoji  # Can be empty string (cleared) or emoji
-        elif output == "CANCELLED":
-            return None
+        # Mousewheel scrolling
+        def _on_wheel(event: tk.Event) -> None:
+            self._canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        self._canvas.bind("<MouseWheel>", _on_wheel)
+        self._grid_frame.bind("<MouseWheel>", _on_wheel)
+
+        # Footer with Clear / Cancel
+        footer = tk.Frame(self.win, bg=_BG_DARK)
+        footer.pack(fill=tk.X, padx=12, pady=(6, 12))
+
+        tk.Button(
+            footer,
+            text="Clear emoji",
+            bg=_RED,
+            fg="white",
+            activebackground="#bf2e33",
+            activeforeground="white",
+            bd=0,
+            relief="flat",
+            font=("Segoe UI", 9, "bold"),
+            padx=12,
+            pady=6,
+            cursor="hand2",
+            command=lambda: self._select(""),
+        ).pack(side=tk.LEFT)
+
+        tk.Button(
+            footer,
+            text="Cancel",
+            bg=_BG_MEDIUM,
+            fg=_TEXT,
+            activebackground=_BG_HOVER,
+            activeforeground=_TEXT,
+            bd=0,
+            relief="flat",
+            font=("Segoe UI", 9),
+            padx=12,
+            pady=6,
+            cursor="hand2",
+            command=self._on_cancel,
+        ).pack(side=tk.RIGHT)
+
+    # ------------------------------------------------------------------
+    # Category switching
+    # ------------------------------------------------------------------
+
+    def _show_category(self, idx: int) -> None:
+        # Style active tab
+        for i, btn in enumerate(self._cat_buttons):
+            if i == idx:
+                btn.configure(bg=_BLURPLE, fg="white")
+            else:
+                btn.configure(bg=_BG_MEDIUM, fg=_TEXT)
+
+        # Clear current grid
+        for child in self._grid_frame.winfo_children():
+            child.destroy()
+        self._image_refs.clear()
+
+        emojis = EMOJI_CATEGORIES[idx][1]
+        for i, emoji in enumerate(emojis):
+            row = i // self.GRID_COLS
+            col = i % self.GRID_COLS
+            self._make_emoji_button(emoji).grid(row=row, column=col, padx=2, pady=2)
+
+        # Equal column weights so they spread out a little.
+        for c in range(self.GRID_COLS):
+            self._grid_frame.grid_columnconfigure(c, weight=1)
+
+        # Reset scroll to top.
+        self._canvas.yview_moveto(0.0)
+
+    def _make_emoji_button(self, emoji: str) -> tk.Button:
+        img = emoji_render.get_tk_image(emoji, self.EMOJI_PIXELS)
+        if img is not None:
+            self._image_refs.append(img)
+            btn = tk.Button(
+                self._grid_frame,
+                image=img,
+                bg=_BG_DARK,
+                activebackground=_BG_LIGHT,
+                bd=0,
+                relief="flat",
+                cursor="hand2",
+                width=self.BUTTON_SIZE,
+                height=self.BUTTON_SIZE,
+                highlightthickness=0,
+                command=lambda e=emoji: self._select(e),
+            )
         else:
-            return None
-    except subprocess.TimeoutExpired:
-        return None
-    except Exception as e:
-        print(f"Emoji picker error: {e}")
-        return None
+            # Fallback: text-only (monochrome).
+            btn = tk.Button(
+                self._grid_frame,
+                text=emoji,
+                bg=_BG_DARK,
+                fg=_TEXT,
+                activebackground=_BG_LIGHT,
+                activeforeground=_TEXT,
+                bd=0,
+                relief="flat",
+                cursor="hand2",
+                font=("Segoe UI Emoji", 16),
+                width=2,
+                command=lambda e=emoji: self._select(e),
+            )
+
+        # Hover tint
+        def _enter(_e: tk.Event, b: tk.Button = btn) -> None:
+            b.configure(bg=_BG_HOVER)
+
+        def _leave(_e: tk.Event, b: tk.Button = btn) -> None:
+            b.configure(bg=_BG_DARK)
+
+        btn.bind("<Enter>", _enter)
+        btn.bind("<Leave>", _leave)
+        return btn
+
+    # ------------------------------------------------------------------
+    # Result handling
+    # ------------------------------------------------------------------
+
+    def _select(self, emoji: str) -> None:
+        self.result = emoji
+        self._close()
+
+    def _on_cancel(self) -> None:
+        self.result = None
+        self._close()
+
+    def _close(self) -> None:
+        try:
+            self.win.grab_release()
+        except Exception:
+            pass
+        try:
+            self.win.destroy()
+        except Exception:
+            pass
+        if self._owns_root:
+            try:
+                self._root.destroy()
+            except Exception:
+                pass
+
+    def show(self) -> Optional[str]:
+        try:
+            self.win.wait_window()
+        except Exception:
+            pass
+        return self.result
 
 
-# Run as standalone subprocess for emoji picking
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+def pick_emoji(parent: Optional[tk.Misc] = None) -> Optional[str]:
+    """Show the emoji picker and return the chosen emoji.
+
+    Returns:
+        The emoji string, "" if the user clicked Clear, or None if
+        cancelled.
+
+    The `parent` argument is the parent Tk widget (any widget will do —
+    the picker uses `winfo_toplevel()` to find the proper parent).
+    """
+    dlg = _EmojiPickerDialog(parent)
+    return dlg.show()
+
+
+# Standalone entry point — kept so existing scripts that still launch
+# this module as a subprocess don't break. New callers should just
+# `from soundboard.emoji_picker import pick_emoji`.
 if __name__ == "__main__":
-    if PYQT_AVAILABLE:
-        result = _run_picker_dialog()
-        if result is not None:
-            # Output format: EMOJI:<emoji> or EMOJI: (empty for cleared)
-            print(f"EMOJI:{result}")
-        else:
-            print("CANCELLED")
+    import sys
+
+    result = pick_emoji(None)
+    if result is not None:
+        print(f"EMOJI:{result}")
     else:
-        print("ERROR:PyQt6 not installed")
+        print("CANCELLED")
+    sys.exit(0)
