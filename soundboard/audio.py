@@ -32,6 +32,14 @@ from .constants import AUDIO, SOUNDS_DIR
 logger = logging.getLogger(__name__)
 
 
+# --- Real-time pitch-preserving time-stretch (WSOLA-lite) ---------------
+# Frame size and synthesis hop for the in-callback OLA time-stretcher used
+# when a sound has pitch_preserve_live=True. Hann window with 75% overlap
+# (HS = FRAME/4) is COLA so no normalization is needed.
+WSOLA_FRAME = 2048  # ~43ms grain at 48kHz
+WSOLA_HS = 512  # synthesis hop → 75% overlap (Hann is COLA)
+
+
 # Optional noise-suppression dependency. Loaded lazily so the app still
 # starts if the user hasn't installed noisereduce yet.
 try:
@@ -666,6 +674,15 @@ class AudioMixer:
         self.mic_volume = 1.0
         self.mic_muted = False
 
+        # Master volume — multiplier applied to ALL playing sounds before
+        # they're added to the mix (separate from mic_volume which only
+        # affects the microphone passthrough).
+        self.master_volume = 1.0
+
+        # Precomputed Hann window for real-time WSOLA pitch-preserving
+        # time-stretch (see _wsola_render). Built once; reused per grain.
+        self._wsola_window = np.hanning(WSOLA_FRAME).astype(np.float32)
+
         # Noise suppression (replaces Discord's Krisp NS which is bypassed
         # when routing through the virtual cable). Disabled by default;
         # toggled via the GUI checkbox.
@@ -693,6 +710,12 @@ class AudioMixer:
         self.monitor_enabled = False
         self.monitor_stream = None
         self._monitor_queue: queue.Queue = queue.Queue()  # Queue for monitor audio blocks
+
+        # Optional mic tap for the call recorder. When set, every mic block
+        # captured in `_input_callback` is also pushed to this queue so the
+        # Recorder can mix the user's own voice into the recording. The
+        # Recorder owns the queue lifecycle (set/clear via attach/detach).
+        self._recording_tap: Optional[queue.Queue] = None
 
         # Shutdown flag - signals background threads to abort
         self._shutting_down = False
@@ -907,6 +930,21 @@ class AudioMixer:
             except queue.Empty:
                 pass
 
+        # Also tap the (post-noise-suppression) mic into the recorder queue
+        # if recording is active. We push the volume-applied signal so the
+        # recording matches what the user actually sends to Discord.
+        tap = self._recording_tap
+        if tap is not None and not self.mic_muted:
+            try:
+                tap.put_nowait((mic_data * self.mic_volume).astype(np.float32, copy=False))
+            except queue.Full:
+                # Drop oldest to keep recorder caught up
+                try:
+                    tap.get_nowait()
+                    tap.put_nowait((mic_data * self.mic_volume).astype(np.float32, copy=False))
+                except queue.Empty:
+                    pass
+
     def _output_callback(self, outdata, frames, time, status):
         """
         Real-time audio mixing callback for output stream.
@@ -967,6 +1005,11 @@ class AudioMixer:
                         sound["in_delay"] = False
                         sound["position"] = 0
                         sound["delay_position"] = 0
+                        # Reset WSOLA state so the new loop iteration
+                        # starts with a clean overlap buffer.
+                        sound.pop("wsola_buf", None)
+                        sound["wsola_read"] = 0
+                        sound["wsola_write"] = 0
                         # Decrement loops_remaining if not infinite
                         if sound.get("loops_remaining", 0) > 0:
                             sound["loops_remaining"] -= 1
@@ -978,7 +1021,14 @@ class AudioMixer:
                 pos = sound["position"]
                 data = sound["data"]
                 volume = sound["volume"]
-                remaining = len(data) - pos
+                # Live playback rate (instant speed change via on-the-fly
+                # linear-interp resampling — no buffer rebuild). 1.0 = no
+                # change. Set by set_playback_rate(); the librosa-based
+                # set_sound_speed() leaves this at 1.0 and rebuilds the
+                # buffer instead.
+                rate = float(sound.get("playback_rate", 1.0))
+                data_len = len(data)
+                remaining = data_len - pos
 
                 if remaining <= 0:
                     # Sound finished this iteration
@@ -993,6 +1043,10 @@ class AudioMixer:
                             else:
                                 # No delay, reset immediately
                                 sound["position"] = 0
+                                # Clear WSOLA buffer for clean restart
+                                sound.pop("wsola_buf", None)
+                                sound["wsola_read"] = 0
+                                sound["wsola_write"] = 0
                                 if loops_remaining > 0:
                                     sound["loops_remaining"] -= 1
                             continue
@@ -1000,8 +1054,56 @@ class AudioMixer:
                     finished.append(i)
                     continue
 
-                chunk_size = min(frames, remaining)
-                chunk = data[pos : pos + chunk_size] * volume
+                if rate == 1.0:
+                    # Fast path: integer indexing, no interpolation.
+                    int_pos = int(pos)
+                    chunk_size = min(frames, data_len - int_pos)
+                    chunk = data[int_pos : int_pos + chunk_size] * volume * self.master_volume
+                    new_pos = int_pos + chunk_size
+                elif sound.get("pitch_preserve_live", False):
+                    # WSOLA pitch-preserving path: time-stretches the
+                    # audio in real time WITHOUT changing pitch. CPU cost
+                    # is moderate (~one windowed OLA grain per ~10ms).
+                    chunk, wsola_finished = self._wsola_render(sound, frames)
+                    chunk = chunk * volume * self.master_volume
+                    chunk_size = frames
+                    # _wsola_render advances sound["position"] internally
+                    new_pos = sound["position"]
+                    if wsola_finished:
+                        # Force end-of-input so loop logic catches it next
+                        # callback (and the WSOLA buffer is cleared on
+                        # reset so warmup is clean for next iteration).
+                        new_pos = data_len
+                else:
+                    # Live resample path: produce `frames` output samples
+                    # by reading `frames * rate` input samples with linear
+                    # interpolation. Position advances fractionally.
+                    max_out = int((data_len - pos) / rate) if rate > 0 else 0
+                    out_frames = min(frames, max(0, max_out))
+                    if out_frames <= 0:
+                        # Out of input — treat as finished for this iteration
+                        # (loop handling above will catch it next callback).
+                        sound["position"] = data_len
+                        continue
+                    indices = pos + np.arange(out_frames, dtype=np.float64) * rate
+                    i0 = indices.astype(np.int64)
+                    np.clip(i0, 0, data_len - 1, out=i0)
+                    i1 = np.minimum(i0 + 1, data_len - 1)
+                    frac = (indices - i0).astype(np.float32)
+                    if data.ndim == 2:
+                        chunk = (
+                            (data[i0] * (1.0 - frac)[:, None] + data[i1] * frac[:, None])
+                            * volume
+                            * self.master_volume
+                        )
+                    else:
+                        chunk = (
+                            (data[i0] * (1.0 - frac) + data[i1] * frac)
+                            * volume
+                            * self.master_volume
+                        )
+                    chunk_size = out_frames
+                    new_pos = pos + out_frames * rate
 
                 # Convert mono to stereo if needed
                 if chunk.ndim == 1:
@@ -1018,7 +1120,7 @@ class AudioMixer:
                 # Add to both main mix and sounds-only mix
                 mixed += chunk
                 sounds_mix += chunk
-                sound["position"] += chunk_size
+                sound["position"] = new_pos
 
             # Remove finished sounds
             for i in reversed(finished):
@@ -1458,6 +1560,138 @@ class AudioMixer:
                     logger.debug("Set volume for %s: %.2f", sound_id, volume)
                     break
 
+    def set_playback_rate(self, sound_id: str, rate: float):
+        """Set the LIVE playback rate of a currently playing sound.
+
+        This is INSTANT — no buffer rebuild, no librosa. The output callback
+        applies linear-interpolation resampling on the fly. Side effect:
+        pitch changes with rate (chipmunk/deep-voice). For pitch-preserved
+        speed change, use set_sound_speed() instead (slow, librosa).
+
+        Args:
+            sound_id: The identifier of the sound
+            rate: Playback rate (0.5 to 2.0). 1.0 = normal.
+        """
+        rate = max(0.5, min(2.0, rate))
+        with self.lock:
+            for sound in self.currently_playing:
+                if sound.get("sound_id") == sound_id:
+                    sound["playback_rate"] = rate
+                    # Mirror into "speed" so the UI's get_playing_sounds()
+                    # snapshot reflects the change.
+                    sound["speed"] = rate
+                    break
+
+    def set_pitch_preserve_live(self, sound_id: str, enabled: bool):
+        """Enable real-time pitch-preserving time-stretch for a playing sound.
+
+        When enabled, set_playback_rate() changes preserve pitch (no
+        chipmunk/deep voice) via in-callback WSOLA-lite OLA. CPU cost is
+        moderate. When disabled, set_playback_rate() uses cheap linear
+        interpolation (chipmunk/deep voice).
+
+        Args:
+            sound_id: The identifier of the sound
+            enabled: True for pitch-preserved stretch, False for chipmunk
+        """
+        with self.lock:
+            for sound in self.currently_playing:
+                if sound.get("sound_id") == sound_id:
+                    sound["pitch_preserve_live"] = bool(enabled)
+                    # Reset WSOLA state so it warms up cleanly at the
+                    # current playhead position (and we don't replay stale
+                    # buffered output from the old mode).
+                    sound.pop("wsola_buf", None)
+                    sound["wsola_read"] = 0
+                    sound["wsola_write"] = 0
+                    break
+
+    def _wsola_render(self, sound, frames):
+        """Render `frames` samples using WSOLA-lite (windowed OLA).
+
+        Pitch-preserving time-stretch in real time, suitable for the audio
+        callback. Uses Hann windows with 75% overlap (which is COLA, so no
+        normalization step is needed). Skips the cross-correlation
+        similarity search of full WSOLA — purely overlap-add — to keep CPU
+        cost low. Quality is acceptable for typical 0.5x–2.0x ranges.
+
+        Advances ``sound["position"]`` by WSOLA_HS * rate per emitted grain.
+
+        Returns:
+            (chunk, finished) where ``chunk`` is shape (frames,) or
+            (frames, channels) and ``finished`` is True when the input
+            data has been exhausted.
+        """
+        data = sound["data"]
+        data_len = len(data)
+        rate = float(sound.get("playback_rate", 1.0))
+        win = self._wsola_window
+
+        # Lazy-init the OLA accumulator buffer (per sound).
+        buf = sound.get("wsola_buf")
+        if buf is None:
+            if data.ndim == 2:
+                buf = np.zeros((WSOLA_FRAME * 4, data.shape[1]), dtype=np.float32)
+            else:
+                buf = np.zeros((WSOLA_FRAME * 4,), dtype=np.float32)
+            sound["wsola_buf"] = buf
+            sound["wsola_read"] = 0
+            sound["wsola_write"] = 0
+
+        write = sound["wsola_write"]
+        read = sound["wsola_read"]
+        finished = False
+
+        # Produce grains until we have at least `frames` samples ready or
+        # input is exhausted.
+        while (write - read) < frames:
+            in_pos = float(sound["position"])
+            i0 = int(in_pos)
+            if i0 + WSOLA_FRAME >= data_len:
+                finished = True
+                break
+
+            # Compact the buffer if next grain would overflow it.
+            if write + WSOLA_FRAME > len(buf):
+                n_unread = write - read
+                if n_unread > 0:
+                    buf[:n_unread] = buf[read:write]
+                # Zero the rest so OLA accumulates correctly next grains.
+                buf[n_unread:] = 0
+                write = n_unread
+                read = 0
+
+            # Read grain, apply Hann window, overlap-add into buffer.
+            grain = data[i0 : i0 + WSOLA_FRAME].astype(np.float32, copy=True)
+            if grain.ndim == 2:
+                grain *= win[:, None]
+            else:
+                grain *= win
+            buf[write : write + WSOLA_FRAME] += grain
+
+            # Advance: synthesis hop in OUTPUT, analysis hop in INPUT.
+            # analysis_hop = synthesis_hop * rate → time-stretch by 1/rate
+            # which means rate>1 plays faster, rate<1 plays slower (same
+            # convention as the linear-interp resample path).
+            write += WSOLA_HS
+            sound["position"] = in_pos + WSOLA_HS * rate
+
+        sound["wsola_write"] = write
+        sound["wsola_read"] = read
+
+        # Pull `frames` from buffer (may be short if input ran out).
+        available = write - read
+        n_out = min(frames, available)
+        if data.ndim == 2:
+            chunk = np.zeros((frames, data.shape[1]), dtype=np.float32)
+        else:
+            chunk = np.zeros((frames,), dtype=np.float32)
+        if n_out > 0:
+            chunk[:n_out] = buf[read : read + n_out]
+            sound["wsola_read"] = read + n_out
+
+        return chunk, finished
+
     def restart_sound(self, sound_id: str):
         """Restart a sound from the beginning.
 
@@ -1587,6 +1821,9 @@ class AudioMixer:
                     new_pos = new_len - 1
                 sound["data"] = new_data
                 sound["position"] = max(0, new_pos)
+                # Buffer is now baked at the new speed — clear any live
+                # playback_rate so the callback uses the fast int path.
+                sound["playback_rate"] = 1.0
                 # speed/preserve_pitch were already set in phase 1
                 break
 
@@ -1732,3 +1969,308 @@ class AudioMixer:
         with self.lock:
             if len(self.currently_playing) == 0 and self.sound_queue.empty():
                 self._release_ptt()
+
+
+# =============================================================================
+# Call Recorder (Discord output capture via WASAPI loopback)
+# =============================================================================
+
+# `soundcard` provides clean WASAPI loopback recording on Windows. Stock
+# `sounddevice` does NOT — its `WasapiSettings` has no `loopback` flag — so
+# we use soundcard for capturing the speaker output.
+try:
+    import soundcard as _sc  # type: ignore
+
+    SOUNDCARD_AVAILABLE = True
+except Exception:  # pragma: no cover
+    _sc = None
+    SOUNDCARD_AVAILABLE = False
+
+
+class Recorder:
+    """
+    Records a Discord call to a compressed audio file.
+
+    Captures the system playback device using WASAPI loopback (so it grabs
+    everything Discord plays through the user's speakers/headphones — i.e.
+    the other people on the call). Optionally mixes in the local mic via
+    `AudioMixer._recording_tap` so both sides of the conversation are saved.
+
+    On stop, the buffered float32 PCM is mixed down to mono and encoded
+    to MP3 at a low bitrate via pydub (which uses the bundled ffmpeg from
+    `imageio-ffmpeg`). Mono + 64 kbps is plenty for voice and keeps files
+    tiny (~30 MB/hour).
+    """
+
+    DEFAULT_BITRATE = "64k"
+    # Per-pull frame count for the soundcard recorder loop. ~21ms at 48kHz.
+    _CAPTURE_FRAMES = 1024
+
+    def __init__(self, sample_rate: int = 48000):
+        self.sample_rate = sample_rate
+        self.recording: bool = False
+        self.output_path: Optional[str] = None
+
+        # Buffers: list of np.ndarray blocks, concatenated on stop.
+        self._loopback_blocks: List[np.ndarray] = []
+        self._mic_blocks: List[np.ndarray] = []
+
+        self._capture_thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+        self._mic_tap: Optional[queue.Queue] = None
+        self._mixer_ref: Optional["AudioMixer"] = None
+        self._include_mic: bool = True
+        self._lock = threading.Lock()
+        self._start_time: float = 0.0
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def start(
+        self,
+        output_dir: str,
+        include_mic: bool = True,
+        mixer: Optional["AudioMixer"] = None,
+        filename: Optional[str] = None,
+    ) -> str:
+        """
+        Begin recording. Returns the planned output file path.
+
+        - `output_dir`: folder where the MP3 will be saved (created if missing).
+        - `include_mic`: if True and `mixer` is provided, the user's mic is
+          mixed into the recording.
+        - `mixer`: optional AudioMixer to tap mic from.
+        - `filename`: optional explicit filename. Defaults to a timestamped
+          name like `discord_20260501_143022.mp3`.
+        """
+        if self.recording:
+            raise RuntimeError("Recorder is already running.")
+        if not SOUNDCARD_AVAILABLE:
+            raise RuntimeError(
+                "The 'soundcard' library is not installed. " "Run: pip install soundcard"
+            )
+
+        import time as _time
+
+        # Locate the default speaker as a loopback microphone.
+        try:
+            speaker = _sc.default_speaker()  # type: ignore[union-attr]
+            loop_mic = _sc.get_microphone(  # type: ignore[union-attr]
+                speaker.name, include_loopback=True
+            )
+        except Exception as e:
+            raise RuntimeError(f"Could not find default playback device: {e}")
+
+        # 48 kHz works on essentially all modern devices and matches the rest
+        # of the app's audio pipeline.
+        self.sample_rate = 48000
+
+        os.makedirs(output_dir, exist_ok=True)
+        if filename is None:
+            timestamp = _time.strftime("%Y%m%d_%H%M%S")
+            filename = f"discord_{timestamp}.mp3"
+        if not filename.lower().endswith(".mp3"):
+            filename += ".mp3"
+        self.output_path = os.path.join(output_dir, filename)
+
+        self._loopback_blocks = []
+        self._mic_blocks = []
+        self._include_mic = include_mic and mixer is not None
+        self._mixer_ref = mixer
+        self._stop_event.clear()
+
+        # Attach mic tap BEFORE starting capture so we don't miss frames.
+        if self._include_mic and mixer is not None:
+            self._mic_tap = queue.Queue(maxsize=512)
+            mixer._recording_tap = self._mic_tap
+
+        # Start the capture thread (soundcard's API is blocking, not callback)
+        self._capture_thread = threading.Thread(
+            target=self._capture_loop,
+            args=(loop_mic,),
+            name="RecorderLoopback",
+            daemon=True,
+        )
+        self.recording = True
+        self._start_time = _time.time()
+        self._capture_thread.start()
+
+        logger.info("Recording started → %s", self.output_path)
+        return self.output_path
+
+    def _capture_loop(self, loop_mic):
+        """Background thread: pull blocks from the loopback mic until stopped."""
+        # soundcard uses COM under the hood and requires CoInitialize on
+        # whatever thread opens a stream. Without this we get HRESULT
+        # 0x800401f0 (CO_E_NOTINITIALIZED).
+        try:
+            ctypes.windll.ole32.CoInitializeEx(None, 0)  # COINIT_MULTITHREADED=0
+        except Exception:
+            pass
+        try:
+            with loop_mic.recorder(
+                samplerate=self.sample_rate, channels=2, blocksize=self._CAPTURE_FRAMES
+            ) as rec:
+                while not self._stop_event.is_set():
+                    try:
+                        data = rec.record(numframes=self._CAPTURE_FRAMES)
+                    except Exception as e:
+                        logger.error("Loopback record error: %s", e)
+                        break
+                    # data shape: (frames, channels) float32 in [-1, 1]
+                    self._loopback_blocks.append(np.asarray(data, dtype=np.float32))
+
+                    # Drain mic tap so mic stays roughly synced with loopback.
+                    if self._mic_tap is not None:
+                        drained = 0
+                        while drained < 8:
+                            try:
+                                m = self._mic_tap.get_nowait()
+                            except queue.Empty:
+                                break
+                            self._mic_blocks.append(m)
+                            drained += 1
+        except Exception as e:
+            logger.error("Recorder capture loop crashed: %s", e)
+            self.recording = False
+        finally:
+            try:
+                ctypes.windll.ole32.CoUninitialize()
+            except Exception:
+                pass
+
+    def _detach_mic_tap(self):
+        if self._mixer_ref is not None and self._mic_tap is not None:
+            try:
+                self._mixer_ref._recording_tap = None
+            except Exception:
+                pass
+        self._mic_tap = None
+
+    def stop(self) -> Optional[str]:
+        """
+        Stop recording. Captured audio is written to disk in a background
+        thread so the UI never freezes (MP3 encoding can take a few seconds
+        for long recordings). Returns the planned output path immediately
+        (the file may not exist yet — encoding is async).
+        """
+        if not self.recording:
+            return None
+
+        self.recording = False
+        self._stop_event.set()
+
+        # Wait briefly for capture thread to exit cleanly
+        if self._capture_thread is not None:
+            self._capture_thread.join(timeout=2.0)
+            self._capture_thread = None
+
+        # Detach mic tap IMMEDIATELY so the mixer's input callback stops
+        # touching our queue, regardless of how long encoding takes.
+        self._detach_mic_tap()
+
+        # Snapshot blocks and clear the buffers on this (UI) thread so the
+        # recorder is fully reset before encoding even starts.
+        loopback_blocks = self._loopback_blocks
+        mic_blocks = self._mic_blocks
+        include_mic = self._include_mic
+        out_path = self.output_path
+        sample_rate = self.sample_rate
+        self._loopback_blocks = []
+        self._mic_blocks = []
+
+        if not loopback_blocks:
+            logger.warning("Recorder stopped with no captured audio.")
+            return None
+
+        # Encode in a background thread so the UI thread (and the audio
+        # callback's chance at the GIL) is freed immediately.
+        threading.Thread(
+            target=self._encode_async,
+            args=(loopback_blocks, mic_blocks, include_mic, out_path, sample_rate),
+            name="RecorderEncoder",
+            daemon=True,
+        ).start()
+
+        return out_path
+
+    def _encode_async(
+        self,
+        loopback_blocks: List[np.ndarray],
+        mic_blocks: List[np.ndarray],
+        include_mic: bool,
+        out_path: Optional[str],
+        sample_rate: int,
+    ) -> Optional[str]:
+        """Background-thread encoding job. Writes the MP3 (or WAV fallback)."""
+        try:
+            loopback = np.concatenate(loopback_blocks, axis=0)
+        except Exception as e:
+            logger.error("Failed to concatenate loopback audio: %s", e)
+            return None
+
+        mic_audio: Optional[np.ndarray] = None
+        if include_mic and mic_blocks:
+            try:
+                mic_audio = np.concatenate(mic_blocks, axis=0)
+            except Exception as e:
+                logger.warning("Failed to concatenate mic audio: %s", e)
+                mic_audio = None
+
+        if loopback.ndim == 2:
+            mono = loopback.mean(axis=1).astype(np.float32)
+        else:
+            mono = loopback.astype(np.float32)
+
+        if mic_audio is not None and mic_audio.size > 0:
+            n = mono.shape[0]
+            if mic_audio.shape[0] < n:
+                mic_audio = np.pad(mic_audio, (0, n - mic_audio.shape[0]))
+            else:
+                mic_audio = mic_audio[:n]
+            mono = mono + mic_audio.astype(np.float32)
+
+        np.tanh(mono, out=mono)
+        mono = np.clip(mono, -1.0, 1.0)
+
+        if not PYDUB_AVAILABLE:
+            wav_path = (out_path or "recording.mp3").rsplit(".", 1)[0] + ".wav"
+            try:
+                sf.write(wav_path, mono, sample_rate, subtype="PCM_16")
+                logger.warning("pydub not available; wrote WAV instead: %s", wav_path)
+                return wav_path
+            except Exception as e:
+                logger.error("Failed to write fallback WAV: %s", e)
+                return None
+
+        try:
+            int16 = (mono * 32767.0).astype(np.int16)
+            seg = AudioSegment(
+                int16.tobytes(),
+                frame_rate=int(sample_rate),
+                sample_width=2,
+                channels=1,
+            )
+            assert out_path is not None
+            seg.export(out_path, format="mp3", bitrate=self.DEFAULT_BITRATE)
+            logger.info("Recording saved: %s", out_path)
+            return out_path
+        except Exception as e:
+            logger.error("Failed to encode MP3: %s", e)
+            try:
+                wav_path = (out_path or "recording.mp3").rsplit(".", 1)[0] + ".wav"
+                sf.write(wav_path, mono, sample_rate, subtype="PCM_16")
+                logger.warning("MP3 encode failed; wrote WAV instead: %s", wav_path)
+                return wav_path
+            except Exception as e2:
+                logger.error("Fallback WAV also failed: %s", e2)
+                return None
+
+    def get_elapsed(self) -> float:
+        """Seconds since recording started (0 if not recording)."""
+        if not self.recording:
+            return 0.0
+        import time as _time
+
+        return _time.time() - self._start_time

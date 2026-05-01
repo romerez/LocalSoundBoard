@@ -6,7 +6,7 @@ by mixing microphone input with audio files and routing the output
 through a virtual audio cable.
 """
 
-from .audio import AudioMixer, SoundCache
+from .audio import AudioMixer, SoundCache, Recorder
 from .editor import SoundEditor, edit_sound_file
 from .gui import SoundboardApp
 from .models import SoundSlot, SoundTab
@@ -14,10 +14,11 @@ from .models import SoundSlot, SoundTab
 __all__ = [
     "AudioMixer",
     "SoundCache",
+    "Recorder",
     "SoundboardApp",
     "SoundSlot",
     "SoundTab",
     "SoundEditor",
     "edit_sound_file",
 ]
-__version__ = "1.1.9"
+__version__ = "1.1.11"

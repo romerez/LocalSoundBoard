@@ -121,6 +121,9 @@ Replace Discord's built-in soundboard with a standalone, local solution that:
 | `windnd` | >=0.0.7 | Windows drag-and-drop support for importing images onto sound slots from file explorer. |
 | `emoji-data-python` | >=1.6.0 | Emoji database with categories. Provides 1800+ emojis organized by category for emoji picker. |
 | `colour` | >=0.1.5 | Color manipulation utilities. Lighten, darken, saturate, generate gradients, complementary colors. |
+| `soundcard` | >=0.4.6 | WASAPI loopback recording on Windows. Used by the call recorder to capture system playback (i.e. other people on a Discord call). Stock `sounddevice 0.5.5` does NOT support `WasapiSettings(loopback=True)` — soundcard does it natively via `get_microphone(speaker.name, include_loopback=True)`. |
+| `yt-dlp` | >=2024.1.0 | YouTube/audio downloader for the in-app YouTube → MP3 button. |
+| `static-ffmpeg` | >=2.5 | Bundles ffmpeg + ffprobe for yt-dlp's MP3 postprocessor. |
 
 ### Core Python Modules Used
 
@@ -425,6 +428,13 @@ Example: `airhorn_8f3a2b1c.mp3`
 - [x] Loop count presets (∞, 2, 5, 10) in DJ Looper panel
 - [x] Loop delay slider (0-10s) adjustable live
 - [x] Dynamic loop controls (show/hide based on loop state)
+- [x] Discord call recording via WASAPI loopback (other people's voices), optional mic mixing, MP3 64 kbps mono output
+- [x] Recording uses the `soundcard` library (sounddevice 0.5.5 has no loopback support)
+- [x] Recording stop is non-blocking — concat + MP3 encoding runs on a daemon thread so the UI never freezes
+- [x] Live recording timer + indicator in the action bar; recording settings (folder + include-mic) in Audio Options card
+- [x] Status bar with live indicators (● Live/○ Stopped, mic + output device name, PTT key, 🔴 REC m:ss)
+- [x] YouTube downloader supports live browser cookies (`cookiesfrombrowser`) for age-restricted videos
+- [x] Friendly YouTube error messages for common failures (DPAPI decryption / Chrome cookie lock / age-gate)
 
 ---
 
@@ -626,7 +636,9 @@ AudioMixer(
 | `resume_sound` | `(sound_id: str)` | `None` | Resume a paused sound |
 | `toggle_sound_loop` | `(sound_id, loop=None)` | `None` | Toggle or set loop state |
 | `set_sound_volume` | `(sound_id: str, volume: float)` | `None` | Set volume of playing sound (0.0-1.5) |
-| `set_sound_speed` | `(sound_id, speed, preserve_pitch)` | `None` | Change playback speed with re-processing |
+| `set_sound_speed` | `(sound_id, speed, preserve_pitch)` | `None` | OFFLINE buffer rebuild via librosa (slow). Used by editor / non-realtime paths. The DJ Looper does NOT use this anymore. |
+| `set_playback_rate` | `(sound_id: str, rate: float)` | `None` | INSTANT live rate change (0.5-2.0). Applied next callback (~21ms). Pitch behavior depends on `pitch_preserve_live` flag. |
+| `set_pitch_preserve_live` | `(sound_id: str, enabled: bool)` | `None` | Toggles per-sound flag selecting WSOLA path (pitch-preserving) vs linear-interp path (chipmunk) inside `_output_callback`. |
 | `set_sound_loop_count` | `(sound_id: str, count: int)` | `None` | Set remaining loop count (-1=infinite) |
 | `set_sound_loop_delay` | `(sound_id: str, delay: float)` | `None` | Set delay between loops (0-10s) |
 | `restart_sound` | `(sound_id: str)` | `None` | Restart sound from beginning |
@@ -638,9 +650,10 @@ AudioMixer(
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `_input_callback` | `(indata, frames, time, status)` | sounddevice callback for mic capture |
-| `_output_callback` | `(outdata, frames, time, status)` | sounddevice callback for real-time mixing |
+| `_output_callback` | `(outdata, frames, time, status)` | sounddevice callback for real-time mixing. Per-sound 3-way branch: `rate==1.0` fast int path → `pitch_preserve_live` WSOLA path → linear-interp chipmunk path. |
 | `_monitor_callback` | `(outdata, frames, time, status)` | sounddevice callback for local speakers |
-| `_apply_speed` | `(data, speed, preserve_pitch)` | Apply speed change with optional pitch preservation |
+| `_wsola_render` | `(sound, frames) -> (chunk, finished)` | Real-time pitch-preserving time-stretch (WSOLA-lite, windowed OLA, no similarity search). Hann window, FRAME=2048, HS=512 (75% overlap = COLA). Runs entirely in callback — no librosa, no threads. |
+| `_apply_speed` | `(data, speed, preserve_pitch)` | OFFLINE-only librosa wrapper. Used by `set_sound_speed` and the editor. NEVER called from the audio callback. |
 | `_soft_clip` | `(x: np.ndarray)` | Soft limiting to allow volume > 100% |
 | `_press_ptt` | `()` | Press PTT key (keyboard or mouse) |
 | `_release_ptt` | `()` | Release PTT key |
@@ -1228,6 +1241,7 @@ When asked to add a feature:
 |-------|-------|-----|
 | Windows UI freezes when playing sounds | `play_sound()` calls `_apply_speed()` (librosa) on UI thread | For speed != 1.0, spawn background thread to process audio, return immediately with estimated duration |
 | System-wide audio freeze when changing speed | `set_sound_speed()` held `self.lock` during slow librosa processing, blocking audio callback | Split into 3 steps: quick lock to get data → release lock → process outside lock → quick lock to update |
+| Speed slider had unacceptable pitch shift OR delay | Hybrid librosa-rebuild approach: instant chipmunk + 80ms-debounced librosa pitch correction. Either you hear pitch shift while dragging, or you wait for the rebuild. Both unacceptable. | Replaced with real-time WSOLA-lite (windowed OLA, no similarity search) directly inside `_output_callback._wsola_render`. Hann window FRAME=2048 / HS=512 → 75% overlap is COLA so no normalization. DJ Looper just calls `set_playback_rate()` (instant) and `set_pitch_preserve_live()` (toggles callback path). No librosa, no debounce, no threads. CPU cost is moderate but acceptable. Per-sound state: `pitch_preserve_live: bool`, `wsola_buf: np.ndarray`, `wsola_read: int`, `wsola_write: int`. **MUST be cleared on every loop reset** so the next iteration warms up clean. |
 | App freeze on close | Background threads still running librosa when app tries to shut down; audio streams use blocking `stop()` | Add `_shutting_down` flag checked by ALL background operations; use `abort()` instead of `stop()` for streams; use `os._exit(0)` as 500ms failsafe |
 | Entire Windows system freezes during audio | Multiple concurrent librosa operations saturate all CPU cores | Use `_processing_lock` to serialize librosa operations; use `_speed_processing` dict to skip duplicate speed requests when slider is dragged |
 | Audio sounds distorted/poor quality in Discord | Naive linear interpolation resampling causes aliasing and distortion when audio files have different sample rates than 48kHz | Use `librosa.resample()` for high-quality resampling with anti-aliasing; added `_resample_audio()` helper function |
@@ -1240,6 +1254,9 @@ When asked to add a feature:
 | Direct sf.read() fails for OGG | Multiple code paths used sf.read directly without fallback | Consolidated audio loading to shared `read_audio_file()` function in audio.py |
 | PTT gets stuck when user presses PTT during playback | `mouse` library's `press()`/`release()` has internal state tracking that can conflict with physical mouse input; queue-based release can be lost or reordered | Replace `mouse` library simulation with direct Windows `SendInput` API for mouse buttons; use `_force_release_ptt()` (direct, not queued) for stop operations; drain PTT queue before force-releasing |
 | Preview sounds can't be stopped | Preview uses `sd.play()` directly with no stop mechanism; stop button only stops mixer sounds | Added `_stop_preview()` and `_stop_all_previews()` methods; preview button toggles play/stop; stop button and "Stop All" also stop previews; show stop button during previews |
+| Sounds go silent for several seconds after stopping a recording | `Recorder.stop()` ran the heavy `np.concatenate` + MP3 encoding on the UI thread. Click events queued during the freeze, so sounds *appeared* silent. | `Recorder.stop()` now snapshots buffers, detaches the mic tap, and offloads concat + encoding to a `threading.Thread(daemon=True)` (`_encode_async`). Returns immediately so the UI never freezes. |
+| Recording crashes with HRESULT 0x800401f0 (CO_E_NOTINITIALIZED) | `soundcard` uses COM under the hood and requires `CoInitializeEx` on the thread that opens a stream. Background capture thread had no COM init. | Call `ctypes.windll.ole32.CoInitializeEx(None, 0)` at the top of `Recorder._capture_loop`, paired with `CoUninitialize()` in a `finally`. |
+| `sounddevice.WasapiSettings(loopback=True)` fails with `unexpected keyword argument 'loopback'` | Stock sounddevice 0.5.5 has no loopback support — its `WasapiSettings.__init__` only accepts `(exclusive, auto_convert, explicit_sample_format)`. | Don't use sounddevice for loopback recording. Use the `soundcard` library: `sc.get_microphone(sc.default_speaker().name, include_loopback=True)`. soundcard's API is *blocking* (no callbacks), so the recorder must pull blocks in a background thread via `loop_mic.recorder(...).record(numframes=...)`. |
 
 ### GUI / Tkinter
 
@@ -1294,6 +1311,14 @@ When asked to add a feature:
 | "PyQt6 Required" dialog appears | Running with system Python instead of venv Python | Always use `run.bat` or `.venv\Scripts\python.exe main.py`. PyQt6 is installed in venv only. |
 | Subprocess can't find PyQt6 | `sys.executable` returns wrong Python | The emoji picker runs as subprocess using `sys.executable` - if main app uses wrong Python, subprocess will too |
 | Tkinter + PyQt6 event loop freeze | Running PyQt6 dialog directly in Tkinter process | Run PyQt6 dialogs as **subprocess** to avoid event loop conflicts. Use `subprocess.run()` to launch picker. |
+
+### YouTube Downloader (yt-dlp)
+
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| `Sign in to confirm your age` error | YouTube age-gates some videos and demands session cookies | Add a browser dropdown to the dialog wired to `ydl_opts["cookiesfrombrowser"] = (browser_name,)`. Persist as `youtube_cookies_browser` in config. |
+| `ERROR: Could not copy Chrome cookie database` | Chrome/Edge/Brave hold an exclusive lock on `Cookies` SQLite while running. yt-dlp's normal copy fails. yt-dlp issue #7271. | Catch the error string and tell user: (1) fully quit the browser via tray icon, (2) switch to Firefox in the dropdown (no lock issue), or (3) export `cookies.txt` with a browser extension and use the cookies-file field. There is no programmatic workaround. |
+| `Failed to decrypt with DPAPI` for Chrome cookies | Chrome v127+ uses **app-bound encryption** — cookies are encrypted with a key only the Chrome process can use. yt-dlp issue #10927. **Cannot be worked around** even when Chrome is closed. | In the dialog, show a permanent warning under the browser dropdown. In the error handler, detect `failed to decrypt with dpapi` and instruct user to use Firefox or a manually-exported `cookies.txt` (from the "Get cookies.txt LOCALLY" extension). Do NOT try to copy/decrypt the SQLite ourselves. |
 
 ### General Rules
 

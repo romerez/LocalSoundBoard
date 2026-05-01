@@ -17,3 +17,4 @@ PyQt6>=6.4.0  # For colored emoji rendering in emoji picker
 python-bidi>=0.4.2  # Unicode Bidirectional Algorithm for Hebrew/Arabic text display
 yt-dlp>=2024.1.0  # YouTube/audio downloader for the in-app YouTube → MP3 button
 static-ffmpeg>=2.5  # Bundles ffmpeg + ffprobe for yt-dlp's MP3 postprocessor
+soundcard>=0.4.6  # WASAPI loopback recording (captures other people on Discord calls)

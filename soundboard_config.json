@@ -374,7 +374,7 @@
         },
         "1": {
           "name": "ראש צבע עיפרון",
-          "file_path": "sounds\\[appsgolem.com][00-03-40][00-03-45]__ (1)_78640441.wav",
+          "file_path": "sounds\\[appsgolem.com][00-03-40][00-03-45]__ (1)_78640441_64291347.wav",
           "hotkey": null,
           "volume": 0.32,
           "emoji": "✔️",
@@ -386,7 +386,7 @@
           "loop_count": 0,
           "loop_delay": 0.0,
           "groups": [],
-          "source_file_path": null
+          "source_file_path": "sounds\\[appsgolem.com][00-03-40][00-03-45]__ (1)_78640441.wav"
         },
         "2": {
           "name": "ראש מגנזיום",
@@ -454,6 +454,22 @@
           "groups": [
             "קללות"
           ],
+          "source_file_path": null
+        },
+        "6": {
+          "name": "!קללות בונטרילו - האנימציה",
+          "file_path": "sounds\\yt_-Ev97dthHWo_40577f9a.mp3",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
           "source_file_path": null
         }
       }
@@ -1022,7 +1038,7 @@
           "name": "אם אני אתפוס אותו אני אזיין לו את הצורה",
           "file_path": "sounds\\yt_V1PjhoQz4qs_577c4a9e_41385456.wav",
           "hotkey": null,
-          "volume": 1.0,
+          "volume": 0.71,
           "emoji": null,
           "image_path": "images\\clipboard_6d1bd8ff.png",
           "color": "#5865F2",
@@ -1038,7 +1054,7 @@
           "name": "אתה מכיר יעקוב יעקוביין",
           "file_path": "sounds\\yt_OzFF5pVoqEU_57145135_41644746.wav",
           "hotkey": null,
-          "volume": 1.0,
+          "volume": 0.66,
           "emoji": null,
           "image_path": "images\\clipboard_92b17ec5.png",
           "color": "#5865F2",
@@ -1189,6 +1205,38 @@
           "loop_delay": 0.0,
           "groups": [],
           "source_file_path": null
+        },
+        "5": {
+          "name": "דיבוב מצחיק לתכנית דת 10",
+          "file_path": "sounds\\דיבוב מצחיק לתכנית דת 10_80467186.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": "sounds\\דיבוב מצחיק לתכנית דת 10_2fff1ceb.mp3"
+        },
+        "6": {
+          "name": "דיבוב מצחיק לתכנית דת 10 (copy)",
+          "file_path": "sounds\\דיבוב מצחיק לתכנית דת 10_2fff1ceb_80521480.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": "sounds\\דיבוב מצחיק לתכנית דת 10_2fff1ceb.mp3"
         }
       }
     },
@@ -1216,7 +1264,7 @@
           "name": " אתם על הזין שלי (רמיקס)",
           "file_path": "sounds\\(שיחת טלפון עם המשטרה) אתם על הזין שלי (רמיקס)_84029056.wav",
           "hotkey": null,
-          "volume": 0.26,
+          "volume": 1.0,
           "emoji": null,
           "image_path": null,
           "color": "#5865F2",
@@ -1445,7 +1493,7 @@
       }
     }
   ],
-  "current_tab": 0,
+  "current_tab": 1,
   "ptt_enabled": true,
   "ptt_key": "f9",
   "input_device": "4: Microphone (HyperX Quadcast)",
@@ -1453,12 +1501,15 @@
   "auto_start": true,
   "monitor_enabled": true,
   "now_playing_visible": true,
-  "now_playing_side": "left",
+  "master_volume": 82.0,
   "custom_groups": [
     "קללות",
     "סתום"
   ],
-  "youtube_cookies_path": "",
+  "youtube_cookies_path": "C:/Users/User/Documents/cookies.txt",
+  "youtube_cookies_browser": "",
   "noise_suppression": false,
-  "noise_suppression_strength": 21.818181818181817
+  "noise_suppression_strength": 21.818181818181817,
+  "recording_dir": "C:\\Users\\User\\Documents\\DiscordRecordings",
+  "recording_include_mic": true
 }

@@ -22,7 +22,6 @@ from typing import Any, Callable, Optional
 from ._shared import RESIZE_STATE as _SHARED_RESIZE_STATE
 from .constants import COLORS
 
-
 # ---------------------------------------------------------------------------
 # Color helpers
 # ---------------------------------------------------------------------------
@@ -267,9 +266,7 @@ class SlotWidget(tk.Canvas):
             self._stop_visible = visible
             self._redraw_overlays()
 
-    def set_border(
-        self, width: Optional[int] = None, color: Optional[str] = None
-    ) -> None:
+    def set_border(self, width: Optional[int] = None, color: Optional[str] = None) -> None:
         dirty = False
         if width is not None and width != self._border_width:
             self._border_width = int(width)

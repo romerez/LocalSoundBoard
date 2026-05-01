@@ -20,7 +20,7 @@ import customtkinter as ctk
 import sounddevice as sd
 from PIL import Image, ImageDraw, ImageFont, ImageTk
 
-from .audio import AudioMixer, SoundCache
+from .audio import AudioMixer, SoundCache, Recorder
 from .constants import (
     ALL_SLOT_COLORS,
     COLORS,
@@ -45,7 +45,6 @@ from .slot_widget import (
     SlotWidget,
     StopButtonProxy,
 )
-
 
 # ---------------------------------------------------------------------------
 # CustomTkinter performance patch: defer per-widget Canvas redraws during
@@ -339,7 +338,6 @@ class NowPlayingPanel:
         self.mixer_ref = mixer_ref
         self.on_stop_callback = on_stop_callback
         self.is_visible = False
-        self.panel_side = "right"
 
         self.frame: Optional[ctk.CTkFrame] = None
         self.items_frame: Optional[ctk.CTkFrame] = None
@@ -391,19 +389,6 @@ class NowPlayingPanel:
             text_color=COLORS["text_primary"],
         )
         header_label.pack(side=tk.LEFT)
-
-        self.side_btn = ctk.CTkButton(
-            header_frame,
-            text="◀",
-            command=self._toggle_side,
-            fg_color=COLORS["bg_light"],
-            hover_color=COLORS["bg_lighter"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
-            corner_radius=4,
-            width=28,
-            height=24,
-        )
-        self.side_btn.pack(side=tk.RIGHT, padx=(8, 0))
 
         # Scrollable items container
         self.items_canvas = tk.Canvas(
@@ -480,26 +465,12 @@ class NowPlayingPanel:
 
     # ----- visibility / positioning -----
 
-    def _toggle_side(self):
-        self.panel_side = "left" if self.panel_side == "right" else "right"
-        self.side_btn.configure(text="▶" if self.panel_side == "left" else "◀")
-        if self.is_visible:
-            self._repack_panel()
-
     def _repack_panel(self):
         if self.frame is None:
             return
         self.frame.pack_forget()
         if self.is_visible:
-            side = tk.RIGHT if self.panel_side == "right" else tk.LEFT
-            self.frame.pack(
-                side=side,
-                fill=tk.Y,
-                padx=(
-                    8 if self.panel_side == "right" else 0,
-                    0 if self.panel_side == "right" else 8,
-                ),
-            )
+            self.frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(8, 0))
 
     def show(self):
         if not self.is_visible:
@@ -517,13 +488,6 @@ class NowPlayingPanel:
             self.hide()
         else:
             self.show()
-
-    def set_side(self, side: str):
-        if side in ("left", "right") and side != self.panel_side:
-            self.panel_side = side
-            self.side_btn.configure(text="▶" if side == "left" else "◀")
-            if self.is_visible:
-                self._repack_panel()
 
     # ----- update loop -----
 
@@ -713,16 +677,14 @@ class NowPlayingPanel:
         ).pack(side=tk.LEFT)
 
         current_speed = sound_info.get("speed", 1.0)
-        # NOTE: Do NOT use variable=tk.IntVar with CTkSlider — IntVar quantizes
-        # the float value the slider tries to write, which on some Tk builds
-        # causes feedback loops where the slider visually doesn't move and
-        # `command=` never fires reliably. Track value via closure instead.
-        speed_current: List[float] = [float(int(current_speed * 100))]
+        # DoubleVar (not IntVar) — IntVar quantizes the slider's float write
+        # which on some Tk builds creates a feedback loop where the slider
+        # silently refuses to move below the previous value (e.g. <100).
+        speed_var = tk.DoubleVar(value=float(current_speed * 100))
         preserve_pitch_state: List[bool] = [True]
         # Override flag prevents _update_item from snapping the value label
         # back to the mixer's stale speed while the user is interacting.
         speed_user_override: List[bool] = [False]
-        speed_apply_after: List[Optional[str]] = [None]
 
         # Create the value label FIRST so the slider's initial set() (which
         # may fire `command`) doesn't NameError on a not-yet-created widget.
@@ -734,44 +696,41 @@ class NowPlayingPanel:
             width=30,
         )
 
-        def _apply_speed():
-            speed_apply_after[0] = None
-            mixer = self._get_mixer()
-            if mixer:
-                new_speed = speed_current[0] / 100.0
-                threading.Thread(
-                    target=mixer.set_sound_speed,
-                    args=(sound_id, new_speed, preserve_pitch_state[0]),
-                    daemon=True,
-                ).start()
-            # Keep override briefly so the label doesn't snap before the
-            # background thread finishes publishing the new speed.
-            if self.frame is not None:
-                self.frame.after(400, lambda: speed_user_override.__setitem__(0, False))
+        # Default-enable real-time pitch-preserving stretch on the mixer
+        # side. At 1.0 this is free (fast int path); only kicks in when
+        # the user moves the slider away from 100%.
+        _initial_mixer = self._get_mixer()
+        if _initial_mixer:
+            _initial_mixer.set_pitch_preserve_live(sound_id, True)
 
         def _on_speed_change(val):
-            # Fires on every drag tick. Update label live, debounce apply.
+            # Instant, zero-delay speed change. The mixer applies the new
+            # rate on the very next audio callback (~21ms). When
+            # preserve-pitch is ON (🎵, default), the callback uses WSOLA
+            # OLA so pitch stays correct. When OFF (🐿), it uses cheap
+            # linear interpolation so pitch shifts (chipmunk/deep voice).
             speed_user_override[0] = True
             try:
                 v = float(val)
             except (TypeError, ValueError):
                 return
-            speed_current[0] = v
-            speed_value_label.configure(text=f"{v / 100.0:.1f}x")
-            # Debounce: apply 250 ms after the last drag event.
-            if speed_apply_after[0] is not None and self.frame is not None:
-                try:
-                    self.frame.after_cancel(speed_apply_after[0])
-                except Exception:
-                    pass
-            if self.frame is not None:
-                speed_apply_after[0] = self.frame.after(250, _apply_speed)
+            new_speed = v / 100.0
+            speed_value_label.configure(text=f"{new_speed:.1f}x")
+            mixer = self._get_mixer()
+            if mixer:
+                mixer.set_playback_rate(sound_id, new_speed)
+            # Release override after a short window so _update_item can
+            # resync to the mixer's value if it diverges.
+            if self.items_frame is not None:
+                self.items_frame.after(
+                    600, lambda: speed_user_override.__setitem__(0, False)
+                )
 
         speed_slider = ctk.CTkSlider(
             row4b,
             from_=50,
             to=200,
-            number_of_steps=150,
+            variable=speed_var,
             command=_on_speed_change,
             width=90,
             height=14,
@@ -780,12 +739,15 @@ class NowPlayingPanel:
             button_color=COLORS["blurple"],
             button_hover_color=COLORS["blurple_hover"],
         )
-        speed_slider.set(speed_current[0])
         speed_slider.pack(side=tk.LEFT, padx=(2, 4), fill=tk.X, expand=True)
 
         speed_value_label.pack(side=tk.LEFT)
 
-        # Pitch preservation toggle
+        # Pitch preservation toggle. Flips the mixer's per-sound
+        # `pitch_preserve_live` flag, which switches the audio callback
+        # between the WSOLA OLA path (🎵 ON, pitch stays original) and
+        # the linear-interp resample path (🐿 OFF, chipmunk/deep voice).
+        # The change takes effect on the very next audio callback.
         def _toggle_pitch():
             preserve_pitch_state[0] = not preserve_pitch_state[0]
             pitch_btn.configure(
@@ -795,10 +757,9 @@ class NowPlayingPanel:
                     COLORS["green_hover"] if preserve_pitch_state[0] else COLORS["bg_lighter"]
                 ),
             )
-            # Re-apply current speed with new pitch setting
-            if int(speed_current[0]) != 100:
-                speed_user_override[0] = True
-                _apply_speed()
+            mixer = self._get_mixer()
+            if mixer:
+                mixer.set_pitch_preserve_live(sound_id, preserve_pitch_state[0])
 
         pitch_btn = ctk.CTkButton(
             row4b,
@@ -816,18 +777,15 @@ class NowPlayingPanel:
         # Reset speed
         def _reset_speed():
             speed_user_override[0] = True
-            speed_current[0] = 100.0
-            speed_slider.set(100)
+            speed_var.set(100)
             speed_value_label.configure(text="1.0x")
             mixer = self._get_mixer()
             if mixer:
-                threading.Thread(
-                    target=mixer.set_sound_speed,
-                    args=(sound_id, 1.0, preserve_pitch_state[0]),
-                    daemon=True,
-                ).start()
-            if self.frame is not None:
-                self.frame.after(400, lambda: speed_user_override.__setitem__(0, False))
+                # Just clear the live rate — the WSOLA path detects rate==1.0
+                # via the fast int path automatically. No librosa needed.
+                mixer.set_playback_rate(sound_id, 1.0)
+            if self.items_frame is not None:
+                self.items_frame.after(400, lambda: speed_user_override.__setitem__(0, False))
 
         reset_speed_btn = ctk.CTkButton(
             row4b,
@@ -1075,7 +1033,7 @@ class NowPlayingPanel:
             "loop_btn": loop_btn,
             "restart_btn": restart_btn,
             "speed_slider": speed_slider,
-            "speed_current": speed_current,
+            "speed_var": speed_var,
             "speed_value_label": speed_value_label,
             "speed_user_override": speed_user_override,
             "reset_speed_btn": reset_speed_btn,
@@ -1247,6 +1205,9 @@ class SoundboardApp:
 
         self.mixer: Optional[AudioMixer] = None
         self.sound_cache = SoundCache()  # Local sound storage with caching
+        # Call recorder (WASAPI loopback). Lazy-created when user clicks Record.
+        self.recorder: Optional[Recorder] = None
+        self._recording_after_id: Optional[str] = None
         self.tabs: List[SoundTab] = []  # List of all tabs
         self.current_tab_idx = 0  # Currently active tab index
 
@@ -1602,6 +1563,10 @@ class SoundboardApp:
             self.output_combo.set(f"{output_devices[0][0]}: {output_devices[0][1]}")
         self.output_combo.pack(anchor="w", pady=(4, 0))
 
+        # Live-update the status bar whenever the user changes a device.
+        self.input_var.trace_add("write", lambda *_: self._update_status_bar())
+        self.output_var.trace_add("write", lambda *_: self._update_status_bar())
+
         # Controls row (Start button, PTT, etc.)
         controls_row = ctk.CTkFrame(device_frame, fg_color="transparent")
         controls_row.pack(fill=tk.X, pady=(0, 10))
@@ -1793,6 +1758,234 @@ class SoundboardApp:
         )
         self.mic_volume_slider.pack(side=tk.LEFT, padx=(0, 10))
 
+        # Master (sounds) volume row — affects every playing sound,
+        # independent of the mic.
+        master_row = ctk.CTkFrame(device_frame, fg_color="transparent")
+        master_row.pack(fill=tk.X, pady=(5, 0))
+
+        ctk.CTkLabel(
+            master_row,
+            text="Main Volume:",
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            text_color=COLORS["text_secondary"],
+        ).pack(side=tk.LEFT, padx=(0, 8))
+
+        self.master_volume_var = tk.DoubleVar(value=100)
+        self.master_volume_slider = ctk.CTkSlider(
+            master_row,
+            from_=0,
+            to=150,
+            variable=self.master_volume_var,
+            command=self._update_master_volume,
+            width=200,
+            height=16,
+            fg_color=COLORS["bg_light"],
+            progress_color=COLORS["green"],
+            button_color=COLORS["text_primary"],
+            button_hover_color=COLORS["green"],
+        )
+        self.master_volume_slider.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.master_volume_label = ctk.CTkLabel(
+            master_row,
+            text="100%",
+            font=ctk.CTkFont(family=FONTS["family_mono"], size=FONTS["size_xs"]),
+            text_color=COLORS["text_muted"],
+            width=40,
+        )
+        self.master_volume_label.pack(side=tk.LEFT)
+
+        # ----- Call Recording settings -----
+        # Live record button + timer live in the action bar (next to YouTube).
+        # This card holds the persistent settings: save folder + mic mixing.
+        rec_card = ctk.CTkFrame(
+            device_frame,
+            fg_color=COLORS["bg_medium"],
+            corner_radius=UI["corner_radius"],
+        )
+        rec_card.pack(fill=tk.X, pady=(12, 0))
+
+        rec_header = ctk.CTkFrame(rec_card, fg_color="transparent")
+        rec_header.pack(fill=tk.X, padx=10, pady=(8, 4))
+        ctk.CTkLabel(
+            rec_header,
+            text="🔴  Call Recording",
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"], weight="bold"),
+            text_color=COLORS["red"],
+        ).pack(side=tk.LEFT)
+        ctk.CTkLabel(
+            rec_header,
+            text="(use the ● Rec button above to start)",
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            text_color=COLORS["text_muted"],
+        ).pack(side=tk.LEFT, padx=(8, 0))
+
+        rec_path_row = ctk.CTkFrame(rec_card, fg_color="transparent")
+        rec_path_row.pack(fill=tk.X, padx=10, pady=(0, 8))
+
+        self.recording_include_mic_var = tk.BooleanVar(value=True)
+        ctk.CTkCheckBox(
+            rec_path_row,
+            text="Include mic",
+            variable=self.recording_include_mic_var,
+            command=self._save_config,
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            text_color=COLORS["text_secondary"],
+            checkbox_height=18,
+            checkbox_width=18,
+        ).pack(side=tk.LEFT, padx=(0, 12))
+
+        ctk.CTkLabel(
+            rec_path_row,
+            text="Save to:",
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            text_color=COLORS["text_secondary"],
+        ).pack(side=tk.LEFT, padx=(0, 6))
+
+        default_rec_dir = os.path.join(os.path.expanduser("~"), "Documents", "DiscordRecordings")
+        self.recording_dir_var = tk.StringVar(value=default_rec_dir)
+        self.recording_dir_entry = ctk.CTkEntry(
+            rec_path_row,
+            textvariable=self.recording_dir_var,
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            height=28,
+            width=320,
+        )
+        self.recording_dir_entry.pack(side=tk.LEFT, padx=(0, 6))
+        self.recording_dir_entry.bind("<FocusOut>", lambda e: self._save_config())
+
+        ctk.CTkButton(
+            rec_path_row,
+            text="Browse…",
+            command=self._browse_recording_dir,
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_lighter"],
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            corner_radius=UI["button_corner_radius"],
+            height=28,
+            width=80,
+        ).pack(side=tk.LEFT, padx=(0, 6))
+
+        ctk.CTkButton(
+            rec_path_row,
+            text="Open",
+            command=self._open_recording_dir,
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_lighter"],
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            corner_radius=UI["button_corner_radius"],
+            height=28,
+            width=60,
+        ).pack(side=tk.LEFT)
+
+    def _browse_recording_dir(self):
+        """Pick a folder for saved recordings."""
+        current = self.recording_dir_var.get() or os.path.expanduser("~")
+        chosen = filedialog.askdirectory(
+            title="Choose folder for recordings",
+            initialdir=current if os.path.isdir(current) else os.path.expanduser("~"),
+        )
+        if chosen:
+            self.recording_dir_var.set(chosen)
+            self._save_config()
+
+    def _open_recording_dir(self):
+        """Open the recordings folder in Explorer."""
+        path = self.recording_dir_var.get()
+        if not path:
+            return
+        try:
+            os.makedirs(path, exist_ok=True)
+            os.startfile(path)  # type: ignore[attr-defined]
+        except Exception as e:
+            messagebox.showerror("Open Folder", f"Could not open folder:\n{e}")
+
+    def _toggle_recording(self):
+        """Start or stop call recording."""
+        # If recording, stop it
+        if self.recorder is not None and self.recorder.recording:
+            try:
+                saved_path = self.recorder.stop()
+            except Exception as e:
+                messagebox.showerror("Recording", f"Error stopping recording:\n{e}")
+                saved_path = None
+            finally:
+                self.recorder = None
+                if self._recording_after_id is not None:
+                    try:
+                        self.root.after_cancel(self._recording_after_id)
+                    except Exception:
+                        pass
+                    self._recording_after_id = None
+                self.record_btn.configure(
+                    text="● Rec",
+                    fg_color=COLORS["red"],
+                    hover_color=COLORS["red_hover"],
+                )
+                self.recording_timer_label.configure(
+                    text="0:00", text_color=COLORS["text_muted"]
+                )
+            if saved_path:
+                # Brief "saved" confirmation in the status bar
+                self.status_var.set(f"💾 Saved recording: {os.path.basename(saved_path)}")
+                self.root.after(4000, self._update_status_bar)
+            else:
+                self._update_status_bar()
+            return
+
+        # Start a new recording
+        out_dir = self.recording_dir_var.get().strip()
+        if not out_dir:
+            messagebox.showwarning("Recording", "Please choose a folder to save recordings.")
+            return
+        include_mic = bool(self.recording_include_mic_var.get())
+
+        try:
+            self.recorder = Recorder()
+            self.recorder.start(
+                output_dir=out_dir,
+                include_mic=include_mic,
+                mixer=self.mixer if include_mic else None,
+            )
+        except Exception as e:
+            self.recorder = None
+            messagebox.showerror(
+                "Recording",
+                f"Could not start recording:\n{e}\n\n"
+                "Make sure audio is playing through your default Windows playback device.",
+            )
+            return
+
+        self.record_btn.configure(
+            text="■ Stop",
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_lighter"],
+        )
+        self.recording_timer_label.configure(text="● 0:00", text_color=COLORS["red"])
+        self._update_recording_timer()
+        self._update_status_bar()
+        self._save_config()
+
+    def _update_recording_timer(self):
+        """Tick the elapsed-time label in the action bar while recording."""
+        if self.recorder is None or not self.recorder.recording:
+            self._recording_after_id = None
+            return
+        elapsed = int(self.recorder.get_elapsed())
+        m, s = divmod(elapsed, 60)
+        h, m = divmod(m, 60)
+        if h > 0:
+            txt = f"● {h}:{m:02d}:{s:02d}"
+        else:
+            txt = f"● {m}:{s:02d}"
+        try:
+            self.recording_timer_label.configure(text=txt, text_color=COLORS["red"])
+            # Refresh status-bar recording portion (cheap; deduped via StringVar)
+            self._update_status_bar()
+        except Exception:
+            return
+        self._recording_after_id = self.root.after(500, self._update_recording_timer)
+
     def _toggle_audio_options(self):
         """Toggle the audio options visibility."""
         # Pre-arm resize state so the cascade of CTk child redraws triggered by
@@ -1927,6 +2120,41 @@ class SoundboardApp:
             width=90,
         )
         self.youtube_btn.pack(side=tk.LEFT, padx=(6, 0), pady=8)
+
+        # ---- Call Recorder cluster (button + live timer) ----
+        # Visually grouped so the timer reads as belonging to the record btn.
+        rec_cluster = ctk.CTkFrame(
+            left_section,
+            fg_color=COLORS["bg_dark"],
+            corner_radius=6,
+        )
+        rec_cluster.pack(side=tk.LEFT, padx=(8, 0), pady=8)
+
+        self.record_btn = ctk.CTkButton(
+            rec_cluster,
+            text="● Rec",
+            command=self._toggle_recording,
+            fg_color=COLORS["red"],
+            hover_color=COLORS["red_hover"],
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"], weight="bold"),
+            corner_radius=6,
+            height=28,
+            width=66,
+        )
+        self.record_btn.pack(side=tk.LEFT, padx=(3, 4), pady=2)
+
+        self.recording_timer_label = ctk.CTkLabel(
+            rec_cluster,
+            text="0:00",
+            font=ctk.CTkFont(family=FONTS["family_mono"], size=FONTS["size_sm"], weight="bold"),
+            text_color=COLORS["text_muted"],
+            width=58,
+        )
+        self.recording_timer_label.pack(side=tk.LEFT, padx=(0, 4), pady=2)
+
+        # Kept as alias so the legacy code path that wrote to
+        # `recording_status_label` still works without touching it.
+        self.recording_status_label = self.recording_timer_label
 
         # RIGHT: Stop All and Playing buttons
         right_section = ctk.CTkFrame(self.action_bar_frame, fg_color="transparent")
@@ -2484,6 +2712,7 @@ class SoundboardApp:
 
         # Save config
         self._save_config()
+        self._update_status_bar()
 
     def _create_soundboard_section(self, parent):
         """Create the soundboard grid section with scrolling.
@@ -3505,18 +3734,83 @@ class SoundboardApp:
                 self._update_current_tab_aliases()
 
     def _create_status_bar(self, parent):
-        """Create the status bar at the bottom."""
+        """Create the status bar at the bottom.
+
+        Shows live system state at a glance:
+          [● Stream]  🎤 Mic Name  →  🔊 Output Name  |  PTT key  |  🔴 Rec timer
+        plus a free-form right-hand status message ("Ready", "Saved …", etc.).
+        Always visible — gives the user the same info the audio-options card
+        does even when that card is collapsed.
+        """
         status_frame = ctk.CTkFrame(
-            parent, fg_color=COLORS["bg_dark"], corner_radius=UI["button_corner_radius"], height=28
+            parent,
+            fg_color=COLORS["bg_dark"],
+            corner_radius=UI["button_corner_radius"],
+            height=30,
         )
         status_frame.pack(fill=tk.X, pady=(8, 0))
         status_frame.pack_propagate(False)
 
-        self.status_var = tk.StringVar(value="Ready - Select devices and click Start")
+        font_xs = ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"])
+        font_xs_bold = ctk.CTkFont(
+            family=FONTS["family"], size=FONTS["size_xs"], weight="bold"
+        )
+
+        # Stream indicator (colored dot + label)
+        self.status_stream_label = ctk.CTkLabel(
+            status_frame,
+            text="● Stopped",
+            font=font_xs_bold,
+            text_color=COLORS["text_muted"],
+        )
+        self.status_stream_label.pack(side=tk.LEFT, padx=(10, 8), pady=4)
+
+        # Mic device
+        self.status_mic_label = ctk.CTkLabel(
+            status_frame,
+            text="🎤 —",
+            font=font_xs,
+            text_color=COLORS["text_secondary"],
+        )
+        self.status_mic_label.pack(side=tk.LEFT, padx=(0, 6), pady=4)
+
+        ctk.CTkLabel(
+            status_frame,
+            text="→",
+            font=font_xs,
+            text_color=COLORS["text_muted"],
+        ).pack(side=tk.LEFT, padx=(0, 6), pady=4)
+
+        # Output device
+        self.status_output_label = ctk.CTkLabel(
+            status_frame,
+            text="🔊 —",
+            font=font_xs,
+            text_color=COLORS["text_secondary"],
+        )
+        self.status_output_label.pack(side=tk.LEFT, padx=(0, 12), pady=4)
+
+        # PTT info
+        self.status_ptt_label = ctk.CTkLabel(
+            status_frame,
+            text="",
+            font=font_xs,
+            text_color=COLORS["text_muted"],
+        )
+        self.status_ptt_label.pack(side=tk.LEFT, padx=(0, 12), pady=4)
+
+        # Recording info (separate from action-bar timer; shown only while recording)
+        self.status_rec_label = ctk.CTkLabel(
+            status_frame,
+            text="",
+            font=font_xs_bold,
+            text_color=COLORS["red"],
+        )
+        self.status_rec_label.pack(side=tk.LEFT, padx=(0, 12), pady=4)
+
+        # Right-hand free-form status message
+        self.status_var = tk.StringVar(value="Ready")
         self._last_status_text = self.status_var.get()
-        # Skip StringVar.set() when text hasn't changed — Tk still fires write
-        # traces and the bound CTkLabel redraws even if the value is identical.
-        # With many _play_slot/_stop_slot calls this adds up. Wrap once.
         _orig_status_set = self.status_var.set
 
         def _dedup_status_set(value, *a, **kw):
@@ -3529,11 +3823,100 @@ class SoundboardApp:
         self.status_label = ctk.CTkLabel(
             status_frame,
             textvariable=self.status_var,
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            font=font_xs,
             text_color=COLORS["text_muted"],
-            anchor="w",
+            anchor="e",
         )
-        self.status_label.pack(fill=tk.X, padx=10, pady=4)
+        self.status_label.pack(side=tk.RIGHT, padx=10, pady=4)
+
+    def _short_device_name(self, raw: str, max_len: int = 28) -> str:
+        """Strip the leading 'NN: ' device-index prefix and trim to max_len."""
+        if not raw:
+            return "—"
+        name = raw.split(":", 1)[1].strip() if ":" in raw else raw
+        # Drop trailing API tag like " (MME)" / " (Windows DirectSound)"
+        if " (" in name and name.endswith(")"):
+            name = name.rsplit(" (", 1)[0]
+        if len(name) > max_len:
+            name = name[: max_len - 1].rstrip() + "…"
+        return name
+
+    def _update_status_bar(self):
+        """Refresh the live indicators in the status bar.
+
+        Safe to call from any state change (stream toggle, device change,
+        recording start/stop, PTT change). Cheap — just reconfigures a few
+        CTkLabel text/colors; the StringVar is dedup'd.
+        """
+        if not hasattr(self, "status_stream_label"):
+            return  # Status bar not built yet (called during init)
+
+        # --- Stream state ---
+        running = bool(self.mixer and self.mixer.running)
+        if running:
+            self.status_stream_label.configure(
+                text="● Live", text_color=COLORS["green"]
+            )
+        else:
+            self.status_stream_label.configure(
+                text="○ Stopped", text_color=COLORS["text_muted"]
+            )
+
+        # --- Devices ---
+        mic_raw = self.input_var.get() if hasattr(self, "input_var") else ""
+        out_raw = self.output_var.get() if hasattr(self, "output_var") else ""
+        mic_short = self._short_device_name(mic_raw)
+        out_short = self._short_device_name(out_raw)
+
+        muted = bool(self.mixer and self.mixer.mic_muted)
+        mic_text = f"🔇 {mic_short}" if muted else f"🎤 {mic_short}"
+        self.status_mic_label.configure(
+            text=mic_text,
+            text_color=(
+                COLORS["red"]
+                if muted
+                else (COLORS["text_secondary"] if running else COLORS["text_muted"])
+            ),
+        )
+        self.status_output_label.configure(
+            text=f"🔊 {out_short}",
+            text_color=(
+                COLORS["text_secondary"] if running else COLORS["text_muted"]
+            ),
+        )
+
+        # --- PTT ---
+        ptt_enabled = bool(
+            getattr(self, "ptt_enabled_var", None)
+            and self.ptt_enabled_var.get()
+        )
+        ptt_key = (
+            self.ptt_key_var.get().strip()
+            if hasattr(self, "ptt_key_var")
+            else ""
+        )
+        if ptt_enabled and ptt_key:
+            self.status_ptt_label.configure(
+                text=f"🎙 PTT: {ptt_key}",
+                text_color=COLORS["blurple"],
+            )
+        else:
+            self.status_ptt_label.configure(text="", text_color=COLORS["text_muted"])
+
+        # --- Recording ---
+        if self.recorder is not None and self.recorder.recording:
+            elapsed = int(self.recorder.get_elapsed())
+            m, s = divmod(elapsed, 60)
+            h, m = divmod(m, 60)
+            if h > 0:
+                t = f"{h}:{m:02d}:{s:02d}"
+            else:
+                t = f"{m}:{s:02d}"
+            self.status_rec_label.configure(
+                text=f"🔴 REC {t}", text_color=COLORS["red"]
+            )
+        else:
+            self.status_rec_label.configure(text="")
 
     def _toggle_stream(self):
         """Start or stop the audio stream."""
@@ -3542,12 +3925,17 @@ class SoundboardApp:
             self.toggle_btn.configure(
                 text="▶ Start Stream", fg_color=COLORS["green"], hover_color=COLORS["green_hover"]
             )
-            self.status_var.set("Stopped")
+            self.status_var.set("Stream stopped")
+            self._update_status_bar()
         else:
             try:
                 input_idx = int(self.input_var.get().split(":")[0])
                 output_idx = int(self.output_var.get().split(":")[0])
                 self.mixer = AudioMixer(input_idx, output_idx, sound_cache=self.sound_cache)
+                # Apply persisted volume settings
+                self.mixer.mic_volume = self.mic_volume_var.get() / 100.0
+                if hasattr(self, "master_volume_var"):
+                    self.mixer.master_volume = self.master_volume_var.get() / 100.0
                 # Apply PTT key if enabled and configured
                 ptt_key = None
                 if self.ptt_enabled_var.get():
@@ -3565,19 +3953,32 @@ class SoundboardApp:
                     text="⏹ Stop Stream", fg_color=COLORS["red"], hover_color=COLORS["red_hover"]
                 )
                 ptt_status = f" (PTT: {ptt_key})" if ptt_key else ""
-                self.status_var.set(f"Running - Mic → Virtual Cable{ptt_status}")
+                self.status_var.set(f"Streaming{ptt_status}")
+                self._update_status_bar()
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to start:\n{e}")
+                self._update_status_bar()
 
     def _update_mic_volume(self, _=None):
         """Update microphone volume from slider."""
         if self.mixer:
             self.mixer.mic_volume = self.mic_volume_var.get() / 100.0
 
+    def _update_master_volume(self, _=None):
+        """Update master (sounds) volume from slider. Affects all playing sounds."""
+        val = self.master_volume_var.get()
+        if hasattr(self, "master_volume_label"):
+            self.master_volume_label.configure(text=f"{int(val)}%")
+        if self.mixer:
+            self.mixer.master_volume = val / 100.0
+        # Persist (debounced).
+        self._save_config()
+
     def _toggle_mic_mute(self):
         """Toggle microphone mute state."""
         if self.mixer:
             self.mixer.mic_muted = self.mic_mute_var.get()
+        self._update_status_bar()
 
     def _toggle_monitor(self):
         """Toggle local speaker monitoring (hear sounds through speakers)."""
@@ -5036,8 +5437,11 @@ class SoundboardApp:
                 edited_audio_data["data"] is not None
                 and edited_audio_data["sample_rate"] is not None
             ):
-                if existing and existing.source_file_path \
-                        and os.path.isfile(existing.source_file_path):
+                if (
+                    existing
+                    and existing.source_file_path
+                    and os.path.isfile(existing.source_file_path)
+                ):
                     # Existing slot already has a tracked original — keep it.
                     new_source_file_path = existing.source_file_path
                 elif source_path:
@@ -5800,6 +6204,42 @@ class SoundboardApp:
             hover_color=COLORS["bg_lighter"],
         ).pack(side=tk.LEFT, padx=(4, 0))
 
+        # Live cookies-from-browser option (much more reliable than a
+        # stale cookies.txt). yt-dlp pulls fresh session cookies straight
+        # from the chosen browser's profile.
+        ctk.CTkLabel(
+            frame,
+            text="Or use cookies live from a browser (recommended for age-restricted):",
+            text_color=COLORS["text_secondary"],
+            font=ctk.CTkFont(family=FONTS["family"], size=11),
+        ).pack(anchor="w", pady=(4, 0))
+
+        browser_choices = ["None", "chrome", "firefox", "edge", "brave", "opera", "vivaldi", "chromium"]
+        browser_var = tk.StringVar(value=getattr(self, "_youtube_cookies_browser", "None") or "None")
+        browser_menu = ctk.CTkOptionMenu(
+            frame,
+            variable=browser_var,
+            values=browser_choices,
+            width=160,
+            height=28,
+            fg_color=COLORS["bg_medium"],
+            button_color=COLORS["bg_light"],
+            button_hover_color=COLORS["bg_lighter"],
+        )
+        browser_menu.pack(anchor="w", pady=(2, 2))
+
+        ctk.CTkLabel(
+            frame,
+            text=(
+                "⚠ Chrome v127+ / recent Edge / Brave use app-bound encryption — "
+                "yt-dlp can't read them.\n"
+                "Use Firefox, or export cookies.txt above."
+            ),
+            text_color=COLORS["text_muted"],
+            font=ctk.CTkFont(family=FONTS["family"], size=10),
+            justify="left",
+        ).pack(anchor="w", pady=(0, 10))
+
         btn_row = ctk.CTkFrame(frame, fg_color="transparent")
         btn_row.pack(fill=tk.X)
 
@@ -5812,11 +6252,15 @@ class SoundboardApp:
             if cookies_path and not os.path.isfile(cookies_path):
                 messagebox.showwarning("YouTube", "Cookies file not found.")
                 return
-            # Persist cookies path for next time
+            browser = browser_var.get().strip()
+            if browser == "None":
+                browser = ""
+            # Persist for next time
             self._youtube_cookies_path = cookies_path or ""
+            self._youtube_cookies_browser = browser
             self._save_config()
             dialog.destroy()
-            self._start_youtube_download(url, cookies_path, self.current_tab_idx)
+            self._start_youtube_download(url, cookies_path, self.current_tab_idx, browser or None)
 
         ctk.CTkButton(
             btn_row,
@@ -5840,7 +6284,7 @@ class SoundboardApp:
 
         url_entry.bind("<Return>", lambda e: start())
 
-    def _start_youtube_download(self, url: str, cookies_path: Optional[str], target_tab_idx: int):
+    def _start_youtube_download(self, url: str, cookies_path: Optional[str], target_tab_idx: int, cookies_browser: Optional[str] = None):
         """Show progress dialog and download a single YouTube video as MP3."""
         try:
             import yt_dlp  # type: ignore
@@ -5977,6 +6421,9 @@ class SoundboardApp:
                 ydl_opts["ffmpeg_location"] = ffmpeg_dir
             if cookies_path:
                 ydl_opts["cookiefile"] = cookies_path
+            if cookies_browser:
+                # yt-dlp expects a tuple: (browser_name, profile|None, keyring|None, container|None)
+                ydl_opts["cookiesfrombrowser"] = (cookies_browser,)
 
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:  # type: ignore[arg-type]
@@ -6005,6 +6452,45 @@ class SoundboardApp:
                 else:
                     # Strip ANSI color codes from yt-dlp error messages
                     msg = re.sub(r"\x1b?\[[0-9;]*m", "", str(e))
+
+                    # Friendlier messages for the most common failure modes
+                    low = msg.lower()
+                    if "failed to decrypt with dpapi" in low or (
+                        "decrypt" in low and "cookie" in low
+                    ):
+                        msg = (
+                            f"Can't decrypt {cookies_browser or 'browser'} cookies.\n\n"
+                            "Chrome v127+ (and recent Edge/Brave) use app-bound "
+                            "encryption — only Chrome itself can read its cookies "
+                            "now. yt-dlp issue #10927.\n\n"
+                            "Fix (pick one):\n"
+                            "  1. Switch the browser dropdown to firefox and sign "
+                            "into YouTube there. Firefox cookies still work.\n"
+                            "  2. Install the \"Get cookies.txt LOCALLY\" Chrome "
+                            "extension, export youtube.com cookies to a .txt file, "
+                            "and use the Cookies file field instead of the browser "
+                            "dropdown."
+                        )
+                    elif "could not copy" in low and "cookie" in low:
+                        msg = (
+                            f"Can't read cookies from {cookies_browser or 'the selected browser'} "
+                            "while it's running.\n\n"
+                            "Fix (pick one):\n"
+                            "  1. Fully quit the browser (check the system tray — "
+                            "Chrome/Edge often keep a background process running) "
+                            "and try again.\n"
+                            "  2. Or switch to Firefox in the browser dropdown — "
+                            "Firefox doesn't lock its cookies file.\n"
+                            "  3. Or export a cookies.txt with a browser extension "
+                            "(\"Get cookies.txt LOCALLY\") and use the Cookies file "
+                            "field instead."
+                        )
+                    elif "sign in to confirm your age" in low:
+                        msg = (
+                            "YouTube is asking for sign-in to confirm your age.\n\n"
+                            "Pick a browser you're logged into in the dropdown, "
+                            "or supply a fresh cookies.txt."
+                        )
                     result["error"] = msg
 
         def on_done():
@@ -6129,16 +6615,25 @@ class SoundboardApp:
             "now_playing_visible": (
                 self.now_playing_panel.is_visible if hasattr(self, "now_playing_panel") else False
             ),
-            "now_playing_side": (
-                self.now_playing_panel.panel_side if hasattr(self, "now_playing_panel") else "right"
+            "master_volume": (
+                self.master_volume_var.get() if hasattr(self, "master_volume_var") else 100
             ),
             "custom_groups": self._custom_groups,
             "youtube_cookies_path": getattr(self, "_youtube_cookies_path", "") or "",
+            "youtube_cookies_browser": getattr(self, "_youtube_cookies_browser", "") or "",
             "noise_suppression": (
                 self.noise_suppress_var.get() if hasattr(self, "noise_suppress_var") else False
             ),
             "noise_suppression_strength": (
                 self.ns_strength_var.get() if hasattr(self, "ns_strength_var") else 85
+            ),
+            "recording_dir": (
+                self.recording_dir_var.get() if hasattr(self, "recording_dir_var") else ""
+            ),
+            "recording_include_mic": (
+                self.recording_include_mic_var.get()
+                if hasattr(self, "recording_include_mic_var")
+                else True
             ),
         }
 
@@ -6238,7 +6733,13 @@ class SoundboardApp:
 
             # Load Now Playing panel settings
             now_playing_visible = config.get("now_playing_visible", False)
-            now_playing_side = config.get("now_playing_side", "right")
+
+            # Load master (sounds) volume
+            master_volume = float(config.get("master_volume", 100))
+            if hasattr(self, "master_volume_var"):
+                self.master_volume_var.set(master_volume)
+                if hasattr(self, "master_volume_label"):
+                    self.master_volume_label.configure(text=f"{int(master_volume)}%")
 
             # Load custom groups
             self._custom_groups = config.get("custom_groups", [])
@@ -6246,9 +6747,18 @@ class SoundboardApp:
 
             # Load YouTube downloader cookies path
             self._youtube_cookies_path = config.get("youtube_cookies_path", "") or ""
+            self._youtube_cookies_browser = config.get("youtube_cookies_browser", "") or ""
+
+            # Load recording settings
+            rec_dir = config.get("recording_dir", "") or ""
+            if rec_dir and hasattr(self, "recording_dir_var"):
+                self.recording_dir_var.set(rec_dir)
+            if hasattr(self, "recording_include_mic_var"):
+                self.recording_include_mic_var.set(
+                    bool(config.get("recording_include_mic", True))
+                )
 
             if hasattr(self, "now_playing_panel"):
-                self.now_playing_panel.set_side(now_playing_side)
                 if now_playing_visible:
                     self.now_playing_panel.show()
                     self.now_playing_btn.configure(
@@ -6267,6 +6777,9 @@ class SoundboardApp:
             # Auto-start the stream if enabled and devices are selected
             if auto_start and self.input_var.get() and self.output_var.get():
                 self.root.after(100, self._auto_start_stream)
+
+            # Initial paint of the rich status bar (devices/PTT/etc.)
+            self.root.after(50, self._update_status_bar)
 
         except Exception as e:
             print(f"Error loading config: {e}")
@@ -6333,6 +6846,14 @@ class SoundboardApp:
             self._flush_save_config()
         except Exception:
             pass
+
+        # Stop any active recording so the file is flushed to disk before
+        # we shut down the audio streams it depends on.
+        if self.recorder is not None and self.recorder.recording:
+            try:
+                self.recorder.stop()
+            except Exception:
+                pass
 
         # Signal mixer to shut down (sets _shutting_down flag and releases PTT)
         if self.mixer:
