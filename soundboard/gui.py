@@ -6622,9 +6622,7 @@ class SoundboardApp:
             "auto_start": self.auto_start_var.get() if hasattr(self, "auto_start_var") else True,
             "monitor_enabled": self.monitor_var.get() if hasattr(self, "monitor_var") else True,
             "minimize_to_tray": (
-                self.minimize_to_tray_var.get()
-                if hasattr(self, "minimize_to_tray_var")
-                else False
+                self.minimize_to_tray_var.get() if hasattr(self, "minimize_to_tray_var") else False
             ),
             "now_playing_visible": (
                 self.now_playing_panel.is_visible if hasattr(self, "now_playing_panel") else False

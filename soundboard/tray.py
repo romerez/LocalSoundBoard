@@ -98,9 +98,7 @@ class SystemTray:
             Menu.SEPARATOR,
             MenuItem("Quit", _menu_quit),
         )
-        self._icon = pystray.Icon(
-            "soundboard", image, title, menu
-        )
+        self._icon = pystray.Icon("soundboard", image, title, menu)
 
     # ------------------------------------------------------------------
     # Lifecycle
