@@ -88917,3 +88917,644 @@ AdaptBlockInfo(insts=((0, {}), (2, {}), (4, {'res': '$x4.0'}), (6, {'res': '$con
 [soundboard.audio] Queued from cache: 165642 samples (speed=1.0, preserve_pitch=False, volume=0.21, id=0_0, loop=False)
 [soundboard.audio] PTT pressing: f9
 [soundboard.audio] Queued from cache: 165642 samples (speed=1.0, preserve_pitch=False, volume=0.21, id=0_0, loop=False)
+[soundboard.audio] Queued from cache: 212889 samples (speed=1.0, preserve_pitch=True, volume=0.37, id=4_0, loop=False)
+[soundboard.audio] PTT pressing: f9
+[soundboard.audio] Stop: id=4_0, currently_playing=1, ids=['4_0']
+[soundboard.audio] Stop: removed 1 sounds from currently_playing
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 48170
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 50760
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[soundboard.audio] PTT key set to: f9 (VK: 120)
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 58860
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 58860
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 50986
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[soundboard.audio] Queued from cache: 56476 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=0_3, loop=False)
+[soundboard.audio] PTT pressing: f9
+[PIL.Image] Importing AvifImagePlugin
+[PIL.Image] Importing BlpImagePlugin
+[PIL.Image] Importing BmpImagePlugin
+[PIL.Image] Importing BufrStubImagePlugin
+[PIL.Image] Importing CurImagePlugin
+[PIL.Image] Importing DcxImagePlugin
+[PIL.Image] Importing DdsImagePlugin
+[PIL.Image] Importing EpsImagePlugin
+[PIL.Image] Importing FitsImagePlugin
+[PIL.Image] Importing FliImagePlugin
+[PIL.Image] Importing FpxImagePlugin
+[PIL.Image] Image: failed to import FpxImagePlugin: No module named 'olefile'
+[PIL.Image] Importing FtexImagePlugin
+[PIL.Image] Importing GbrImagePlugin
+[PIL.Image] Importing GifImagePlugin
+[PIL.Image] Importing GribStubImagePlugin
+[PIL.Image] Importing Hdf5StubImagePlugin
+[PIL.Image] Importing IcnsImagePlugin
+[PIL.Image] Importing IcoImagePlugin
+[PIL.Image] Importing ImImagePlugin
+[PIL.Image] Importing ImtImagePlugin
+[PIL.Image] Importing IptcImagePlugin
+[PIL.Image] Importing JpegImagePlugin
+[PIL.Image] Importing Jpeg2KImagePlugin
+[PIL.Image] Importing McIdasImagePlugin
+[PIL.Image] Importing MicImagePlugin
+[PIL.Image] Image: failed to import MicImagePlugin: No module named 'olefile'
+[PIL.Image] Importing MpegImagePlugin
+[PIL.Image] Importing MpoImagePlugin
+[PIL.Image] Importing MspImagePlugin
+[PIL.Image] Importing PalmImagePlugin
+[PIL.Image] Importing PcdImagePlugin
+[PIL.Image] Importing PcxImagePlugin
+[PIL.Image] Importing PdfImagePlugin
+[PIL.Image] Importing PixarImagePlugin
+[PIL.Image] Importing PngImagePlugin
+[PIL.Image] Importing PpmImagePlugin
+[PIL.Image] Importing PsdImagePlugin
+[PIL.Image] Importing QoiImagePlugin
+[PIL.Image] Importing SgiImagePlugin
+[PIL.Image] Importing SpiderImagePlugin
+[PIL.Image] Importing SunImagePlugin
+[PIL.Image] Importing TgaImagePlugin
+[PIL.Image] Importing TiffImagePlugin
+[PIL.Image] Importing WebPImagePlugin
+[PIL.Image] Importing WmfImagePlugin
+[PIL.Image] Importing XbmImagePlugin
+[PIL.Image] Importing XpmImagePlugin
+[PIL.Image] Importing XVThumbImagePlugin
+[soundboard.audio] Queued from cache: 39168349 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=8_0, loop=False)
+[soundboard.audio] PTT pressing: f9
+[soundboard.audio] Stop: id=8_0, currently_playing=1, ids=['8_0']
+[soundboard.audio] Stop: removed 1 sounds from currently_playing
+[soundboard.audio] Queued from cache: 16272545 samples (speed=1.0, preserve_pitch=True, volume=1.0, id=9_8, loop=False)
+[soundboard.audio] PTT pressing: f9
+[soundboard.audio] Stop: id=9_8, currently_playing=1, ids=['9_8']
+[soundboard.audio] Stop: removed 1 sounds from currently_playing
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 48170
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 50760
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[soundboard.audio] PTT key set to: f9 (VK: 120)
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 58860
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 58860
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 50986
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[soundboard.audio] PTT key set to: None (VK: None)
+[soundboard.audio] PTT key set to: f9 (VK: 120)
+[soundboard.audio] PTT key set to: f9 (VK: 120)
+[PIL.Image] Importing AvifImagePlugin
+[PIL.Image] Importing BlpImagePlugin
+[PIL.Image] Importing BmpImagePlugin
+[PIL.Image] Importing BufrStubImagePlugin
+[PIL.Image] Importing CurImagePlugin
+[PIL.Image] Importing DcxImagePlugin
+[PIL.Image] Importing DdsImagePlugin
+[PIL.Image] Importing EpsImagePlugin
+[PIL.Image] Importing FitsImagePlugin
+[PIL.Image] Importing FliImagePlugin
+[PIL.Image] Importing FpxImagePlugin
+[PIL.Image] Image: failed to import FpxImagePlugin: No module named 'olefile'
+[PIL.Image] Importing FtexImagePlugin
+[PIL.Image] Importing GbrImagePlugin
+[PIL.Image] Importing GifImagePlugin
+[PIL.Image] Importing GribStubImagePlugin
+[PIL.Image] Importing Hdf5StubImagePlugin
+[PIL.Image] Importing IcnsImagePlugin
+[PIL.Image] Importing IcoImagePlugin
+[PIL.Image] Importing ImImagePlugin
+[PIL.Image] Importing ImtImagePlugin
+[PIL.Image] Importing IptcImagePlugin
+[PIL.Image] Importing JpegImagePlugin
+[PIL.Image] Importing Jpeg2KImagePlugin
+[PIL.Image] Importing McIdasImagePlugin
+[PIL.Image] Importing MicImagePlugin
+[PIL.Image] Image: failed to import MicImagePlugin: No module named 'olefile'
+[PIL.Image] Importing MpegImagePlugin
+[PIL.Image] Importing MpoImagePlugin
+[PIL.Image] Importing MspImagePlugin
+[PIL.Image] Importing PalmImagePlugin
+[PIL.Image] Importing PcdImagePlugin
+[PIL.Image] Importing PcxImagePlugin
+[PIL.Image] Importing PdfImagePlugin
+[PIL.Image] Importing PixarImagePlugin
+[PIL.Image] Importing PngImagePlugin
+[PIL.Image] Importing PpmImagePlugin
+[PIL.Image] Importing PsdImagePlugin
+[PIL.Image] Importing QoiImagePlugin
+[PIL.Image] Importing SgiImagePlugin
+[PIL.Image] Importing SpiderImagePlugin
+[PIL.Image] Importing SunImagePlugin
+[PIL.Image] Importing TgaImagePlugin
+[PIL.Image] Importing TiffImagePlugin
+[PIL.Image] Importing WebPImagePlugin
+[PIL.Image] Importing WmfImagePlugin
+[PIL.Image] Importing XbmImagePlugin
+[PIL.Image] Importing XpmImagePlugin
+[PIL.Image] Importing XVThumbImagePlugin
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 48170
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 50760
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[soundboard.audio] PTT key set to: f9 (VK: 120)
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 65445
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 58860
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 58860
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'sRGB' 41 1
+[PIL.PngImagePlugin] STREAM b'gAMA' 54 4
+[PIL.PngImagePlugin] STREAM b'pHYs' 70 9
+[PIL.PngImagePlugin] STREAM b'IDAT' 91 50986
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[PIL.PngImagePlugin] STREAM b'IHDR' 16 13
+[PIL.PngImagePlugin] STREAM b'IDAT' 41 65536
+[soundboard.audio] PTT pressing: f9
+[soundboard.audio] PTT pressing: f9
+[soundboard.audio] PTT pressing: f9
+[soundboard.audio] PTT pressing: f9

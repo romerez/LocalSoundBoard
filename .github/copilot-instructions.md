@@ -1,6 +1,6 @@
 # Copilot Instructions - Discord Soundboard Project
 
-> **Last Updated:** 2026-04-30
+> **Last Updated:** 2026-05-03
 > **Status:** Active Development
 > **Language:** Python 3.x
 
@@ -442,6 +442,10 @@ Example: `airhorn_8f3a2b1c.mp3`
 - [x] System tray minimization (configurable via "Minimize to tray" checkbox in audio options; tray menu offers Show / Quit)
 - [x] Native Tk emoji picker (replaces unreliable PyQt6 subprocess approach)
 - [x] Colored emoji rendering on slot buttons + emoji picker (PIL rasterises `seguiemj.ttf` with `embedded_color=True` and caches as `ImageTk.PhotoImage`)
+- [x] **Mic Test / Test Output** — Live monitoring + record-and-play of the EXACT signal sent to Discord (captured AFTER `_soft_clip` in `_output_callback` so it's byte-identical to the virtual cable). Lets the user hear delay, clipping, quality without a second account.
+- [x] **Test PTT hold** — Optional checkbox makes the test press-and-hold the configured PTT key (`AudioMixer.hold_ptt()` / `release_ptt_hold()` + `manual_ptt_hold` flag bypassing auto-release & safety timeout) so the test actually transmits to Discord end-to-end.
+- [x] **Card-based Audio Options layout** — 8 titled cards via inline `_make_card()` factory (Devices, Stream, Test Output, Volume, Push-to-Talk, Mic Processing, Call Recording, App). Test Output is placed near the top because it's the most useful diagnostic.
+- [x] **Scrollable Audio Options panel** — Outer `audio_options_frame` is fixed-height (380px) with `pack_propagate(False)`; inner card container is a `CTkScrollableFrame` so all cards remain reachable while keeping the soundboard grid visible.
 
 ---
 
@@ -1286,6 +1290,9 @@ When asked to add a feature:
 | Hotkey playback doesn't show stop button | `_play_slot_from_tab` didn't pack the stop button like `_play_slot` does | Add stop button packing logic to `_play_slot_from_tab` in the `update_ui` lambda |
 | Tk Canvas can't render colored emoji on Windows | `Canvas.create_text` with "Segoe UI Emoji" only paints the monochrome glyph layer — COLR/CPAL color tables are ignored | Pre-rasterise via Pillow: `ImageFont.truetype("seguiemj.ttf", 109)` + `ImageDraw.text(..., embedded_color=True)` → RGBA `Image` → `ImageTk.PhotoImage`. Cache by `(emoji, size)`. Resize the **rasterised image** with LANCZOS, never the font. Both the renderer cache AND the consuming widget must hold strong refs (Tk silently GCs PhotoImages with no Python ref) |
 | pystray callbacks crash or do nothing when touching Tk | pystray runs its icon loop on its own daemon thread; Tk widgets are NOT thread-safe | Always marshal back via `root.after(0, callback)`. Tray "Quit" must set a `_force_quit` flag BEFORE scheduling shutdown — otherwise the `WM_DELETE_WINDOW` handler sees `minimize_to_tray=True` and re-hides the window instead of quitting |
+| Test Output capture didn't match what Discord hears | Earlier prototype tapped the mix BEFORE soft-clip, so loud sounds played back without the same limiting Discord receives | Capture in `_output_callback` MUST be done AFTER `outdata[:] = self._soft_clip(mixed)`. Push a copy of `outdata` to `_test_output_queue` (drop oldest on overflow, maxsize=64) and to the recording buffer. Byte-identical to the virtual cable. |
+| Test PTT auto-released mid-test | The normal PTT auto-release countdown fires when no sounds are queued — the test signal isn't a "sound" so the countdown ran immediately | Added `manual_ptt_hold: bool` flag on `AudioMixer`. `hold_ptt()` sets it + presses; `release_ptt_hold()` clears + releases. Both branches in `_output_callback` (auto-release countdown AND safety timeout) check `not self.manual_ptt_hold` before releasing. |
+| Test Output / 8 cards push the soundboard grid off-screen | Audio Options panel was unconstrained `pack(fill=tk.X)`, growing as cards were added | Outer `audio_options_frame` is fixed-height (380px) with `pack_propagate(False)`; inner card container is a `CTkScrollableFrame` so cards scroll while the soundboard grid below stays put. |
 
 ### Performance (CTk + many widgets)
 

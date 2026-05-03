@@ -1167,6 +1167,22 @@
           "loop_delay": 0.0,
           "groups": [],
           "source_file_path": null
+        },
+        "4": {
+          "name": "בואו לספר לי סיפורים",
+          "file_path": "sounds\\yt_IsCTJhkO624_caa6631a_28832501.wav",
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": "#5865F2",
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         }
       }
     },
@@ -1596,7 +1612,7 @@
   "output_device": "13: CABLE In 16ch (VB-Audio Virtual",
   "auto_start": true,
   "monitor_enabled": true,
-  "minimize_to_tray": false,
+  "minimize_to_tray": true,
   "now_playing_visible": true,
   "master_volume": 82.0,
   "custom_groups": [
@@ -1605,8 +1621,8 @@
   ],
   "youtube_cookies_path": "C:/Users/User/Documents/cookies.txt",
   "youtube_cookies_browser": "",
-  "noise_suppression": false,
-  "noise_suppression_strength": 21.818181818181817,
+  "noise_suppression": true,
+  "noise_suppression_strength": 15.404040404040403,
   "recording_dir": "C:\\Users\\User\\Documents\\DiscordRecordings",
   "recording_include_mic": true
 }

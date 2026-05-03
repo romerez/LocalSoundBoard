@@ -711,6 +711,29 @@ class AudioMixer:
         self.monitor_stream = None
         self._monitor_queue: queue.Queue = queue.Queue()  # Queue for monitor audio blocks
 
+        # Test output - plays the EXACT signal sent to the virtual cable
+        # (mic + sounds, post-clip) on the default speakers so the user can
+        # hear precisely what Discord receives. Different from `monitor`,
+        # which only plays sounds (no mic).
+        self.test_output_enabled = False
+        self.test_output_stream = None
+        self._test_output_queue: queue.Queue = queue.Queue(maxsize=64)
+
+        # Test recording - captures the same final mix into an in-memory
+        # buffer for a fixed duration, then the GUI plays it back so the
+        # user can A/B against what Discord hears (delay, clipping, etc.).
+        self._test_record_lock = threading.Lock()
+        self._test_record_blocks: List[np.ndarray] = []
+        self._test_record_frames_remaining: int = 0
+        self.test_recording_active: bool = False
+        self._test_record_done_callback: Optional[callable] = None  # type: ignore[assignment]
+
+        # Manual PTT hold - when True, the auto-release-on-silence countdown
+        # AND the safety timeout are bypassed so an external caller (e.g. the
+        # Test Output panel) can keep PTT active for as long as it wants
+        # without sounds actually playing.
+        self.manual_ptt_hold: bool = False
+
         # Optional mic tap for the call recorder. When set, every mic block
         # captured in `_input_callback` is also pushed to this queue so the
         # Recorder can mix the user's own voice into the recording. The
@@ -857,6 +880,22 @@ class AudioMixer:
             except Exception:
                 pass
             self.monitor_stream = None
+        if self.test_output_stream:
+            try:
+                self.test_output_stream.abort()
+                self.test_output_stream.close()
+            except Exception:
+                pass
+            self.test_output_stream = None
+            self.test_output_enabled = False
+        # Cancel any in-flight test recording
+        with self._test_record_lock:
+            self.test_recording_active = False
+            self._test_record_blocks = []
+            self._test_record_frames_remaining = 0
+            self._test_record_done_callback = None
+        # Drop any manual PTT hold so PTT can't get stuck across restarts
+        self.manual_ptt_hold = False
 
         # Clear any pending sounds
         with self.lock:
@@ -907,6 +946,120 @@ class AudioMixer:
         except queue.Empty:
             # No audio data available, output silence
             outdata.fill(0)
+
+    # ------------------------------------------------------------------
+    # Test output / Test recording
+    # ------------------------------------------------------------------
+
+    def set_test_output_enabled(self, enabled: bool):
+        """Enable/disable live test output.
+
+        When enabled, the EXACT signal sent to the virtual cable (mic + sounds,
+        post soft-clip) is also played on the default speakers so the user can
+        hear precisely what Discord receives.
+        """
+        if enabled and not self.test_output_stream and self.running:
+            # Drain any stale data
+            while not self._test_output_queue.empty():
+                try:
+                    self._test_output_queue.get_nowait()
+                except queue.Empty:
+                    break
+            self.test_output_stream = sd.OutputStream(
+                device=None,  # Default speakers
+                samplerate=self.sample_rate,
+                blocksize=self.block_size,
+                channels=self.channels,
+                callback=self._test_output_callback,
+                dtype=np.float32,
+            )
+            self.test_output_stream.start()
+            self.test_output_enabled = True
+        elif not enabled and self.test_output_stream:
+            self.test_output_enabled = False
+            try:
+                self.test_output_stream.abort()
+                self.test_output_stream.close()
+            except Exception:
+                pass
+            self.test_output_stream = None
+
+    def _test_output_callback(self, outdata, frames, time, status):
+        """Output callback for test-output stream (default speakers)."""
+        try:
+            audio_block = self._test_output_queue.get_nowait()
+            if len(audio_block) >= frames:
+                outdata[:] = audio_block[:frames]
+            else:
+                outdata[: len(audio_block)] = audio_block
+                outdata[len(audio_block) :] = 0
+        except queue.Empty:
+            outdata.fill(0)
+
+    def start_test_recording(self, duration_seconds: float, on_done=None) -> bool:
+        """Begin capturing the final Discord-bound mix into a buffer.
+
+        Returns False if the mixer isn't running or a recording is already in
+        progress. `on_done` (callable) is invoked from the audio thread when
+        the requested duration has been captured.
+        """
+        if not self.running:
+            return False
+        with self._test_record_lock:
+            if self.test_recording_active:
+                return False
+            self._test_record_blocks = []
+            self._test_record_frames_remaining = int(duration_seconds * self.sample_rate)
+            self._test_record_done_callback = on_done
+            self.test_recording_active = True
+        return True
+
+    def stop_test_recording(self) -> Optional[np.ndarray]:
+        """Stop test recording (if active) and return captured audio.
+
+        Returns a `(frames, channels)` float32 array, or None if nothing was
+        captured. Safe to call whether or not a recording is in progress.
+        """
+        with self._test_record_lock:
+            self.test_recording_active = False
+            self._test_record_done_callback = None
+            blocks = self._test_record_blocks
+            self._test_record_blocks = []
+            self._test_record_frames_remaining = 0
+        if not blocks:
+            return None
+        try:
+            return np.concatenate(blocks, axis=0)
+        except Exception as e:
+            logger.error("Failed to concatenate test recording: %s", e)
+            return None
+
+    def hold_ptt(self) -> bool:
+        """Manually press and hold the PTT key (bypasses auto-release).
+
+        Used by Test Output to simulate a real Discord transmission so the
+        user can verify the full pipeline (mic + sounds + PTT keypress) end
+        to end. Returns False if no PTT key is configured.
+        """
+        if not self.ptt_key:
+            return False
+        self.manual_ptt_hold = True
+        # Reset countdowns so they don't immediately fire when we release later
+        self._ptt_release_countdown = 0
+        self._ptt_active_cycles = 0
+        if not self.ptt_active:
+            self._press_ptt()
+        return True
+
+    def release_ptt_hold(self):
+        """Release a manual PTT hold previously started with `hold_ptt()`.
+
+        Always force-releases (bypasses queue) for reliability — matches the
+        pattern used by `stop_all_sounds` so PTT can never get stuck.
+        """
+        self.manual_ptt_hold = False
+        if self.ptt_active:
+            self._force_release_ptt()
 
     def _input_callback(self, indata, frames, time, status):
         """Capture microphone input into queue."""
@@ -1134,7 +1287,7 @@ class AudioMixer:
         # Handle PTT release with debounce to prevent premature release
         if all_sounds_finished and self.sound_queue.empty():
             # No sounds playing - increment or start countdown
-            if self.ptt_active:
+            if self.ptt_active and not self.manual_ptt_hold:
                 self._ptt_release_countdown += 1
                 if self._ptt_release_countdown >= self._ptt_release_delay:
                     self._release_ptt()
@@ -1148,7 +1301,14 @@ class AudioMixer:
         # Only counts cycles while PTT is active AND nothing is playing — otherwise
         # long sounds, looping sounds, or rapid back-to-back plays would trip the
         # timeout mid-playback and cut PTT while audio is still being mixed.
-        if self.ptt_active and all_sounds_finished and self.sound_queue.empty():
+        # Skipped while `manual_ptt_hold` is set (Test Output explicitly wants
+        # PTT held with no sounds playing).
+        if (
+            self.ptt_active
+            and all_sounds_finished
+            and self.sound_queue.empty()
+            and not self.manual_ptt_hold
+        ):
             self._ptt_active_cycles += 1
             if self._ptt_active_cycles >= self._ptt_max_hold_cycles:
                 logger.warning(
@@ -1164,6 +1324,36 @@ class AudioMixer:
         # This soft limiter preserves normal audio but compresses peaks above 1.0
         # instead of hard clipping, so volume boost actually increases loudness
         outdata[:] = self._soft_clip(mixed)
+
+        # Test output: pipe the EXACT signal sent to the virtual cable to the
+        # default speakers so the user can hear what Discord hears. Capture
+        # AFTER soft-clip so quality, clipping and dynamics match 1:1.
+        if self.test_output_enabled:
+            try:
+                self._test_output_queue.put_nowait(outdata.copy())
+            except queue.Full:
+                pass
+
+        # Test recording: append the same final mix to a fixed-length buffer
+        # for later playback. Auto-stops when the requested duration is met.
+        if self.test_recording_active:
+            done_cb = None
+            with self._test_record_lock:
+                if self.test_recording_active and self._test_record_frames_remaining > 0:
+                    take = min(frames, self._test_record_frames_remaining)
+                    self._test_record_blocks.append(outdata[:take].copy())
+                    self._test_record_frames_remaining -= take
+                    if self._test_record_frames_remaining <= 0:
+                        self.test_recording_active = False
+                        done_cb = self._test_record_done_callback
+                        self._test_record_done_callback = None
+            # Fire the done-callback OUTSIDE the lock so it can call back into
+            # the mixer (e.g. to drain the buffer) without deadlocking.
+            if done_cb is not None:
+                try:
+                    done_cb()
+                except Exception as e:
+                    logger.error("Test-record done callback failed: %s", e)
 
         # Queue sounds-only for local speaker monitoring
         if self.monitor_enabled and np.any(sounds_mix):

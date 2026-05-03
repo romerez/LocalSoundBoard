@@ -1470,15 +1470,26 @@ class SoundboardApp:
         )
         self.toggle_audio_btn.pack(side=tk.LEFT)
 
-        # Collapsible content frame
+        # Collapsible content frame - fixed height so the soundboard grid
+        # below stays visible. Inside it lives a CTkScrollableFrame so the
+        # user can scroll through all the option cards.
         self.audio_options_frame = ctk.CTkFrame(
-            parent, fg_color=COLORS["bg_dark"], corner_radius=UI["corner_radius"]
+            parent,
+            fg_color=COLORS["bg_dark"],
+            corner_radius=UI["corner_radius"],
+            height=380,
         )
+        self.audio_options_frame.pack_propagate(False)
         # Hidden by default
 
-        # Inner container with padding
-        device_frame = ctk.CTkFrame(self.audio_options_frame, fg_color="transparent")
-        device_frame.pack(fill=tk.X, padx=12, pady=12)
+        # Scrollable inner container - holds all the option cards
+        device_frame = ctk.CTkScrollableFrame(
+            self.audio_options_frame,
+            fg_color="transparent",
+            scrollbar_button_color=COLORS["bg_light"],
+            scrollbar_button_hover_color=COLORS["bg_lighter"],
+        )
+        device_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
 
         # Get available devices
         devices = sd.query_devices()
@@ -1522,7 +1533,7 @@ class SoundboardApp:
         )
         if input_devices:
             self.input_combo.set(f"{input_devices[0][0]}: {input_devices[0][1]}")
-        self.input_combo.pack(anchor="w", pady=(4, 0))
+        self.input_combo.pack(anchor="w", pady=(4, 0), fill=tk.X)
 
         # Output device selector
         output_frame = ctk.CTkFrame(device_row, fg_color="transparent")
@@ -1562,19 +1573,59 @@ class SoundboardApp:
             self.output_combo.set(selected_output)
         elif output_devices:
             self.output_combo.set(f"{output_devices[0][0]}: {output_devices[0][1]}")
-        self.output_combo.pack(anchor="w", pady=(4, 0))
+        self.output_combo.pack(anchor="w", pady=(4, 0), fill=tk.X)
 
         # Live-update the status bar whenever the user changes a device.
         self.input_var.trace_add("write", lambda *_: self._update_status_bar())
         self.output_var.trace_add("write", lambda *_: self._update_status_bar())
 
-        # Controls row (Start button, PTT, etc.)
-        controls_row = ctk.CTkFrame(device_frame, fg_color="transparent")
-        controls_row.pack(fill=tk.X, pady=(0, 10))
+        # ==============================================================
+        # Card helper - tiny inline factory so every section has the same
+        # look (rounded card, header with emoji + bold title, optional
+        # subtitle). Returns the inner body frame to pack rows into.
+        # ==============================================================
+        def _make_card(parent, title, subtitle="", title_color=None):
+            card = ctk.CTkFrame(
+                parent,
+                fg_color=COLORS["bg_medium"],
+                corner_radius=UI["corner_radius"],
+            )
+            card.pack(fill=tk.X, pady=(10, 0))
+            header = ctk.CTkFrame(card, fg_color="transparent")
+            header.pack(fill=tk.X, padx=12, pady=(8, 2))
+            ctk.CTkLabel(
+                header,
+                text=title,
+                font=ctk.CTkFont(
+                    family=FONTS["family"], size=FONTS["size_sm"], weight="bold"
+                ),
+                text_color=title_color or COLORS["text_primary"],
+            ).pack(side=tk.LEFT)
+            if subtitle:
+                ctk.CTkLabel(
+                    header,
+                    text=subtitle,
+                    font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+                    text_color=COLORS["text_muted"],
+                ).pack(side=tk.LEFT, padx=(8, 0))
+            body = ctk.CTkFrame(card, fg_color="transparent")
+            body.pack(fill=tk.X, padx=12, pady=(2, 10))
+            return body
 
-        # Start/Stop button
+        # ============================================================
+        # CARD: Stream control - the big start/stop button + quick
+        # mic/monitor toggles. The most-used controls live up top.
+        # ============================================================
+        stream_card = _make_card(
+            device_frame,
+            "🎚  Stream",
+            "(start the audio stream to Discord)",
+        )
+        stream_row = ctk.CTkFrame(stream_card, fg_color="transparent")
+        stream_row.pack(fill=tk.X)
+
         self.toggle_btn = ctk.CTkButton(
-            controls_row,
+            stream_row,
             text="▶ Start Stream",
             command=self._toggle_stream,
             fg_color=COLORS["green"],
@@ -1584,26 +1635,11 @@ class SoundboardApp:
             height=36,
             width=140,
         )
-        self.toggle_btn.pack(side=tk.LEFT, padx=(0, 15))
+        self.toggle_btn.pack(side=tk.LEFT, padx=(0, 16))
 
-        # PTT checkbox
-        self.ptt_enabled_var = tk.BooleanVar(value=False)
-        self.ptt_checkbox = ctk.CTkCheckBox(
-            controls_row,
-            text="Push-to-Talk",
-            variable=self.ptt_enabled_var,
-            command=self._toggle_ptt_visibility,
-            fg_color=COLORS["blurple"],
-            hover_color=COLORS["blurple_hover"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
-            corner_radius=4,
-        )
-        self.ptt_checkbox.pack(side=tk.LEFT, padx=(0, 15))
-
-        # Mic mute
         self.mic_mute_var = tk.BooleanVar(value=False)
         self.mic_mute_checkbox = ctk.CTkCheckBox(
-            controls_row,
+            stream_row,
             text="Mute Mic",
             variable=self.mic_mute_var,
             command=self._toggle_mic_mute,
@@ -1612,13 +1648,12 @@ class SoundboardApp:
             font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
             corner_radius=4,
         )
-        self.mic_mute_checkbox.pack(side=tk.LEFT, padx=(0, 15))
+        self.mic_mute_checkbox.pack(side=tk.LEFT, padx=(0, 16))
 
-        # Monitor
         self.monitor_var = tk.BooleanVar(value=True)
         self.monitor_checkbox = ctk.CTkCheckBox(
-            controls_row,
-            text="🔊 Monitor",
+            stream_row,
+            text="🔊 Monitor (hear sounds locally)",
             variable=self.monitor_var,
             command=self._toggle_monitor,
             fg_color=COLORS["green"],
@@ -1626,71 +1661,208 @@ class SoundboardApp:
             font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
             corner_radius=4,
         )
-        self.monitor_checkbox.pack(side=tk.LEFT, padx=(0, 15))
+        self.monitor_checkbox.pack(side=tk.LEFT)
 
-        # Auto-start
-        self.auto_start_var = tk.BooleanVar(value=True)
-        self.auto_start_checkbox = ctk.CTkCheckBox(
-            controls_row,
-            text="Auto-Start",
-            variable=self.auto_start_var,
-            command=self._save_config,
+        # ============================================================
+        # CARD: Test Output - hear/record what Discord actually receives
+        # (placed near the top because it's the most useful diagnostic)
+        # ============================================================
+        test_body = _make_card(
+            device_frame,
+            "🎧  Test Output (Mic Test)",
+            "(plays / records the EXACT signal Discord receives)",
+            title_color=COLORS["blurple"],
+        )
+
+        # Row 1: Live test + PTT-hold toggles
+        test_row1 = ctk.CTkFrame(test_body, fg_color="transparent")
+        test_row1.pack(fill=tk.X, pady=(0, 6))
+
+        self.test_live_var = tk.BooleanVar(value=False)
+        self.test_live_checkbox = ctk.CTkCheckBox(
+            test_row1,
+            text="🎧 Live Test (hear what Discord hears)",
+            variable=self.test_live_var,
+            command=self._toggle_test_live,
             fg_color=COLORS["blurple"],
             hover_color=COLORS["blurple_hover"],
             font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
             corner_radius=4,
         )
-        self.auto_start_checkbox.pack(side=tk.LEFT)
+        self.test_live_checkbox.pack(side=tk.LEFT, padx=(0, 16))
 
-        # Minimize to tray
-        self.minimize_to_tray_var = tk.BooleanVar(value=False)
-        self.minimize_to_tray_checkbox = ctk.CTkCheckBox(
-            controls_row,
-            text="🔻 Minimize to tray",
-            variable=self.minimize_to_tray_var,
-            command=self._on_toggle_tray_setting,
-            fg_color=COLORS["blurple"],
-            hover_color=COLORS["blurple_hover"],
+        self.test_ptt_var = tk.BooleanVar(value=True)
+        self.test_ptt_checkbox = ctk.CTkCheckBox(
+            test_row1,
+            text="🎙 Hold PTT during test",
+            variable=self.test_ptt_var,
+            command=self._toggle_test_ptt,
+            fg_color=COLORS["red"],
+            hover_color=COLORS["red_hover"],
             font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
             corner_radius=4,
         )
-        self.minimize_to_tray_checkbox.pack(side=tk.LEFT, padx=(15, 0))
+        self.test_ptt_checkbox.pack(side=tk.LEFT)
 
-        # Noise suppression (replaces Discord's Krisp - which is bypassed
-        # when routing through the virtual cable)
-        self.noise_suppress_var = tk.BooleanVar(value=False)
-        self.noise_suppress_checkbox = ctk.CTkCheckBox(
-            controls_row,
-            text="🛡 Noise Suppression",
-            variable=self.noise_suppress_var,
-            command=self._toggle_noise_suppression,
-            fg_color=COLORS["blurple"],
-            hover_color=COLORS["blurple_hover"],
+        # Row 2: Record-and-play with duration
+        test_row2 = ctk.CTkFrame(test_body, fg_color="transparent")
+        test_row2.pack(fill=tk.X)
+
+        ctk.CTkLabel(
+            test_row2,
+            text="Duration:",
             font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
-            corner_radius=4,
-        )
-        self.noise_suppress_checkbox.pack(side=tk.LEFT, padx=(15, 8))
+            text_color=COLORS["text_secondary"],
+        ).pack(side=tk.LEFT, padx=(0, 6))
 
-        # Strength slider for noise suppression
-        self.ns_strength_var = tk.DoubleVar(value=85)
-        self.ns_strength_slider = ctk.CTkSlider(
-            controls_row,
+        self.test_duration_var = tk.StringVar(value="5s")
+        self.test_duration_menu = ctk.CTkOptionMenu(
+            test_row2,
+            values=["3s", "5s", "10s", "15s", "30s"],
+            variable=self.test_duration_var,
+            width=70,
+            height=28,
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            fg_color=COLORS["bg_dark"],
+            button_color=COLORS["bg_dark"],
+            button_hover_color=COLORS["bg_light"],
+        )
+        self.test_duration_menu.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.test_record_btn = ctk.CTkButton(
+            test_row2,
+            text="⏺ Record & Play",
+            command=self._toggle_test_record,
+            fg_color=COLORS["red"],
+            hover_color=COLORS["red_hover"],
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"], weight="bold"),
+            corner_radius=UI["button_corner_radius"],
+            height=28,
+            width=140,
+        )
+        self.test_record_btn.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.test_status_label = ctk.CTkLabel(
+            test_row2,
+            text="",
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            text_color=COLORS["text_muted"],
+        )
+        self.test_status_label.pack(side=tk.LEFT)
+
+        # Test playback state (used by _toggle_test_record)
+        self._test_playback_stream: Optional[sd.OutputStream] = None
+        self._test_record_pending: bool = False
+
+        # ============================================================
+        # CARD: Volume - mic + master sliders side by side
+        # ============================================================
+        vol_body = _make_card(device_frame, "🎚  Volume")
+
+        # Mic volume row
+        mic_row = ctk.CTkFrame(vol_body, fg_color="transparent")
+        mic_row.pack(fill=tk.X, pady=(2, 4))
+
+        ctk.CTkLabel(
+            mic_row,
+            text="🎤 Mic",
+            width=70,
+            anchor="w",
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            text_color=COLORS["text_secondary"],
+        ).pack(side=tk.LEFT, padx=(0, 8))
+
+        self.mic_volume_var = tk.DoubleVar(value=100)
+        self.mic_volume_slider = ctk.CTkSlider(
+            mic_row,
             from_=0,
-            to=100,
-            variable=self.ns_strength_var,
-            command=self._update_ns_strength,
-            width=110,
-            height=14,
+            to=150,
+            variable=self.mic_volume_var,
+            command=self._update_mic_volume,
+            height=16,
             fg_color=COLORS["bg_light"],
             progress_color=COLORS["blurple"],
             button_color=COLORS["text_primary"],
             button_hover_color=COLORS["blurple"],
         )
-        self.ns_strength_slider.pack(side=tk.LEFT, padx=(0, 0))
+        self.mic_volume_slider.pack(side=tk.LEFT, padx=(0, 10), fill=tk.X, expand=True)
 
-        # PTT key frame (hidden by default)
-        self.ptt_frame = ctk.CTkFrame(device_frame, fg_color="transparent")
-        # Hidden initially - will be shown via pack when needed
+        self.mic_volume_label = ctk.CTkLabel(
+            mic_row,
+            text="100%",
+            font=ctk.CTkFont(family=FONTS["family_mono"], size=FONTS["size_xs"]),
+            text_color=COLORS["text_muted"],
+            width=40,
+        )
+        self.mic_volume_label.pack(side=tk.LEFT)
+
+        # Master (sounds) volume row — affects every playing sound,
+        # independent of the mic.
+        master_row = ctk.CTkFrame(vol_body, fg_color="transparent")
+        master_row.pack(fill=tk.X, pady=(2, 0))
+
+        ctk.CTkLabel(
+            master_row,
+            text="🎵 Sounds",
+            width=70,
+            anchor="w",
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            text_color=COLORS["text_secondary"],
+        ).pack(side=tk.LEFT, padx=(0, 8))
+
+        self.master_volume_var = tk.DoubleVar(value=100)
+        self.master_volume_slider = ctk.CTkSlider(
+            master_row,
+            from_=0,
+            to=150,
+            variable=self.master_volume_var,
+            command=self._update_master_volume,
+            height=16,
+            fg_color=COLORS["bg_light"],
+            progress_color=COLORS["green"],
+            button_color=COLORS["text_primary"],
+            button_hover_color=COLORS["green"],
+        )
+        self.master_volume_slider.pack(side=tk.LEFT, padx=(0, 10), fill=tk.X, expand=True)
+
+        self.master_volume_label = ctk.CTkLabel(
+            master_row,
+            text="100%",
+            font=ctk.CTkFont(family=FONTS["family_mono"], size=FONTS["size_xs"]),
+            text_color=COLORS["text_muted"],
+            width=40,
+        )
+        self.master_volume_label.pack(side=tk.LEFT)
+
+        # ============================================================
+        # CARD: Push-to-Talk - enable + key picker (key picker collapsed
+        # by default; revealed by the checkbox via _toggle_ptt_visibility)
+        # ============================================================
+        ptt_body = _make_card(
+            device_frame,
+            "⌨  Push-to-Talk",
+            "(auto-presses Discord's PTT key while sounds play)",
+        )
+
+        ptt_top = ctk.CTkFrame(ptt_body, fg_color="transparent")
+        ptt_top.pack(fill=tk.X)
+
+        self.ptt_enabled_var = tk.BooleanVar(value=False)
+        self.ptt_checkbox = ctk.CTkCheckBox(
+            ptt_top,
+            text="Enable Push-to-Talk",
+            variable=self.ptt_enabled_var,
+            command=self._toggle_ptt_visibility,
+            fg_color=COLORS["blurple"],
+            hover_color=COLORS["blurple_hover"],
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            corner_radius=4,
+        )
+        self.ptt_checkbox.pack(side=tk.LEFT)
+
+        # PTT key configuration row (hidden until checkbox enabled)
+        self.ptt_frame = ctk.CTkFrame(ptt_body, fg_color="transparent")
+        # Hidden initially - shown via _toggle_ptt_visibility
 
         ctk.CTkLabel(
             self.ptt_frame,
@@ -1703,9 +1875,9 @@ class SoundboardApp:
         self.ptt_entry = ctk.CTkEntry(
             self.ptt_frame,
             textvariable=self.ptt_key_var,
-            width=100,
+            width=120,
             height=28,
-            fg_color=COLORS["bg_medium"],
+            fg_color=COLORS["bg_dark"],
             border_color=COLORS["border"],
             font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
             corner_radius=UI["button_corner_radius"],
@@ -1721,7 +1893,7 @@ class SoundboardApp:
             font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
             corner_radius=UI["button_corner_radius"],
             height=28,
-            width=100,
+            width=120,
         )
         self.ptt_record_btn.pack(side=tk.LEFT, padx=(0, 8))
 
@@ -1746,97 +1918,67 @@ class SoundboardApp:
         )
         self.ptt_status_label.pack(side=tk.LEFT, padx=10)
 
-        # Mic volume row
-        mic_row = ctk.CTkFrame(device_frame, fg_color="transparent")
-        mic_row.pack(fill=tk.X, pady=(5, 0))
+        # ============================================================
+        # CARD: Mic processing - noise suppression
+        # (replaces Discord's Krisp, which is bypassed by virtual cable)
+        # ============================================================
+        ns_body = _make_card(
+            device_frame,
+            "🛡  Mic Processing",
+            "(Krisp replacement - bypassed when using a virtual cable)",
+        )
+
+        ns_row = ctk.CTkFrame(ns_body, fg_color="transparent")
+        ns_row.pack(fill=tk.X)
+
+        self.noise_suppress_var = tk.BooleanVar(value=False)
+        self.noise_suppress_checkbox = ctk.CTkCheckBox(
+            ns_row,
+            text="Noise Suppression",
+            variable=self.noise_suppress_var,
+            command=self._toggle_noise_suppression,
+            fg_color=COLORS["blurple"],
+            hover_color=COLORS["blurple_hover"],
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            corner_radius=4,
+        )
+        self.noise_suppress_checkbox.pack(side=tk.LEFT, padx=(0, 12))
 
         ctk.CTkLabel(
-            mic_row,
-            text="Mic Volume:",
+            ns_row,
+            text="Strength:",
             font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
             text_color=COLORS["text_secondary"],
-        ).pack(side=tk.LEFT, padx=(0, 8))
+        ).pack(side=tk.LEFT, padx=(0, 6))
 
-        self.mic_volume_var = tk.DoubleVar(value=100)
-        self.mic_volume_slider = ctk.CTkSlider(
-            mic_row,
+        self.ns_strength_var = tk.DoubleVar(value=85)
+        self.ns_strength_slider = ctk.CTkSlider(
+            ns_row,
             from_=0,
-            to=150,
-            variable=self.mic_volume_var,
-            command=self._update_mic_volume,
-            width=200,
-            height=16,
+            to=100,
+            variable=self.ns_strength_var,
+            command=self._update_ns_strength,
+            height=14,
             fg_color=COLORS["bg_light"],
             progress_color=COLORS["blurple"],
             button_color=COLORS["text_primary"],
             button_hover_color=COLORS["blurple"],
         )
-        self.mic_volume_slider.pack(side=tk.LEFT, padx=(0, 10))
+        self.ns_strength_slider.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        # Master (sounds) volume row — affects every playing sound,
-        # independent of the mic.
-        master_row = ctk.CTkFrame(device_frame, fg_color="transparent")
-        master_row.pack(fill=tk.X, pady=(5, 0))
-
-        ctk.CTkLabel(
-            master_row,
-            text="Main Volume:",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
-            text_color=COLORS["text_secondary"],
-        ).pack(side=tk.LEFT, padx=(0, 8))
-
-        self.master_volume_var = tk.DoubleVar(value=100)
-        self.master_volume_slider = ctk.CTkSlider(
-            master_row,
-            from_=0,
-            to=150,
-            variable=self.master_volume_var,
-            command=self._update_master_volume,
-            width=200,
-            height=16,
-            fg_color=COLORS["bg_light"],
-            progress_color=COLORS["green"],
-            button_color=COLORS["text_primary"],
-            button_hover_color=COLORS["green"],
-        )
-        self.master_volume_slider.pack(side=tk.LEFT, padx=(0, 10))
-
-        self.master_volume_label = ctk.CTkLabel(
-            master_row,
-            text="100%",
-            font=ctk.CTkFont(family=FONTS["family_mono"], size=FONTS["size_xs"]),
-            text_color=COLORS["text_muted"],
-            width=40,
-        )
-        self.master_volume_label.pack(side=tk.LEFT)
-
-        # ----- Call Recording settings -----
-        # Live record button + timer live in the action bar (next to YouTube).
-        # This card holds the persistent settings: save folder + mic mixing.
-        rec_card = ctk.CTkFrame(
+        # ============================================================
+        # CARD: Call Recording - persistent settings (start button is in
+        # the action bar)
+        # ============================================================
+        rec_body = _make_card(
             device_frame,
-            fg_color=COLORS["bg_medium"],
-            corner_radius=UI["corner_radius"],
+            "🔴  Call Recording",
+            "(use the ● Rec button in the action bar to start)",
+            title_color=COLORS["red"],
         )
-        rec_card.pack(fill=tk.X, pady=(12, 0))
 
-        rec_header = ctk.CTkFrame(rec_card, fg_color="transparent")
-        rec_header.pack(fill=tk.X, padx=10, pady=(8, 4))
-        ctk.CTkLabel(
-            rec_header,
-            text="🔴  Call Recording",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"], weight="bold"),
-            text_color=COLORS["red"],
-        ).pack(side=tk.LEFT)
-        ctk.CTkLabel(
-            rec_header,
-            text="(use the ● Rec button above to start)",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
-            text_color=COLORS["text_muted"],
-        ).pack(side=tk.LEFT, padx=(8, 0))
-
-        rec_path_row = ctk.CTkFrame(rec_card, fg_color="transparent")
-        rec_path_row.pack(fill=tk.X, padx=10, pady=(0, 8))
+        rec_path_row = ctk.CTkFrame(rec_body, fg_color="transparent")
+        rec_path_row.pack(fill=tk.X)
 
         self.recording_include_mic_var = tk.BooleanVar(value=True)
         ctk.CTkCheckBox(
@@ -1864,9 +2006,8 @@ class SoundboardApp:
             textvariable=self.recording_dir_var,
             font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
             height=28,
-            width=320,
         )
-        self.recording_dir_entry.pack(side=tk.LEFT, padx=(0, 6))
+        self.recording_dir_entry.pack(side=tk.LEFT, padx=(0, 6), fill=tk.X, expand=True)
         self.recording_dir_entry.bind("<FocusOut>", lambda e: self._save_config())
 
         ctk.CTkButton(
@@ -1892,6 +2033,39 @@ class SoundboardApp:
             height=28,
             width=60,
         ).pack(side=tk.LEFT)
+
+        # ============================================================
+        # CARD: App preferences
+        # ============================================================
+        app_body = _make_card(device_frame, "⚙  App")
+        app_row = ctk.CTkFrame(app_body, fg_color="transparent")
+        app_row.pack(fill=tk.X)
+
+        self.auto_start_var = tk.BooleanVar(value=True)
+        self.auto_start_checkbox = ctk.CTkCheckBox(
+            app_row,
+            text="Auto-start stream on launch",
+            variable=self.auto_start_var,
+            command=self._save_config,
+            fg_color=COLORS["blurple"],
+            hover_color=COLORS["blurple_hover"],
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            corner_radius=4,
+        )
+        self.auto_start_checkbox.pack(side=tk.LEFT, padx=(0, 16))
+
+        self.minimize_to_tray_var = tk.BooleanVar(value=False)
+        self.minimize_to_tray_checkbox = ctk.CTkCheckBox(
+            app_row,
+            text="🔻 Minimize to tray",
+            variable=self.minimize_to_tray_var,
+            command=self._on_toggle_tray_setting,
+            fg_color=COLORS["blurple"],
+            hover_color=COLORS["blurple_hover"],
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            corner_radius=4,
+        )
+        self.minimize_to_tray_checkbox.pack(side=tk.LEFT)
 
     def _browse_recording_dir(self):
         """Pick a folder for saved recordings."""
@@ -3953,8 +4127,11 @@ class SoundboardApp:
 
     def _update_mic_volume(self, _=None):
         """Update microphone volume from slider."""
+        val = self.mic_volume_var.get()
+        if hasattr(self, "mic_volume_label"):
+            self.mic_volume_label.configure(text=f"{int(val)}%")
         if self.mixer:
-            self.mixer.mic_volume = self.mic_volume_var.get() / 100.0
+            self.mixer.mic_volume = val / 100.0
 
     def _update_master_volume(self, _=None):
         """Update master (sounds) volume from slider. Affects all playing sounds."""
@@ -3976,6 +4153,199 @@ class SoundboardApp:
         """Toggle local speaker monitoring (hear sounds through speakers)."""
         if self.mixer:
             self.mixer.set_monitor_enabled(self.monitor_var.get())
+
+    # ------------------------------------------------------------------
+    # Test Output (hear what Discord hears)
+    # ------------------------------------------------------------------
+
+    def _toggle_test_live(self):
+        """Toggle live test output - pipes the Discord-bound mix to speakers."""
+        enabled = self.test_live_var.get()
+        if not self.mixer or not self.mixer.running:
+            self.test_live_var.set(False)
+            self.test_status_label.configure(
+                text="Start the stream first.", text_color=COLORS["red"]
+            )
+            self.root.after(2500, lambda: self.test_status_label.configure(text=""))
+            return
+        try:
+            self.mixer.set_test_output_enabled(enabled)
+        except Exception as e:
+            print(f"[gui] Test live toggle failed: {e}")
+            self.test_live_var.set(False)
+            self.test_status_label.configure(text=f"Error: {e}", text_color=COLORS["red"])
+            return
+        if enabled:
+            # Optionally also press & hold PTT so Discord actually transmits
+            # the test signal (full end-to-end verification).
+            ptt_held = False
+            if self.test_ptt_var.get():
+                ptt_held = self.mixer.hold_ptt()
+            msg = "● LIVE - hearing what Discord hears"
+            if ptt_held:
+                msg += "  •  🎙 PTT held"
+            elif self.test_ptt_var.get() and self.mixer.ptt_key is None:
+                msg += "  •  (no PTT key set)"
+            self.test_status_label.configure(text=msg, text_color=COLORS["green"])
+        else:
+            # Always release PTT hold when disabling Live Test
+            try:
+                self.mixer.release_ptt_hold()
+            except Exception:
+                pass
+            self.test_status_label.configure(text="")
+
+    def _toggle_test_ptt(self):
+        """Toggle PTT-hold during the active Live Test."""
+        if not self.mixer:
+            return
+        # Only act if Live Test is currently running - otherwise this is just
+        # a preference for the next time the user enables it.
+        if not self.test_live_var.get():
+            return
+        if self.test_ptt_var.get():
+            held = self.mixer.hold_ptt()
+            if held:
+                self.test_status_label.configure(
+                    text="● LIVE - hearing what Discord hears  •  🎙 PTT held",
+                    text_color=COLORS["green"],
+                )
+            else:
+                self.test_status_label.configure(
+                    text="● LIVE - hearing what Discord hears  •  (no PTT key set)",
+                    text_color=COLORS["green"],
+                )
+        else:
+            try:
+                self.mixer.release_ptt_hold()
+            except Exception:
+                pass
+            self.test_status_label.configure(
+                text="● LIVE - hearing what Discord hears", text_color=COLORS["green"]
+            )
+
+    def _toggle_test_record(self):
+        """Record N seconds of the Discord-bound mix, then play it back."""
+        if not self.mixer or not self.mixer.running:
+            self.test_status_label.configure(
+                text="Start the stream first.", text_color=COLORS["red"]
+            )
+            self.root.after(2500, lambda: self.test_status_label.configure(text=""))
+            return
+
+        # If currently playing back a previous test, stop it
+        if self._test_playback_stream is not None:
+            try:
+                sd.stop()
+            except Exception:
+                pass
+            self._test_playback_stream = None
+            # Drop the PTT hold if we grabbed one for this test
+            try:
+                self.mixer.release_ptt_hold()
+            except Exception:
+                pass
+            self.test_record_btn.configure(text="⏺ Record & Play", fg_color=COLORS["red"])
+            self.test_status_label.configure(text="")
+            return
+
+        # If currently recording, abort
+        if self._test_record_pending:
+            self.mixer.stop_test_recording()
+            self._test_record_pending = False
+            try:
+                self.mixer.release_ptt_hold()
+            except Exception:
+                pass
+            self.test_record_btn.configure(text="⏺ Record & Play", fg_color=COLORS["red"])
+            self.test_status_label.configure(text="Cancelled.", text_color=COLORS["text_muted"])
+            return
+
+        # Parse duration ("5s" -> 5.0)
+        try:
+            seconds = float(self.test_duration_var.get().rstrip("sS"))
+        except ValueError:
+            seconds = 5.0
+
+        ok = self.mixer.start_test_recording(
+            seconds,
+            on_done=lambda: self.root.after(0, self._on_test_record_done),
+        )
+        if not ok:
+            self.test_status_label.configure(text="Could not start.", text_color=COLORS["red"])
+            return
+
+        # Hold PTT for the duration of the recording so Discord actually
+        # transmits while we capture (true end-to-end test). Released in
+        # `_on_test_playback_done` after playback finishes.
+        if self.test_ptt_var.get():
+            self.mixer.hold_ptt()
+
+        self._test_record_pending = True
+        self.test_record_btn.configure(text="■ Stop", fg_color=COLORS["bg_lighter"])
+        # Live countdown
+        self._test_record_remaining = seconds
+        self._tick_test_record_countdown()
+
+    def _tick_test_record_countdown(self):
+        """Update the recording status label every 250ms."""
+        if not self._test_record_pending:
+            return
+        self.test_status_label.configure(
+            text=f"🔴 Recording… {self._test_record_remaining:.1f}s",
+            text_color=COLORS["red"],
+        )
+        self._test_record_remaining -= 0.25
+        if self._test_record_remaining > 0 and self._test_record_pending:
+            self.root.after(250, self._tick_test_record_countdown)
+
+    def _on_test_record_done(self):
+        """Mixer finished capturing - grab the buffer and play it back."""
+        if not self._test_record_pending or not self.mixer:
+            return
+        self._test_record_pending = False
+        # Capture is done - release the PTT hold immediately. Local playback
+        # below goes to speakers only (NOT through the mixer / virtual cable),
+        # so there's no reason to keep Discord transmitting.
+        try:
+            self.mixer.release_ptt_hold()
+        except Exception:
+            pass
+        audio = self.mixer.stop_test_recording()
+        if audio is None or len(audio) == 0:
+            self.test_record_btn.configure(text="⏺ Record & Play", fg_color=COLORS["red"])
+            self.test_status_label.configure(text="No audio captured.", text_color=COLORS["red"])
+            self.root.after(2500, lambda: self.test_status_label.configure(text=""))
+            return
+
+        # Play back through the default speakers using sounddevice's
+        # convenience API - non-blocking, no manual stream management needed.
+        try:
+            sd.play(audio, samplerate=self.mixer.sample_rate, blocking=False)
+            # Track that playback is in progress so the button can stop it
+            self._test_playback_stream = True  # type: ignore[assignment]
+        except Exception as e:
+            print(f"[gui] Test playback failed: {e}")
+            self.test_record_btn.configure(text="⏺ Record & Play", fg_color=COLORS["red"])
+            self.test_status_label.configure(text=f"Playback error: {e}", text_color=COLORS["red"])
+            return
+
+        duration = len(audio) / float(self.mixer.sample_rate)
+        self.test_record_btn.configure(text="■ Stop Playback", fg_color=COLORS["bg_lighter"])
+        self.test_status_label.configure(
+            text=f"▶ Playing back ({duration:.1f}s)…", text_color=COLORS["blurple"]
+        )
+        # Reset UI when playback finishes
+        self.root.after(int(duration * 1000) + 100, self._on_test_playback_done)
+
+    def _on_test_playback_done(self):
+        """Reset the test record button after playback finishes."""
+        if self._test_playback_stream is None:
+            return
+        self._test_playback_stream = None
+        self.test_record_btn.configure(text="⏺ Record & Play", fg_color=COLORS["red"])
+        self.test_status_label.configure(text="Done.", text_color=COLORS["text_muted"])
+        self.root.after(1500, lambda: self.test_status_label.configure(text=""))
 
     def _toggle_noise_suppression(self):
         """Toggle mic noise suppression (Krisp replacement)."""
