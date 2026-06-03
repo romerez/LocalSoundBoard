@@ -135,6 +135,7 @@ class SlotWidget(tk.Canvas):
         on_right_click: Callable[[Any], None],
         on_menu: Callable[[], None],
         on_stop: Callable[[], None],
+        on_drag_drop: Optional[Callable[[int, int], None]] = None,
         height: int = 152,
     ) -> None:
         super().__init__(
@@ -150,6 +151,7 @@ class SlotWidget(tk.Canvas):
         self._on_right_click_cb = on_right_click
         self._on_menu_cb = on_menu
         self._on_stop_cb = on_stop
+        self._on_drag_drop_cb = on_drag_drop
 
         # Visual state
         self._frame_color: str = COLORS["bg_medium"]
@@ -168,6 +170,7 @@ class SlotWidget(tk.Canvas):
         self._border_width: int = 0
         self._border_color: str = COLORS["text_muted"]
         self._hover: bool = False
+        self._volume_display: Optional[float] = None  # temporary volume indicator (0.0-1.5)
 
         # Avoid full redraws on every event by tracking dirty regions.
         # For now `_redraw_full` is what we call most; progress + overlays
@@ -183,6 +186,7 @@ class SlotWidget(tk.Canvas):
         # Bindings
         self.bind("<Configure>", self._on_resize, add="+")
         self.bind("<ButtonPress-1>", self._on_press, add="+")
+        self.bind("<B1-Motion>", self._on_motion, add="+")
         self.bind("<ButtonRelease-1>", self._on_release, add="+")
         self.bind("<Button-3>", self._handle_right_click, add="+")
         self.bind("<Enter>", self._on_enter, add="+")
@@ -192,6 +196,11 @@ class SlotWidget(tk.Canvas):
         # within the widget as a click for simplicity).
         self._press_x: int = 0
         self._press_y: int = 0
+        self._press_active: bool = False
+        # Drag detection: once motion exceeds threshold, the next release is
+        # treated as a drag-drop instead of a click.
+        self._drag_threshold: int = 8
+        self._drag_active: bool = False
 
     # ------------------------------------------------------------------
     # Setters — used by proxies
@@ -512,6 +521,56 @@ class SlotWidget(tk.Canvas):
             h = self.winfo_height()
         except tk.TclError:
             return
+        
+        # If volume display is active, show volume bar instead of progress
+        if self._volume_display is not None:
+            volume = max(0.0, min(1.5, self._volume_display))
+            # Bar sits ABOVE the overlay button row, with a small gap.
+            bar_pad_left = self.OVERLAY_PAD
+            bar_pad_right = self.OVERLAY_PAD
+            y_bot = h - self.BOTTOM_STRIP - 2
+            y_top = y_bot - self.PROGRESS_H
+            track_x0 = bar_pad_left
+            track_x1 = w - bar_pad_right
+            # Track (background) — dark with a white border for visibility
+            self.create_rectangle(
+                track_x0,
+                y_top,
+                track_x1,
+                y_bot,
+                outline="#44ff44",  # Green outline for volume
+                width=1,
+                fill=COLORS["bg_dark"],
+                tags="progress",
+            )
+            # Fill — green for volume (0-1.0) then yellow/orange for boosted (1.0-1.5)
+            fill_w = (track_x1 - track_x0 - 2) * (volume / 1.5)  # scale to 1.5 max
+            if fill_w > 1:
+                # Color changes: green for normal, yellow for boost
+                fill_color = "#44ff44" if volume <= 1.0 else "#ffcc00"
+                self.create_rectangle(
+                    track_x0 + 1,
+                    y_top + 1,
+                    track_x0 + 1 + fill_w,
+                    y_bot - 1,
+                    outline="",
+                    fill=fill_color,
+                    tags="progress",
+                )
+            # Add volume percentage text
+            volume_pct = int(round(volume * 100))
+            self.create_text(
+                (track_x0 + track_x1) // 2,
+                y_top - 12,
+                text=f"🔊 {volume_pct}%",
+                fill="#44ff44",
+                font=("Segoe UI", 9, "bold"),
+                anchor="center",
+                tags="progress",
+            )
+            return
+        
+        # Normal progress display
         if w <= 1 or self._progress <= 0.0:
             return
         # Bar sits ABOVE the overlay button row, with a small gap.
@@ -631,9 +690,45 @@ class SlotWidget(tk.Canvas):
     def _on_press(self, event: Any) -> None:
         self._press_x = event.x
         self._press_y = event.y
+        self._press_active = True
+        self._drag_active = False
+
+    def _on_motion(self, event: Any) -> None:
+        # Only meaningful if the consumer wants drag events.
+        if self._on_drag_drop_cb is None or self._drag_active:
+            return
+        dx = event.x - self._press_x
+        dy = event.y - self._press_y
+        if (dx * dx + dy * dy) >= (self._drag_threshold * self._drag_threshold):
+            self._drag_active = True
+            try:
+                self.config(cursor="exchange")
+            except tk.TclError:
+                pass
 
     def _on_release(self, event: Any) -> None:
-        # Only fire if release happened inside the widget.
+        if not self._press_active:
+            return
+        self._press_active = False
+
+        # Restore cursor regardless of where release happened.
+        if self._drag_active:
+            try:
+                self.config(cursor="hand2")
+            except tk.TclError:
+                pass
+
+        # If a drag was in progress, fire the drag-drop callback with screen
+        # coordinates so the host can decide what was hit. Suppress click.
+        if self._drag_active and self._on_drag_drop_cb is not None:
+            self._drag_active = False
+            try:
+                self._on_drag_drop_cb(event.x_root, event.y_root)
+            except Exception:
+                pass
+            return
+
+        # Only fire click if release happened inside the widget.
         try:
             w = self.winfo_width()
             h = self.winfo_height()

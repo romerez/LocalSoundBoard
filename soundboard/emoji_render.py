@@ -148,6 +148,18 @@ def get_tk_image(emoji: str, size: int = 32) -> Optional["ImageTk.PhotoImage"]:
     return photo
 
 
+def get_pil_image(emoji: str, size: int = 32) -> Optional["Image.Image"]:
+    """Return the cached PIL image for the emoji, or None.
+
+    Useful when a consumer wants to wrap the rasterised glyph in something
+    other than a `tk.PhotoImage` — e.g. CTk's `CTkImage` which prefers a
+    raw PIL image so it can do its own HiDPI handling.
+    """
+    if not emoji or not _PIL_OK:
+        return None
+    return _render_pil(emoji, size)
+
+
 def clear_cache() -> None:
     """Drop all cached PhotoImages (used when shutting down)."""
     _image_cache.clear()

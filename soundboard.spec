@@ -39,6 +39,16 @@ except Exception as _e:
     print(f"[spec] WARNING: static-ffmpeg fetch failed ({_e}); ffprobe will be missing in EXE")
     static_ffmpeg_dir = None
 
+# Locate pyrnnoise DLL (must be bundled or RNNoise won't load)
+try:
+    import pyrnnoise as _pyrnn_pkg
+    _pyrnn_dir = os.path.dirname(_pyrnn_pkg.__file__)
+    pyrnnoise_dll = os.path.join(_pyrnn_dir, 'rnnoise.dll')
+    if not os.path.exists(pyrnnoise_dll):
+        pyrnnoise_dll = None
+except Exception:
+    pyrnnoise_dll = None
+
 a = Analysis(
     ['main.py'],
     pathex=[],
@@ -56,7 +66,8 @@ a = Analysis(
         (ffmpeg_dir, 'imageio_ffmpeg/binaries'),
         # emoji_picker.py needs to be accessible as a script for subprocess
         ('soundboard/emoji_picker.py', 'soundboard'),
-    ] + ([(static_ffmpeg_dir, 'ffmpeg_bin')] if static_ffmpeg_dir else []),
+    ] + ([(static_ffmpeg_dir, 'ffmpeg_bin')] if static_ffmpeg_dir else [])
+      + ([(pyrnnoise_dll, 'pyrnnoise')] if pyrnnoise_dll else []),
     hiddenimports=[
         # Core audio
         'sounddevice',
@@ -108,6 +119,10 @@ a = Analysis(
         # Data
         'emoji_data_python',
         'colour',
+
+        # RNNoise for mic noise suppression
+        'pyrnnoise',
+        'pyrnnoise.rnnoise',
 
         # PyQt6 for emoji picker subprocess
         'PyQt6',

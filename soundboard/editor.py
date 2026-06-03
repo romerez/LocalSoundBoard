@@ -37,6 +37,7 @@ class SoundEditor:
         file_path: str,
         on_save: Optional[Callable[[np.ndarray, int], None]] = None,
         output_device: Optional[int] = None,
+        preloaded_audio: Optional[Tuple[np.ndarray, int]] = None,
     ):
         self.parent = parent
         self.file_path = file_path
@@ -76,32 +77,59 @@ class SoundEditor:
         # A snapshot is pushed BEFORE each drag starts so Ctrl+Z can restore it.
         self._marker_history: list = []
 
+        # Multi-cut state — when active, the user captures N segments in one
+        # editing session and gets back a list of (audio, sample_rate, title) tuples
+        # via `multi_results`. The single-cut `result` is set to the FIRST
+        # captured segment for backward compatibility with callers that only
+        # read `.result` / the on_save callback.
+        self.multi_mode: bool = False
+        self.multi_total: int = 0
+        self.multi_current: int = 0  # 1-indexed: which segment is being defined
+        self.multi_results: list = []  # list[Tuple[np.ndarray, int, str]]
+
         # Result
         self.result: Optional[Tuple[np.ndarray, int]] = None
 
-        self._load_audio()
+        if preloaded_audio is not None:
+            data, sr = preloaded_audio
+            self._set_audio_data(data, sr)
+        else:
+            self._load_audio()
         self._create_dialog()
+
+    @classmethod
+    def prepare_audio(
+        cls,
+        file_path: str,
+        target_sample_rate: int = AUDIO["sample_rate"],
+    ) -> Tuple[np.ndarray, int]:
+        """Read and resample audio without touching Tk widgets."""
+        data, sr = read_audio_file(file_path)
+        if sr != target_sample_rate:
+            data = _resample_audio(data, sr, target_sample_rate)
+            sr = target_sample_rate
+        return data, sr
+
+    def _set_audio_data(self, data: np.ndarray, sample_rate: int):
+        """Install decoded audio into the editor state."""
+        self.sample_rate = sample_rate
+
+        # Convert stereo to mono for visualization (keep original for playback)
+        if data.ndim > 1:
+            self.audio_data = data
+            self.waveform_data = np.mean(data, axis=1)
+        else:
+            self.audio_data = data
+            self.waveform_data = data
+
+        self.duration = len(self.waveform_data) / self.sample_rate
+        self.trim_start = 0
+        self.trim_end = len(self.waveform_data)
 
     def _load_audio(self):
         """Load and prepare audio data."""
         try:
-            data, sr = self._read_audio_file(self.file_path)
-
-            if sr != self.sample_rate:
-                data = _resample_audio(data, sr, self.sample_rate)
-
-            # Convert stereo to mono for visualization (keep original for playback)
-            if data.ndim > 1:
-                self.audio_data = data
-                self.waveform_data = np.mean(data, axis=1)
-            else:
-                self.audio_data = data
-                self.waveform_data = data
-
-            self.duration = len(self.waveform_data) / self.sample_rate
-            self.trim_start = 0
-            self.trim_end = len(self.waveform_data)
-
+            self._set_audio_data(*self.prepare_audio(self.file_path, self.sample_rate))
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load audio:\n{e}")
             raise
@@ -390,6 +418,60 @@ class SoundEditor:
         separator = tk.Frame(parent, bg=COLORS["bg_light"], height=1)
         separator.pack(fill=tk.X, pady=(15, 12))
 
+        # Multi-cut status banner (hidden until multi-cut mode is active).
+        # Shows progress like "📑 Multi-Cut: capturing 2 of 5" plus a hint,
+        # and lets the user bump the total cut count up/down on the fly.
+        self._multi_banner = tk.Frame(parent, bg="#5865F2", padx=12, pady=6)
+        self._multi_banner_label = tk.Label(
+            self._multi_banner,
+            text="",
+            bg="#5865F2",
+            fg="white",
+            font=("Segoe UI", 10, "bold"),
+        )
+        self._multi_banner_label.pack(side=tk.LEFT)
+
+        # Live ± controls on the right side of the banner.
+        self._multi_minus_btn = tk.Button(
+            self._multi_banner,
+            text="➖",
+            command=lambda: self._adjust_multi_total(-1),
+            bg="#4752C4",
+            fg="white",
+            activebackground="#3C45A5",
+            activeforeground="white",
+            font=("Segoe UI", 10, "bold"),
+            width=3,
+            relief="flat",
+            cursor="hand2",
+            bd=0,
+        )
+        self._multi_minus_btn.pack(side=tk.RIGHT, padx=(8, 0))
+        self._multi_plus_btn = tk.Button(
+            self._multi_banner,
+            text="➕",
+            command=lambda: self._adjust_multi_total(+1),
+            bg="#4752C4",
+            fg="white",
+            activebackground="#3C45A5",
+            activeforeground="white",
+            font=("Segoe UI", 10, "bold"),
+            width=3,
+            relief="flat",
+            cursor="hand2",
+            bd=0,
+        )
+        self._multi_plus_btn.pack(side=tk.RIGHT, padx=(8, 0))
+        self._multi_total_label = tk.Label(
+            self._multi_banner,
+            text="",
+            bg="#5865F2",
+            fg="white",
+            font=("Segoe UI", 10, "bold"),
+        )
+        self._multi_total_label.pack(side=tk.RIGHT, padx=(12, 0))
+        # Banner is NOT packed yet — shown only in multi-cut mode.
+
         btn_frame = tk.Frame(parent, bg=COLORS["bg_dark"])
         btn_frame.pack(fill=tk.X)
 
@@ -409,8 +491,25 @@ class SoundEditor:
             pady=5,
         ).pack(side=tk.LEFT)
 
+        # Multi-cut entry button — opens the "how many?" prompt.
+        self._multi_btn = tk.Button(
+            btn_frame,
+            text="📑 Multi-Cut",
+            command=self._start_multi_cut,
+            bg=COLORS["bg_medium"],
+            fg="white",
+            activebackground=COLORS["bg_light"],
+            activeforeground="white",
+            font=("Segoe UI", 10),
+            width=12,
+            relief="flat",
+            cursor="hand2",
+            pady=5,
+        )
+        self._multi_btn.pack(side=tk.LEFT, padx=(8, 0))
+
         # Action buttons on right
-        tk.Button(
+        self._cancel_btn = tk.Button(
             btn_frame,
             text="Cancel",
             command=self._on_cancel,
@@ -423,9 +522,10 @@ class SoundEditor:
             relief="flat",
             cursor="hand2",
             pady=5,
-        ).pack(side=tk.RIGHT, padx=(8, 0))
+        )
+        self._cancel_btn.pack(side=tk.RIGHT, padx=(8, 0))
 
-        tk.Button(
+        self._save_btn = tk.Button(
             btn_frame,
             text="✅ Save & Use",
             command=self._on_save,
@@ -438,7 +538,26 @@ class SoundEditor:
             relief="flat",
             cursor="hand2",
             pady=5,
-        ).pack(side=tk.RIGHT)
+        )
+        self._save_btn.pack(side=tk.RIGHT)
+
+        # Capture button — only visible during multi-cut mode. Replaces the
+        # role of "Save & Use" while capturing segments.
+        self._capture_btn = tk.Button(
+            btn_frame,
+            text="",
+            command=self._capture_multi_segment,
+            bg=COLORS["green"],
+            fg="white",
+            activebackground="#1E8E4D",
+            activeforeground="white",
+            font=("Segoe UI", 10, "bold"),
+            width=18,
+            relief="flat",
+            cursor="hand2",
+            pady=5,
+        )
+        # Not packed — shown only in multi-cut mode.
 
     def _draw_waveform(self):
         """Draw the waveform visualization."""
@@ -1016,6 +1135,320 @@ class SoundEditor:
         """Reset trim selection to full audio."""
         self.trim_start = 0
         self.trim_end = len(self.waveform_data)
+        self._draw_waveform()
+
+    # ------------------------------------------------------------------
+    # Multi-cut: capture N segments from the same source in one session.
+    # ------------------------------------------------------------------
+
+    def _start_multi_cut(self):
+        """Prompt for the number of cuts, then enter multi-cut mode."""
+        if self.audio_data is None:
+            return
+
+        # Build a tiny modal that uses an integer Spinbox (arrow up/down) so the
+        # UX matches what the user described.
+        prompt = tk.Toplevel(self.dialog)
+        prompt.title("Multi-Cut")
+        prompt.configure(bg=COLORS["bg_dark"])
+        prompt.transient(self.dialog)
+        prompt.grab_set()
+        prompt.resizable(False, False)
+
+        tk.Label(
+            prompt,
+            text="How many cuts do you want to make?",
+            bg=COLORS["bg_dark"],
+            fg=COLORS["text_primary"],
+            font=("Segoe UI", 11, "bold"),
+            padx=20,
+            pady=12,
+        ).pack()
+
+        count_var = tk.IntVar(value=2)
+        spin = tk.Spinbox(
+            prompt,
+            from_=2,
+            to=50,
+            textvariable=count_var,
+            width=6,
+            font=("Segoe UI", 14, "bold"),
+            justify="center",
+            bg=COLORS["bg_medium"],
+            fg="white",
+            insertbackground="white",
+            relief="flat",
+            buttonbackground=COLORS["bg_light"],
+        )
+        spin.pack(pady=(0, 12))
+
+        btn_row = tk.Frame(prompt, bg=COLORS["bg_dark"])
+        btn_row.pack(pady=(0, 12), padx=20)
+
+        def cancel():
+            prompt.destroy()
+
+        def ok():
+            try:
+                n = int(count_var.get())
+            except (tk.TclError, ValueError):
+                n = 0
+            if n < 2:
+                messagebox.showwarning("Multi-Cut", "Pick at least 2 cuts.", parent=prompt)
+                return
+            prompt.destroy()
+            self._enter_multi_cut_mode(n)
+
+        tk.Button(
+            btn_row,
+            text="Cancel",
+            command=cancel,
+            bg=COLORS["bg_medium"],
+            fg="white",
+            font=("Segoe UI", 10),
+            width=10,
+            relief="flat",
+            cursor="hand2",
+        ).pack(side=tk.LEFT, padx=5)
+
+        tk.Button(
+            btn_row,
+            text="Start",
+            command=ok,
+            bg=COLORS["blurple"],
+            fg="white",
+            font=("Segoe UI", 10, "bold"),
+            width=10,
+            relief="flat",
+            cursor="hand2",
+        ).pack(side=tk.LEFT, padx=5)
+
+        # Center prompt over editor dialog
+        prompt.update_idletasks()
+        ex = self.dialog.winfo_rootx()
+        ey = self.dialog.winfo_rooty()
+        ew = self.dialog.winfo_width()
+        eh = self.dialog.winfo_height()
+        pw = prompt.winfo_width()
+        ph = prompt.winfo_height()
+        prompt.geometry(f"+{ex + (ew - pw) // 2}+{ey + (eh - ph) // 3}")
+
+        spin.focus_set()
+        try:
+            spin.selection_range(0, "end")  # type: ignore[arg-type]
+        except Exception:
+            pass
+        prompt.bind("<Return>", lambda e: ok())
+        prompt.bind("<Escape>", lambda e: cancel())
+
+    def _enter_multi_cut_mode(self, total: int):
+        """Switch the editor into multi-cut mode for `total` segments."""
+        self.multi_mode = True
+        self.multi_total = total
+        self.multi_current = 1
+        self.multi_results = []
+
+        # Reset the selection so the user starts clean for cut 1.
+        self.trim_start = 0
+        self.trim_end = min(len(self.waveform_data), self.sample_rate)  # default 1s window
+
+        # Hide the normal Save button, show Capture button + banner.
+        self._save_btn.pack_forget()
+        self._multi_btn.pack_forget()
+        self._capture_btn.pack(side=tk.RIGHT)
+        self._multi_banner.pack(fill=tk.X, pady=(0, 10), before=self._capture_btn.master)
+
+        self._update_multi_banner()
+        self._draw_waveform()
+
+    def _update_multi_banner(self):
+        """Refresh the multi-cut banner + capture button label."""
+        if not self.multi_mode:
+            return
+        self._multi_banner_label.config(
+            text=(
+                f"📑 Multi-Cut: capturing cut {self.multi_current} of {self.multi_total}  "
+                f"— left-click to set START, right-click to set END, "
+                f"SPACE to preview, then click ✓ Capture"
+            )
+        )
+        self._capture_btn.config(
+            text=f"✓ Capture cut {self.multi_current}/{self.multi_total}"
+        )
+        # Update ± controls. Minus is disabled when reducing further would
+        # drop below the current cut (or below the 2-cut minimum).
+        try:
+            self._multi_total_label.config(text=f"Total: {self.multi_total}")
+            min_total = max(2, self.multi_current)
+            self._multi_minus_btn.config(
+                state=(tk.NORMAL if self.multi_total > min_total else tk.DISABLED)
+            )
+            self._multi_plus_btn.config(
+                state=(tk.NORMAL if self.multi_total < 50 else tk.DISABLED)
+            )
+        except (AttributeError, tk.TclError):
+            pass
+
+    def _adjust_multi_total(self, delta: int):
+        """Bump `multi_total` by +/- 1 while in multi-cut mode.
+
+        Lower bound: `max(2, multi_current)` so the user can't drop below
+        the cut they're currently working on. Upper bound: 50 to match the
+        Spinbox prompt limit.
+        """
+        if not self.multi_mode:
+            return
+        new_total = self.multi_total + delta
+        min_total = max(2, self.multi_current)
+        if new_total < min_total or new_total > 50:
+            return
+        self.multi_total = new_total
+        self._update_multi_banner()
+
+    def _prompt_multi_cut_title(self) -> Optional[str]:
+        """Prompt for the current multi-cut title. Returns None if cancelled."""
+        prompt = tk.Toplevel(self.dialog)
+        prompt.title("Cut Title")
+        prompt.configure(bg=COLORS["bg_dark"])
+        prompt.transient(self.dialog)
+        prompt.grab_set()
+        prompt.resizable(False, False)
+
+        result: list[Optional[str]] = [None]
+        default_title = f"{Path(self.file_path).stem} {self.multi_current}"
+        title_var = tk.StringVar(value=default_title)
+
+        tk.Label(
+            prompt,
+            text=f"Title for cut {self.multi_current}:",
+            bg=COLORS["bg_dark"],
+            fg=COLORS["text_primary"],
+            font=("Segoe UI", 11, "bold"),
+            padx=20,
+            pady=10,
+        ).pack(anchor="w")
+
+        entry = tk.Entry(
+            prompt,
+            textvariable=title_var,
+            width=34,
+            font=("Segoe UI", 12),
+            bg=COLORS["bg_medium"],
+            fg="white",
+            insertbackground="white",
+            relief="flat",
+        )
+        entry.pack(fill=tk.X, padx=20, pady=(0, 12))
+
+        btn_row = tk.Frame(prompt, bg=COLORS["bg_dark"])
+        btn_row.pack(pady=(0, 12), padx=20, anchor="e")
+
+        def close():
+            result[0] = None
+            prompt.destroy()
+
+        def ok():
+            title = title_var.get().strip()
+            if not title:
+                messagebox.showwarning(
+                    "Multi-Cut",
+                    "Please enter a title for this cut.",
+                    parent=prompt,
+                )
+                return
+            result[0] = title
+            prompt.destroy()
+
+        tk.Button(
+            btn_row,
+            text="Cancel",
+            command=close,
+            bg=COLORS["bg_medium"],
+            fg="white",
+            font=("Segoe UI", 10),
+            width=10,
+            relief="flat",
+            cursor="hand2",
+        ).pack(side=tk.LEFT, padx=5)
+
+        tk.Button(
+            btn_row,
+            text="Use Title",
+            command=ok,
+            bg=COLORS["blurple"],
+            fg="white",
+            font=("Segoe UI", 10, "bold"),
+            width=10,
+            relief="flat",
+            cursor="hand2",
+        ).pack(side=tk.LEFT, padx=5)
+
+        prompt.update_idletasks()
+        ex = self.dialog.winfo_rootx()
+        ey = self.dialog.winfo_rooty()
+        ew = self.dialog.winfo_width()
+        eh = self.dialog.winfo_height()
+        pw = prompt.winfo_width()
+        ph = prompt.winfo_height()
+        prompt.geometry(f"+{ex + (ew - pw) // 2}+{ey + (eh - ph) // 3}")
+
+        prompt.protocol("WM_DELETE_WINDOW", close)
+        prompt.bind("<Return>", lambda _e: ok())
+        prompt.bind("<Escape>", lambda _e: close())
+        entry.focus_set()
+        try:
+            entry.selection_range(0, "end")
+        except Exception:
+            pass
+
+        self.dialog.wait_window(prompt)
+        return result[0]
+
+    def _capture_multi_segment(self):
+        """Capture the current selection as the next multi-cut segment."""
+        if not self.multi_mode or self.audio_data is None:
+            return
+
+        if self.trim_end <= self.trim_start:
+            messagebox.showwarning(
+                "Multi-Cut",
+                "The selection is empty. Set start (left-click) and end (right-click) first.",
+                parent=self.dialog,
+            )
+            return
+
+        title = self._prompt_multi_cut_title()
+        if title is None:
+            return
+
+        # Stop any preview before slicing.
+        self._stop_playback()
+
+        segment = np.ascontiguousarray(
+            self.audio_data[self.trim_start : self.trim_end].copy()
+        )
+        self.multi_results.append((segment, self.sample_rate, title))
+
+        # Advance or finish.
+        if self.multi_current >= self.multi_total:
+            # All segments captured \u2014 set single result to the FIRST cut for
+            # backward compatibility, then close.
+            if self.multi_results:
+                first_audio, first_sr = self.multi_results[0][:2]
+                self.result = (first_audio, first_sr)
+                if self.on_save:
+                    try:
+                        self.on_save(first_audio, first_sr)
+                    except Exception:
+                        pass
+            self.dialog.destroy()
+            return
+
+        self.multi_current += 1
+        # Reset selection for the next cut so the user starts fresh.
+        self.trim_start = 0
+        self.trim_end = min(len(self.waveform_data), self.sample_rate)
+        self._update_multi_banner()
         self._draw_waveform()
 
     def _on_save(self):

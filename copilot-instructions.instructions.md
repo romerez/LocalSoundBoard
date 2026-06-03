@@ -1,6 +1,6 @@
 # Copilot Instructions - Discord Soundboard Project
 
-> **Last Updated:** 2026-02-19 (major: Refactored to phone-like edit mode for slot rearrangement)
+> **Last Updated:** 2026-06-01 (weighted scroll speed, scroll isolation, hover volume control)
 > **Status:** Active Development
 > **Language:** Python 3.x
 ALWAYS EDIT THIS FILE FIRST when adding features or making changes. This is the source of truth for the project and helps maintain consistency.
@@ -264,7 +264,7 @@ Persistent (NOT reset per-click):
 - [x] Performance optimization: tab bar updates existing buttons instead of recreating (faster tab switching)
 - [x] Performance optimization: slot filled-state cache skips redundant preview/edit button updates
 - [x] Emoji picker with scrolling support and 200+ categorized emojis
-- [x] Hebrew/Arabic RTL text display support (Unicode RTL embedding markers)
+- [x] Hebrew/Arabic RTL text display support for slot labels using natural text order (no pre-reversal)
 - [x] Sound editor pause/stop without UI freeze (background thread stream cleanup)
 - [x] Zoom centered on cursor position (mouse wheel zooms to cursor location)
 - [x] Improved sound editor UI (larger window, modern styling, better layout)
@@ -274,6 +274,25 @@ Persistent (NOT reset per-click):
 - [x] Mousewheel scrolling for tab bar (scroll tabs left/right)
 - [x] Auto-scroll to active tab when switching
 - [x] Move button relocated to tab bar (left side, next to scroll buttons)
+- [x] Right-click quick edit popup captures pointer/keyboard focus so edits cannot click through to sound slots
+- [x] Faster soundboard mousewheel scrolling
+- [x] Configurable hover preview binding to play the sound under the cursor locally
+- [x] Multi-cut workflow captures a title for each cut and uses it for the created sound slot/file
+- [x] Action-bar shortcut to open the local `sounds/` folder
+- [x] Recordings use date/time/duration-aware filenames
+- [x] Quick Record to Sound workflow: press once to record, press again to stop and open the new recording as a sound
+- [x] Long recordings are handed to the sound editor via a background prepare step so the UI stays responsive
+- [x] Tab manager dialog for reordering tabs
+- [x] Shift + mousewheel over a sound adjusts that sound's volume without opening edit
+- [x] Configurable app-wide mousewheel scroll speed multiplier
+- [x] Quick edit popup suppresses the next slot click after closing so Apply/Cancel cannot click through
+- [x] Right-click menu includes explicit Edit action
+- [x] Soundboard scroll speed multiplier works (configurable 1x-30x with weighted scroll units for stronger movement)
+- [x] Audio options panel scroll isolated from soundboard scroll (no cross-panel scrolling)
+- [x] Shift+scroll adjusts per-slot volume without scrolling soundboard
+- [x] Volume adjustment shows visual bar indicator (green for normal, yellow for boost >100%)
+- [x] Volume adjustment displays live percentage in visual bar (🔊 X%)
+- [x] Muted state detected in status bar (🔇 instead of 🔊)
 
 ---
 
@@ -290,7 +309,7 @@ Persistent (NOT reset per-click):
 - [ ] Fade in/out effects
 - [ ] Add stream deck integration
 - [ ] YouTube to MP3 trimmer
-
+- [ ] Add sound filters for voice modulation (pitch shift, robot, echo, etc.)
 ### Low Priority
 - [ ] Import/export config profiles (sounds, images, tabs)
 - [ ] System tray minimization
@@ -367,6 +386,10 @@ Main GUI application.
 `soundboard_config.json`:
 ```json
 {
+  "hover_preview_key": "mouse3",
+  "scroll_speed_multiplier": 10,
+  "ptt_enabled": true,
+  "ptt_key": "mouse4",
   "slots": {
     "0": {
       "name": "Air Horn",
@@ -450,6 +473,16 @@ python main.py
 ---
 
 ## Change Log
+
+### Version 1.2.3 (Input & Editing Polish - 2026-06-01)
+- Added Shift+mousewheel hover volume control, app-wide scroll-speed setting, hardened quick-popup click-through suppression, and restored explicit Edit in right-click options
+- Increased scroll-speed slider weight so each configured step scrolls several Tk units instead of feeling 1:1/minor
+- Added action-bar Sounds folder shortcut, Quick Record to Sound, duration-aware recording filenames, long-record editor background preparation, and tab reordering manager
+- Fixed quick edit popup click-through by using transient/grab focus and routing popup mousewheel events to its controls
+- Increased soundboard scroll speed for large tabs
+- Added configurable hover preview binding for locally previewing the filled slot under the cursor
+- Multi-cut now asks for each cut title and uses those titles when saving generated cuts and creating slots
+- PTT playback path validated: the sound is queued and PTT is pressed immediately afterward, with delayed release after playback; audible physical mouse clicks usually come from microphone pickup, not from switching the mic to sound a second later
 
 ### Version 1.2.0 (Refactor & Performance - 2026-02-19)
 - Replaced all raw `debug.log` file writes with Python `logging` module (buffered, configurable)
@@ -570,7 +603,7 @@ When asked to add a feature:
 | Dragging plays sound accidentally | Previous drag used main button with 5px threshold — sound played on every drag start | **CURRENT FIX:** Use separate "↔ Move" edit mode. In edit mode, clicks select/swap; in normal mode, clicks play sounds. |
 | Emoji picker freezes UI | Creating thousands of `CTkButton` widgets synchronously blocks the main thread | Use `after()` to load categories one at a time asynchronously; limit emojis per category (96 max) |
 | Emojis display as colorless/black | `CTkButton` doesn't render colored emojis properly on Windows | Use native `tk.Label` with "Segoe UI Emoji" font instead of `CTkButton`; add hover/click bindings manually |
-| Hebrew/Arabic text displays backwards | Tkinter doesn't handle RTL (Right-to-Left) text properly | Wrap RTL text with Unicode RLE marker `\u202B` at start and PDF marker `\u202C` at end; use `_fix_rtl_text()` helper function |
+| Hebrew/Arabic text displays backwards | Tkinter doesn't handle some RTL text consistently in legacy canvas rendering paths | Display Hebrew/Arabic slot labels naturally without pre-reversing text; `_fix_rtl_text()` is now a no-op for slot buttons and should only remain for future RTL-specific refinements. |
 | Emoji picker can't scroll | Simple grid layout doesn't support scrolling | Use `tk.Canvas` with scrollbar and `create_window()` to embed scrollable frame; bind mousewheel to canvas |
 | Move slot broken after per-tab widgets | `_swap_slots` and `_move_slot_to_tab` called `_refresh_slot_buttons()` which doesn't exist in per-tab architecture | Use `_update_slot_button_for_tab(tab_idx, slot_idx)` for affected slots; use `_ensure_slots_for_tab(target_tab)` before moving to that tab |
 

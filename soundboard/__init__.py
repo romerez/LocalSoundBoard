@@ -21,4 +21,4 @@ __all__ = [
     "SoundEditor",
     "edit_sound_file",
 ]
-__version__ = "1.1.12"
+__version__ = "1.1.16"

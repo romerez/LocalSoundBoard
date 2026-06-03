@@ -20,12 +20,13 @@ import queue
 import shutil
 import sys
 import threading
+import time
 from pathlib import Path
 
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
-from typing import Optional, Dict, List, Tuple
+from typing import Callable, Optional, Dict, List, Tuple
 
 from .constants import AUDIO, SOUNDS_DIR
 
@@ -40,83 +41,170 @@ WSOLA_FRAME = 2048  # ~43ms grain at 48kHz
 WSOLA_HS = 512  # synthesis hop → 75% overlap (Hann is COLA)
 
 
-# Optional noise-suppression dependency. Loaded lazily so the app still
-# starts if the user hasn't installed noisereduce yet.
+# Real-time noise suppression via RNNoise (the same algorithm Discord used
+# before they switched to Krisp, also used by OBS Studio). Tiny RNN, ~0.5%
+# CPU at 48 kHz mono. We use the low-level C bindings directly and skip the
+# heavy `audiolab`/`av` wrapper around `RNNoise.denoise_frame` so nothing
+# inside the audio callback ever touches libav / ffmpeg.
 try:
-    import noisereduce as _nr  # type: ignore
+    from pyrnnoise.rnnoise import (  # type: ignore
+        FRAME_SIZE as _RNN_FRAME_SIZE,
+        SAMPLE_RATE as _RNN_SAMPLE_RATE,
+        create as _rnn_create,
+        destroy as _rnn_destroy,
+        process_frame as _rnn_process_frame,
+    )
 
-    NOISEREDUCE_AVAILABLE = True
+    RNNOISE_AVAILABLE = True
 except Exception:  # pragma: no cover - import-time guard
-    _nr = None
-    NOISEREDUCE_AVAILABLE = False
+    _RNN_FRAME_SIZE = 480
+    _RNN_SAMPLE_RATE = 48000
+    _rnn_create = None  # type: ignore
+    _rnn_destroy = None  # type: ignore
+    _rnn_process_frame = None  # type: ignore
+    RNNOISE_AVAILABLE = False
 
 
 class NoiseSuppressor:
-    """Real-time noise suppressor for mic input.
+    """Real-time noise suppressor for mic input using RNNoise.
 
     Replaces Discord's Krisp noise suppression (which is bypassed when routing
-    through a virtual cable). Uses spectral gating via the `noisereduce`
-    library. Each incoming mic block is appended to a small ring buffer so
-    the spectral analysis has enough context (~85 ms at 48 kHz), then only
-    the latest block is returned to keep latency low.
+    through a virtual cable). RNNoise is a small recurrent neural network
+    designed specifically for real-time voice denoising — no spectral gating,
+    no musical-noise / robot-voice artifacts. CPU cost is ~0.5% on a modern
+    machine.
 
-    Designed to be cheap enough to run inside `_input_callback`. Falls back
-    to a passthrough (returns input unchanged) if `noisereduce` is missing
-    or processing fails.
+    The audio callback feeds float32 mono blocks of arbitrary size; RNNoise
+    works on fixed 480-sample int16 frames at 48 kHz. We keep small input /
+    output ring buffers to bridge the two, so latency added is bounded by one
+    RNNoise frame (~10 ms).
+
+    The `strength` knob is implemented as a wet/dry mix between the denoised
+    signal and the original mic, since RNNoise itself has no strength
+    parameter. 1.0 = fully denoised, 0.0 = fully bypassed.
+
+    Falls back to passthrough if `pyrnnoise` is missing or processing fails.
     """
 
     def __init__(self, sample_rate: int, block_size: int):
         self.sample_rate = sample_rate
         self.block_size = block_size
         self.enabled: bool = False
-        # Strength: 0.0 = no reduction, 1.0 = aggressive
-        self.strength: float = 0.85
-        # Context buffer (~85 ms at 48 kHz). Bigger = better spectral estimate
-        # but more CPU per block. 4 blocks is a good compromise.
-        self._buffer_size = max(block_size * 4, 4096)
-        self._buffer = np.zeros(self._buffer_size, dtype=np.float32)
-        # FFT size for spectral gating. 512 samples ~= 10 ms at 48 kHz.
-        self._n_fft = 512
+        # Wet/dry mix: 0.0 = original mic, 1.0 = fully denoised.
+        self.strength: float = 1.0
+        # RNNoise expects 48 kHz int16 mono. We currently always run the
+        # mixer at 48 kHz so no resampling is needed in the hot path.
+        self._native_sr = _RNN_SAMPLE_RATE
+        self._frame_size = _RNN_FRAME_SIZE
+        self._matched_sr = sample_rate == self._native_sr
+        # Allocate the RNNoise denoise state lazily so an unavailable lib
+        # doesn't blow up __init__.
+        self._state = None
+        # Float32 input ring (samples waiting to fill a 480-sample frame).
+        self._in_buf = np.zeros(0, dtype=np.float32)
+        # Float32 output ring (denoised samples waiting to be returned).
+        self._out_buf = np.zeros(0, dtype=np.float32)
+
+    def _ensure_state(self) -> bool:
+        if not RNNOISE_AVAILABLE or _rnn_create is None:
+            return False
+        if self._state is None:
+            try:
+                self._state = [_rnn_create()]
+            except Exception as e:
+                logger.debug("RNNoise create failed: %s", e)
+                self._state = None
+                return False
+        return True
 
     def set_strength(self, strength: float) -> None:
-        """Set reduction strength (0.0 - 1.0). Higher = more aggressive."""
+        """Set wet/dry mix (0.0 = bypass, 1.0 = fully denoised)."""
         self.strength = max(0.0, min(1.0, float(strength)))
 
     def reset(self) -> None:
-        """Clear the context buffer (e.g. when stream restarts)."""
-        self._buffer = np.zeros(self._buffer_size, dtype=np.float32)
+        """Reset internal state (e.g. when stream restarts)."""
+        self._in_buf = np.zeros(0, dtype=np.float32)
+        self._out_buf = np.zeros(0, dtype=np.float32)
+        if self._state is not None and _rnn_destroy is not None:
+            try:
+                for s in self._state:
+                    _rnn_destroy(s)
+            except Exception:
+                pass
+            self._state = None
+
+    def __del__(self):
+        try:
+            self.reset()
+        except Exception:
+            pass
 
     def process(self, mic_block: np.ndarray) -> np.ndarray:
-        """Apply noise suppression to a mic block. Returns same shape array.
+        """Apply noise suppression to a mic block. Returns same length array.
 
-        Safe to call even when disabled or when noisereduce is unavailable -
+        Safe to call even when disabled or when RNNoise is unavailable -
         will return the input unchanged in those cases.
         """
-        if not self.enabled or not NOISEREDUCE_AVAILABLE or _nr is None:
+        if not self.enabled or not self._matched_sr:
             return mic_block
         n = len(mic_block)
         if n == 0:
             return mic_block
+        if not self._ensure_state() or _rnn_process_frame is None:
+            return mic_block
         try:
-            # Slide buffer forward and append the new block at the end so
-            # noisereduce has previous context to estimate the noise floor.
-            if n >= self._buffer_size:
-                self._buffer = mic_block[-self._buffer_size :].astype(np.float32, copy=True)
-            else:
-                self._buffer[:-n] = self._buffer[n:]
-                self._buffer[-n:] = mic_block.astype(np.float32, copy=False)
-            denoised = _nr.reduce_noise(
-                y=self._buffer,
-                sr=self.sample_rate,
-                stationary=True,
-                prop_decrease=self.strength,
-                n_fft=self._n_fft,
-            )
-            out = np.asarray(denoised[-n:], dtype=np.float32)
-            # Defensive: keep shape/length stable
-            if len(out) != n:
+            state = self._state
+            if state is None:  # paranoia after _ensure_state
                 return mic_block
-            return out
+            mic_f32 = np.ascontiguousarray(mic_block, dtype=np.float32).reshape(-1)
+            # Append new samples to the input ring.
+            self._in_buf = (
+                np.concatenate((self._in_buf, mic_f32))
+                if self._in_buf.size
+                else mic_f32.copy()
+            )
+            # Drain as many full RNNoise frames as we can.
+            fs = self._frame_size
+            n_frames = self._in_buf.size // fs
+            if n_frames > 0:
+                consumed = n_frames * fs
+                # Convert float [-1,1] → int16. Clip to be safe.
+                int_chunk = np.clip(self._in_buf[:consumed] * 32767.0, -32768, 32767).astype(
+                    np.int16
+                )
+                int_chunk = int_chunk.reshape(n_frames, fs)
+                denoised_chunks = []
+                for i in range(n_frames):
+                    frame = int_chunk[i : i + 1, :]  # (1, FRAME_SIZE) mono
+                    out_frame, _sp = _rnn_process_frame(state, frame)  # type: ignore[arg-type]
+                    denoised_chunks.append(out_frame.reshape(-1))
+                denoised_i16 = np.concatenate(denoised_chunks)
+                denoised_f32 = denoised_i16.astype(np.float32) / 32767.0
+                # Wet/dry mix vs original samples that produced these frames.
+                if self.strength < 1.0:
+                    orig = self._in_buf[:consumed]
+                    denoised_f32 = self.strength * denoised_f32 + (1.0 - self.strength) * orig
+                # Keep leftover samples for next call.
+                self._in_buf = self._in_buf[consumed:].copy()
+                # Append to output ring.
+                self._out_buf = (
+                    np.concatenate((self._out_buf, denoised_f32))
+                    if self._out_buf.size
+                    else denoised_f32
+                )
+            # Return n samples from the output ring. If we don't yet have
+            # enough (cold start), pad the head with the original input —
+            # this only happens for the first ~10 ms of a stream.
+            if self._out_buf.size >= n:
+                out = self._out_buf[:n].copy()
+                self._out_buf = self._out_buf[n:].copy()
+                return out
+            else:
+                deficit = n - self._out_buf.size
+                head = mic_f32[:deficit]
+                tail = self._out_buf
+                self._out_buf = np.zeros(0, dtype=np.float32)
+                return np.concatenate((head, tail))
         except Exception as e:
             # Never let noise suppression break the audio callback - fall
             # back to passthrough on any failure.
@@ -476,7 +564,7 @@ class SoundCache:
         # Ensure sounds directory exists
         self.sounds_dir.mkdir(exist_ok=True)
 
-    def add_sound(self, source_path: str) -> str:
+    def add_sound(self, source_path: str, preload: bool = True) -> str:
         """
         Copy a sound file to the local sounds folder and cache it.
 
@@ -495,8 +583,8 @@ class SoundCache:
         if not dest_path.exists():
             shutil.copy2(source_path, dest_path)
 
-        # Pre-load into cache
-        self._load_into_cache(str(dest_path))
+        if preload:
+            self._load_into_cache(str(dest_path))
 
         return str(dest_path)
 
@@ -515,7 +603,13 @@ class SoundCache:
         import time
 
         timestamp = str(int(time.time() * 1000))[-8:]
-        stem = Path(original_name).stem
+        raw_stem = Path(original_name).stem
+        stem = "".join(
+            "_" if (ch in '<>:"/\\|?*' or ord(ch) < 32) else ch
+            for ch in raw_stem
+        ).strip(" ._")
+        if not stem:
+            stem = "sound"
         dest_name = f"{stem}_{timestamp}.wav"
         dest_path = self.sounds_dir / dest_name
 
@@ -2200,6 +2294,9 @@ class Recorder:
         self.sample_rate = sample_rate
         self.recording: bool = False
         self.output_path: Optional[str] = None
+        self._output_dir: Optional[str] = None
+        self._explicit_filename: Optional[str] = None
+        self._start_timestamp: Optional[str] = None
 
         # Buffers: list of np.ndarray blocks, concatenated on stop.
         self._loopback_blocks: List[np.ndarray] = []
@@ -2212,6 +2309,41 @@ class Recorder:
         self._include_mic: bool = True
         self._lock = threading.Lock()
         self._start_time: float = 0.0
+
+    @staticmethod
+    def _format_duration_for_filename(seconds: float) -> str:
+        """Compact recording duration token safe for filenames."""
+        total = max(0, int(round(seconds)))
+        hours, rem = divmod(total, 3600)
+        minutes, secs = divmod(rem, 60)
+        if hours:
+            return f"{hours}h{minutes:02d}m{secs:02d}s"
+        if minutes:
+            return f"{minutes:02d}m{secs:02d}s"
+        return f"{secs:02d}s"
+
+    @staticmethod
+    def _unique_output_path(path: str) -> str:
+        """Return a non-conflicting path by adding (2), (3), ... if needed."""
+        base = Path(path)
+        if not base.exists():
+            return str(base)
+        for idx in range(2, 1000):
+            candidate = base.with_name(f"{base.stem} ({idx}){base.suffix}")
+            if not candidate.exists():
+                return str(candidate)
+        return str(base.with_name(f"{base.stem}_{int(time.time())}{base.suffix}"))
+
+    def _build_final_output_path(self, duration_seconds: float, ext: str = ".mp3") -> str:
+        """Build the final path once duration is known."""
+        if self._explicit_filename and self.output_path:
+            return self._unique_output_path(self.output_path)
+
+        output_dir = self._output_dir or os.getcwd()
+        timestamp = self._start_timestamp or time.strftime("%Y-%m-%d_%H-%M-%S")
+        duration = self._format_duration_for_filename(duration_seconds)
+        filename = f"recording_{timestamp}_{duration}{ext}"
+        return self._unique_output_path(os.path.join(output_dir, filename))
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -2241,8 +2373,6 @@ class Recorder:
                 "The 'soundcard' library is not installed. " "Run: pip install soundcard"
             )
 
-        import time as _time
-
         # Locate the default speaker as a loopback microphone.
         try:
             speaker = _sc.default_speaker()  # type: ignore[union-attr]
@@ -2257,9 +2387,11 @@ class Recorder:
         self.sample_rate = 48000
 
         os.makedirs(output_dir, exist_ok=True)
+        self._output_dir = output_dir
+        self._explicit_filename = filename
+        self._start_timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
         if filename is None:
-            timestamp = _time.strftime("%Y%m%d_%H%M%S")
-            filename = f"discord_{timestamp}.mp3"
+            filename = f"recording_{self._start_timestamp}_pending.mp3"
         if not filename.lower().endswith(".mp3"):
             filename += ".mp3"
         self.output_path = os.path.join(output_dir, filename)
@@ -2283,7 +2415,7 @@ class Recorder:
             daemon=True,
         )
         self.recording = True
-        self._start_time = _time.time()
+        self._start_time = time.time()
         self._capture_thread.start()
 
         logger.info("Recording started → %s", self.output_path)
@@ -2338,7 +2470,7 @@ class Recorder:
                 pass
         self._mic_tap = None
 
-    def stop(self) -> Optional[str]:
+    def stop(self, on_saved: Optional[Callable[[Optional[str]], None]] = None) -> Optional[str]:
         """
         Stop recording. Captured audio is written to disk in a background
         thread so the UI never freezes (MP3 encoding can take a few seconds
@@ -2348,6 +2480,7 @@ class Recorder:
         if not self.recording:
             return None
 
+        duration_seconds = max(0.0, time.time() - self._start_time)
         self.recording = False
         self._stop_event.set()
 
@@ -2365,20 +2498,26 @@ class Recorder:
         loopback_blocks = self._loopback_blocks
         mic_blocks = self._mic_blocks
         include_mic = self._include_mic
-        out_path = self.output_path
+        out_path = self._build_final_output_path(duration_seconds)
+        self.output_path = out_path
         sample_rate = self.sample_rate
         self._loopback_blocks = []
         self._mic_blocks = []
 
         if not loopback_blocks:
             logger.warning("Recorder stopped with no captured audio.")
+            if on_saved is not None:
+                try:
+                    on_saved(None)
+                except Exception:
+                    logger.exception("Recorder on_saved callback failed")
             return None
 
         # Encode in a background thread so the UI thread (and the audio
         # callback's chance at the GIL) is freed immediately.
         threading.Thread(
             target=self._encode_async,
-            args=(loopback_blocks, mic_blocks, include_mic, out_path, sample_rate),
+            args=(loopback_blocks, mic_blocks, include_mic, out_path, sample_rate, on_saved),
             name="RecorderEncoder",
             daemon=True,
         ).start()
@@ -2392,12 +2531,19 @@ class Recorder:
         include_mic: bool,
         out_path: Optional[str],
         sample_rate: int,
+        on_saved: Optional[Callable[[Optional[str]], None]] = None,
     ) -> Optional[str]:
         """Background-thread encoding job. Writes the MP3 (or WAV fallback)."""
+        saved_path: Optional[str] = None
         try:
             loopback = np.concatenate(loopback_blocks, axis=0)
         except Exception as e:
             logger.error("Failed to concatenate loopback audio: %s", e)
+            if on_saved is not None:
+                try:
+                    on_saved(None)
+                except Exception:
+                    logger.exception("Recorder on_saved callback failed")
             return None
 
         mic_audio: Optional[np.ndarray] = None
@@ -2429,9 +2575,20 @@ class Recorder:
             try:
                 sf.write(wav_path, mono, sample_rate, subtype="PCM_16")
                 logger.warning("pydub not available; wrote WAV instead: %s", wav_path)
-                return wav_path
+                saved_path = wav_path
+                if on_saved is not None:
+                    try:
+                        on_saved(saved_path)
+                    except Exception:
+                        logger.exception("Recorder on_saved callback failed")
+                return saved_path
             except Exception as e:
                 logger.error("Failed to write fallback WAV: %s", e)
+                if on_saved is not None:
+                    try:
+                        on_saved(None)
+                    except Exception:
+                        logger.exception("Recorder on_saved callback failed")
                 return None
 
         try:
@@ -2445,22 +2602,28 @@ class Recorder:
             assert out_path is not None
             seg.export(out_path, format="mp3", bitrate=self.DEFAULT_BITRATE)
             logger.info("Recording saved: %s", out_path)
-            return out_path
+            saved_path = out_path
+            return saved_path
         except Exception as e:
             logger.error("Failed to encode MP3: %s", e)
             try:
                 wav_path = (out_path or "recording.mp3").rsplit(".", 1)[0] + ".wav"
                 sf.write(wav_path, mono, sample_rate, subtype="PCM_16")
                 logger.warning("MP3 encode failed; wrote WAV instead: %s", wav_path)
-                return wav_path
+                saved_path = wav_path
+                return saved_path
             except Exception as e2:
                 logger.error("Fallback WAV also failed: %s", e2)
                 return None
+        finally:
+            if on_saved is not None:
+                try:
+                    on_saved(saved_path)
+                except Exception:
+                    logger.exception("Recorder on_saved callback failed")
 
     def get_elapsed(self) -> float:
         """Seconds since recording started (0 if not recording)."""
         if not self.recording:
             return 0.0
-        import time as _time
-
-        return _time.time() - self._start_time
+        return time.time() - self._start_time
