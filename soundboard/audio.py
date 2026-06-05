@@ -29,6 +29,7 @@ import soundfile as sf
 from typing import Callable, Optional, Dict, List, Tuple
 
 from .constants import AUDIO, SOUNDS_DIR
+from .voice_fx import VoiceChanger
 
 logger = logging.getLogger(__name__)
 
@@ -782,6 +783,13 @@ class AudioMixer:
         # toggled via the GUI checkbox.
         self.noise_suppressor = NoiseSuppressor(self.sample_rate, self.block_size)
 
+        # Real-time voice changer applied to the mic before it's mixed with
+        # sounds and sent to the virtual cable (so people on the Discord call
+        # hear the modulated voice). Disabled by default; params + presets are
+        # driven from the GUI's Voice Changer card. Reads are lock-free in the
+        # audio callback — see _output_callback.
+        self.voice_changer = VoiceChanger(self.sample_rate, self.block_size)
+
         # PTT (Push-to-Talk) settings
         self.ptt_key: Optional[str] = None
         self.ptt_active: bool = False
@@ -821,6 +829,12 @@ class AudioMixer:
         self._test_record_frames_remaining: int = 0
         self.test_recording_active: bool = False
         self._test_record_done_callback: Optional[callable] = None  # type: ignore[assignment]
+
+        # Live output levels (0..~1+) for the GUI "Discord level" meter. Updated
+        # every output callback. output_peak = full signal to the cable;
+        # sounds_peak = just the sound effects (excludes mic).
+        self.output_peak: float = 0.0
+        self.sounds_peak: float = 0.0
 
         # Manual PTT hold - when True, the auto-release-on-silence countdown
         # AND the safety timeout are bypassed so an external caller (e.g. the
@@ -920,6 +934,13 @@ class AudioMixer:
             return
 
         self.running = True
+
+        # Clear stale voice-changer buffers (echo/reverb tails, pitch delay
+        # line) so a restarted stream doesn't replay old audio.
+        try:
+            self.voice_changer.reset()
+        except Exception:
+            pass
 
         # Create separate input stream for microphone
         self.input_stream = sd.InputStream(
@@ -1225,6 +1246,14 @@ class AudioMixer:
             mixed = np.zeros((frames, self.channels), dtype=np.float32)
         else:
             mic_mono = mic_data * self.mic_volume
+            # Real-time voice changer (pitch/robot/echo/reverb/radio/etc.).
+            # Applied to the mic BEFORE mixing with sounds and BEFORE the
+            # virtual-cable output, so the Discord call hears the effect.
+            # process() is a no-op that returns its input when disabled and
+            # never raises, so this can't break the audio callback.
+            vc = self.voice_changer
+            if vc is not None and vc.enabled:
+                mic_mono = vc.process(mic_mono)
             mixed = np.column_stack([mic_mono, mic_mono])
 
         # Add newly queued sounds to currently playing
@@ -1418,6 +1447,17 @@ class AudioMixer:
         # This soft limiter preserves normal audio but compresses peaks above 1.0
         # instead of hard clipping, so volume boost actually increases loudness
         outdata[:] = self._soft_clip(mixed)
+
+        # Track the TRUE level of the signal sent to Discord (post-clip) so the
+        # GUI can show a level meter. This is what others actually hear — it is
+        # independent of the user's local speaker volume (which is why a sound
+        # can sound quiet to them but loud to everyone else). Also track the
+        # sounds-only level so a played sound's loudness reads clearly.
+        try:
+            self.output_peak = float(np.max(np.abs(outdata))) if outdata.size else 0.0
+            self.sounds_peak = float(np.max(np.abs(sounds_mix))) if sounds_mix.size else 0.0
+        except Exception:
+            pass
 
         # Test output: pipe the EXACT signal sent to the virtual cable to the
         # default speakers so the user can hear what Discord hears. Capture

@@ -45,7 +45,8 @@ Replace Discord's built-in soundboard with a standalone, local solution that:
 | Pitch-Preserving Speed | `librosa` |
 | Emoji Data | `emoji-data-python` |
 | Color Utilities | `colour` |
-| Noise Suppression | `noisereduce` (mic-only, replaces Krisp) |
+| Noise Suppression | `pyrnnoise` (RNNoise, mic-only, replaces Krisp) |
+| Voice Effects | pure-numpy DSP + `scipy.signal` (real-time mic voice changer) |
 
 ### Dependencies
 
@@ -60,11 +61,13 @@ pillow>=10.0.0
 pydub>=0.25.1
 imageio-ffmpeg>=0.6.0
 librosa>=0.10.0
+scipy>=1.10.0
 customtkinter>=5.2.0
 emoji-data-python>=1.6.0
 colour>=0.1.5
 noisereduce>=3.0.0
 ```
+> Note: the live mic **Voice Changer** lives in `soundboard/voice_fx.py` (pure-numpy DSP + `scipy.signal` for its radio/megaphone bandpass). See the full `requirements.txt` for the authoritative, annotated dependency list (`pyrnnoise`, `pystray`, `yt-dlp`, `soundcard`, etc.).
 
 ---
 
@@ -78,6 +81,7 @@ LocalSoundBoardProject/
 │   ├── constants.py        # Colors, audio settings, UI config, lazy emoji loading
 │   ├── models.py           # SoundSlot, SoundTab dataclasses
 │   ├── audio.py            # AudioMixer, SoundCache, audio utilities (uses logging module)
+│   ├── voice_fx.py         # VoiceChanger — real-time mic voice effects (pure-numpy DSP + scipy bandpass)
 │   ├── editor.py           # SoundEditor with waveform visualization
 │   └── gui.py              # SoundboardApp GUI class
 ├── sounds/                 # Local sound storage folder (auto-created)
@@ -293,6 +297,9 @@ Persistent (NOT reset per-click):
 - [x] Volume adjustment shows visual bar indicator (green for normal, yellow for boost >100%)
 - [x] Volume adjustment displays live percentage in visual bar (🔊 X%)
 - [x] Muted state detected in status bar (🔇 instead of 🔊)
+- [x] **Real-time mic Voice Changer** — modulates your LIVE microphone before it hits the virtual cable, so the Discord call hears the effect. Pure-numpy DSP chain (`soundboard/voice_fx.py` → `VoiceChanger`) applied in `AudioMixer._output_callback` right where the mic is scaled, after RNNoise and before the soft-clip. Effects: pitch shift (deep↔chipmunk, crossfading delay-line shifter), drive/distortion, bitcrush (lo-fi/8-bit), ring-mod (robot/metallic), bandpass (radio/megaphone/telephone) via `scipy.signal` biquad, chorus/vibrato (modulated delay), echo (feedback delay), reverb (Schroeder comb bank), tremolo, output gain. Lock-free (GUI sets attrs, audio thread reads), crash-proof (`process()` never raises, always returns len(input)), cheap (vectorised, well under one 1024-block).
+- [x] **17 one-tap voice presets** — Clean, Deep, Demon, Chipmunk, Helium, Robot, Cylon, Radio, Megaphone, Telephone, Alien, Underwater, Cave, Ghost, Drunk, 8-Bit, Stadium. Voice Changer card in Audio Options (after Mic Processing): master Enable, preset grid, collapsible ⚙ Advanced drawer (pitch slider −12..+12 st, per-effect on/off toggles, output level). Persisted in config under `voice_changer`; applied to the mixer on stream start and mirrored live while streaming.
+- [x] **Dynamic grid density** — live ⊞ Columns −/+ control in the soundboard header lets the user pick how many sound slots appear per row (2–12). Replaces the fixed `UI["grid_columns"]` constant with `self.grid_columns`; changing it rebuilds every tab's grid (`_rebuild_all_tab_grids` via `_cleanup_tab_widgets` + `_build_all_tab_widgets`) and persists under `grid_columns`. Denser = more, smaller slots; roomier = fewer, larger.
 
 ---
 
@@ -309,7 +316,7 @@ Persistent (NOT reset per-click):
 - [ ] Fade in/out effects
 - [ ] Add stream deck integration
 - [ ] YouTube to MP3 trimmer
-- [ ] Add sound filters for voice modulation (pitch shift, robot, echo, etc.)
+- [x] ~~Add sound filters for voice modulation (pitch shift, robot, echo, etc.)~~ — done: real-time mic **Voice Changer** (see Current Features)
 ### Low Priority
 - [ ] Import/export config profiles (sounds, images, tabs)
 - [ ] System tray minimization
@@ -473,6 +480,14 @@ python main.py
 ---
 
 ## Change Log
+
+### Version 1.2.0 (Voice Changer & Dynamic Grid - 2026-06-03)
+- **Real-time mic Voice Changer** (`soundboard/voice_fx.py` → `VoiceChanger`): pure-numpy effect chain applied to the live mic inside `AudioMixer._output_callback` (after RNNoise, before soft-clip → virtual cable), so the Discord call hears the effect. Effects: pitch shift (crossfading delay-line shifter), drive, bitcrush, ring-mod (robot), `scipy.signal` bandpass (radio/megaphone/telephone), chorus/vibrato, echo, Schroeder-comb reverb, tremolo, output gain. Lock-free reads in the audio thread; `process()` never raises and always returns len(input).
+- **17 one-tap presets** + Voice Changer card in Audio Options (master Enable, preset grid, collapsible ⚙ Advanced drawer with pitch slider / per-effect toggles / output level). Persisted under `voice_changer`; applied on stream start and mirrored live.
+- **Dynamic grid density**: header ⊞ Columns −/+ control (2–12 slots per row). `self.grid_columns` replaces the `UI["grid_columns"]` constant across `_build_tab_widgets` and the search overlay; changing it rebuilds all tab grids and persists under `grid_columns`.
+- Added explicit `scipy>=1.10.0` to requirements (used directly by the radio effect; already a librosa dep).
+- Perf: `_hide_search_results` now clears `_search_slot_widgets` so the animation loop stops doing per-frame `.set()` on destroyed overlay widgets.
+- Verified: headless DSP tests (pitch ±12 st moves dominant freq; all 17 presets stable; reverb+echo feedback decays with no runaway), all 21 existing unit tests pass, full package imports clean.
 
 ### Version 1.2.3 (Input & Editing Polish - 2026-06-01)
 - Added Shift+mousewheel hover volume control, app-wide scroll-speed setting, hardened quick-popup click-through suppression, and restored explicit Edit in right-click options

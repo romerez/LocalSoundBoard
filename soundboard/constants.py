@@ -173,7 +173,13 @@ COLORS = {
 # SLOT COLOR PALETTE (for customization)
 # =============================================================================
 
-# Standard colors
+# The slot color palette is organised into themed families. Each family is its
+# own dict so the picker can group/label them; ``ALL_SLOT_COLORS`` is the flat
+# merge the UI iterates over. Names are the dict keys (must stay unique); hex
+# values should stay unique too because the config dialog reverse-maps a slot's
+# stored hex back to a name (first exact match wins).
+
+# Standard colors — the original Discord-flavoured core set.
 SLOT_COLORS = {
     "Default": DiscordColors.BLURPLE,
     "Red": "#DA373C",
@@ -205,8 +211,111 @@ NEON_COLORS = {
     "Hot Magenta": "#FF00CC",
 }
 
-# Combined palette for slot customization
-ALL_SLOT_COLORS = {**SLOT_COLORS, **NEON_COLORS}
+# Pastel colors (soft, low-saturation — easy on the eyes, great for grouping)
+PASTEL_COLORS = {
+    "Pastel Red": "#FF8A80",
+    "Pastel Coral": "#FFAB91",
+    "Pastel Orange": "#FFB870",
+    "Pastel Yellow": "#FFE082",
+    "Pastel Lime": "#C5E1A5",
+    "Pastel Green": "#A5D6A7",
+    "Pastel Mint": "#A7E8D2",
+    "Pastel Teal": "#80CBC4",
+    "Pastel Sky": "#90CAF9",
+    "Pastel Blue": "#9FA8DA",
+    "Pastel Lavender": "#B39DDB",
+    "Pastel Purple": "#CE93D8",
+    "Pastel Pink": "#F8BBD0",
+    "Pastel Rose": "#F4A7C0",
+}
+
+# Vivid colors (rich, fully-saturated jewel-ish tones)
+VIVID_COLORS = {
+    "Crimson": "#DC143C",
+    "Scarlet": "#FF2400",
+    "Tangerine": "#F28500",
+    "Amber": "#FFBF00",
+    "Gold": "#FFD700",
+    "Chartreuse": "#7FFF00",
+    "Emerald": "#2ECC71",
+    "Jade": "#00A86B",
+    "Turquoise": "#06BFB4",
+    "Aqua": "#19D3DA",
+    "Azure": "#1E90FF",
+    "Cobalt": "#2849D8",
+    "Indigo": "#4B0082",
+    "Violet": "#8F00FF",
+    "Orchid": "#DA70D6",
+    "Fuchsia": "#FF1493",
+    "Rose": "#FF407A",
+    "Salmon": "#FA8072",
+}
+
+# Earth tones (warm, natural browns / greens / sand)
+EARTH_COLORS = {
+    "Brown": "#8B5A2B",
+    "Chocolate": "#7B3F00",
+    "Coffee": "#6F4E37",
+    "Sienna": "#A0522D",
+    "Rust": "#B7410E",
+    "Terracotta": "#E2725B",
+    "Sand": "#C2B280",
+    "Khaki": "#BDB76B",
+    "Olive": "#808000",
+    "Moss": "#8A9A5B",
+    "Forest": "#228B22",
+    "Pine": "#01796F",
+}
+
+# Deep / dark jewel tones (great for low-key, moody slots)
+DEEP_COLORS = {
+    "Maroon": "#800000",
+    "Wine": "#722F37",
+    "Burgundy": "#8D021F",
+    "Plum": "#5A2A5A",
+    "Eggplant": "#3D2352",
+    "Navy": "#1F3A93",
+    "Midnight": "#191970",
+    "Deep Teal": "#014D4E",
+    "Deep Green": "#0B5345",
+    "Slate": "#4A5568",
+    "Steel Blue": "#3A6EA5",
+    "Royal": "#3B2F8F",
+}
+
+# Monochrome (grayscale ramp for neutral / labelling slots)
+MONO_COLORS = {
+    "Onyx": "#1B1B1F",
+    "Graphite": "#2F3136",
+    "Charcoal": "#36393F",
+    "Steel": "#71797E",
+    "Stone": "#9095A0",
+    "Silver": "#B9BDC6",
+    "Cloud": "#D3D7DE",
+    "White": "#F5F6F8",
+}
+
+# Grouped families in display order (the picker may use this to add headings).
+SLOT_COLOR_GROUPS = {
+    "Standard": SLOT_COLORS,
+    "Neon": NEON_COLORS,
+    "Pastel": PASTEL_COLORS,
+    "Vivid": VIVID_COLORS,
+    "Earth": EARTH_COLORS,
+    "Deep": DEEP_COLORS,
+    "Mono": MONO_COLORS,
+}
+
+# Combined palette for slot customization (flat name -> hex, in family order)
+ALL_SLOT_COLORS = {
+    **SLOT_COLORS,
+    **NEON_COLORS,
+    **PASTEL_COLORS,
+    **VIVID_COLORS,
+    **EARTH_COLORS,
+    **DEEP_COLORS,
+    **MONO_COLORS,
+}
 
 
 # =============================================================================

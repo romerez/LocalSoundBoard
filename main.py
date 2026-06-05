@@ -18,6 +18,41 @@ if getattr(sys, 'frozen', False):
     workspace_root = os.path.dirname(os.path.dirname(exe_dir))  # ...\(workspace)
     os.chdir(workspace_root)
 
+
+def _enable_dpi_awareness():
+    """Make the process per-monitor-**v2** DPI aware before any Tk window exists.
+
+    CustomTkinter only requests the older per-monitor-**v1** mode, which on a
+    HiDPI / mixed-DPI multi-monitor setup leaves the UI looking soft ("smudged")
+    — especially child windows and after dragging between monitors. v2 lets
+    Windows hand DPI changes to the window/non-client area cleanly so everything
+    renders crisp. Must run *before* customtkinter/Tk initialises; falls back
+    gracefully on older Windows.
+    """
+    if sys.platform != "win32":
+        return
+    import ctypes
+
+    try:
+        # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 (Win10 1703+).
+        ctx = ctypes.c_void_p(-4)
+        if ctypes.windll.user32.SetProcessDpiAwarenessContext(ctx):
+            return
+    except Exception:
+        pass
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # per-monitor v1
+        return
+    except Exception:
+        pass
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()  # system-DPI aware (oldest)
+    except Exception:
+        pass
+
+
+_enable_dpi_awareness()
+
 logging.basicConfig(
     filename="debug.log",
     filemode="a",

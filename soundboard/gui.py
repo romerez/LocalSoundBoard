@@ -27,15 +27,16 @@ from .constants import (
     CONFIG_FILE,
     FONTS,
     IMAGES_DIR,
-    SLOT_COLORS,
     SOUNDS_DIR,
     SUPPORTED_FORMATS,
     SUPPORTED_IMAGE_FORMATS,
     UI,
     get_text_color_for_bg,
 )
+from .color_picker import SlickColorPicker
 from .editor import SoundEditor
 from .models import SoundSlot, SoundTab
+from .voice_fx import VoiceChanger
 from .slot_widget import (
     ButtonProxy,
     EmojiLabelProxy,
@@ -2063,6 +2064,18 @@ class SoundboardApp:
         self.tabs: List[SoundTab] = []  # List of all tabs
         self.current_tab_idx = 0  # Currently active tab index
 
+        # Live, user-configurable soundboard density: how many sound slots
+        # appear per row. Replaces the fixed UI["grid_columns"] constant so the
+        # user can make the board denser (more, smaller slots) or roomier on the
+        # fly via the header ⊞ control. Changing it rebuilds the grid. Persisted.
+        self.grid_columns: int = int(UI["grid_columns"])
+
+        # Real-time mic voice-changer model (GUI-side source of truth). Mirrored
+        # into the live mixer.voice_changer while a stream runs and re-applied on
+        # stream start. Persisted under "voice_changer". See the Voice Changer
+        # card in _create_device_section and the _voice_* handlers.
+        self.voice_fx = VoiceChanger()
+
         # Per-tab widget storage for instant tab switching
         # Structure: tab_idx -> slot_idx -> widget
         self.tab_grid_frames: Dict[int, Any] = {}  # tab_idx -> grid frame for that tab
@@ -2107,7 +2120,6 @@ class SoundboardApp:
         self._hovered_slot: Optional[tuple[int, int]] = None
         self._quick_popup: Optional[Any] = None
         self._suppress_slot_click_until: float = 0.0
-        self._soundboard_mousewheel_active: bool = False
         self._volume_indicator_after_id: Optional[str] = None  # Temporary volume display timeout
 
         # Debounced save handle (see _save_config / _save_config_now)
@@ -2127,6 +2139,14 @@ class SoundboardApp:
         self._afk_popup: Optional[Any] = None
         self._afk_popup_toggle_btn: Optional[Any] = None
         self._afk_popup_status_label: Optional[Any] = None
+
+        # Voice palette popup refs (created on demand by _show_voice_popup).
+        self._voice_popup: Optional[Any] = None
+        self._voice_popup_tiles: Dict[str, Any] = {}
+        self._voice_popup_master_var: Optional[Any] = None
+        self._voice_popup_master_switch: Optional[Any] = None
+        self._voice_popup_status_label: Optional[Any] = None
+        self._voice_level_meter: Optional[Any] = None  # "Discord level" meter
 
         # Pre-create cached fonts for performance
         self._font_sm = ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"])
@@ -2181,6 +2201,26 @@ class SoundboardApp:
         self._search_results: Optional[List[Dict]] = None  # None = not searching
         # ^ Each result dict: {tab_idx, slot_idx, slot}
         self._custom_groups: List[str] = []  # User-created groups (persisted in config)
+        # User-created/saved slot+tab colors (hex strings), persisted in config.
+        # Surfaced by the slick color picker so a hand-mixed colour can be
+        # reused on other slots/tabs later.
+        self._custom_colors: List[str] = []
+        self._geometry_save_after_id: Optional[str] = None
+        # Data-safety guard: stays False until the config has been loaded (or a
+        # fresh default created). While False, _save_config_now refuses to write
+        # — so a failed/partial load can NEVER overwrite the user's real config.
+        self._config_loaded_ok: bool = False
+        # Native drag-and-drop: the WNDPROC hook only appends raw path lists here
+        # (zero Tk work in the window proc); a poller drains them on the Tk loop.
+        self._pending_drops: List[list] = []
+        self._drop_poller_running: bool = False
+        self._dropfiles_wndproc = None  # keep a strong ref so it isn't GC'd
+        # Inline tab reorder ("⇅" toggle): when on, dragging a tab rearranges
+        # the sidebar instead of switching to it.
+        self._tab_reorder_mode: bool = False
+        self._tab_drag_pos: Optional[int] = None  # working position being dragged
+        self._tab_drag_order: List[int] = []      # working order (pos -> orig idx)
+        self._force_full_tab_reskin: bool = False
 
         # Persistent across clicks (not reset per-click)
         self._last_play_time: float = 0.0
@@ -2223,10 +2263,17 @@ class SoundboardApp:
             pass
 
         self._load_config()
-        self._preload_sounds()  # Preload all sounds into memory
+        # Warm the audio cache LATER and gently. Playback lazy-loads any
+        # uncached sound on first trigger, so this is only a warm-up — starting
+        # it immediately used to peg a CPU core for ~10s and made the whole app
+        # feel like it took 11s to start. Defer until the UI has painted and the
+        # tab widgets have built, then warm in a paced background thread.
+        self.root.after(2000, self._preload_sounds)
 
         # Let window size itself based on content, then set minimum size
         self.root.after(50, self._finalize_window_size)
+        # Persist size/position when the user resizes or moves the window.
+        self._bind_window_geometry_autosave()
 
         # Start animation loop
         self._animate_progress()
@@ -2236,6 +2283,7 @@ class SoundboardApp:
         # progress-bar updates compound with CTk's per-widget Canvas redraws
         # on every Configure event during a drag and stutter the resize.
         self._resize_active_until: float = 0.0
+        self._ptt_stuck_since: Optional[float] = None  # PTT watchdog timestamp
         self._resize_sweep_after_id: Optional[str] = None
         self.root.bind("<Configure>", self._on_root_configure, add="+")
 
@@ -2250,7 +2298,9 @@ class SoundboardApp:
         self._resize_active_until = until
         # Share with the CTk monkeypatch so per-widget redraws are deferred.
         _SHARED_RESIZE_STATE["until"] = until
-        # Schedule a one-shot post-resize sweep that redraws everything once.
+        # Schedule a one-shot post-resize sweep that redraws everything once
+        # AFTER the drag settles (canceled/rescheduled on each Configure, so it
+        # only fires once the user pauses/releases).
         if self._resize_sweep_after_id is not None:
             try:
                 self.root.after_cancel(self._resize_sweep_after_id)  # type: ignore[arg-type]
@@ -2284,7 +2334,7 @@ class SoundboardApp:
     def _sweep_drain(self, widgets: list, chunk: int = 16):
         """Redraw up to `chunk` widgets, then yield to the event loop."""
         # If a new resize started while we were draining, abandon this sweep —
-        # the new sweep will pick up the (re-populated) dirty set.
+        # the next sweep will pick up the (re-populated) dirty set.
         if time.time() < self._resize_active_until:
             return
         end = min(chunk, len(widgets))
@@ -2384,7 +2434,12 @@ class SoundboardApp:
             except Exception:
                 pass
 
-            windnd.hook_dropfiles(self.root, func=self._on_files_dropped)
+            # NOTE: we no longer use windnd.hook_dropfiles — its WNDPROC reads
+            # paths into a fixed 260-byte buffer (long/Unicode paths overflow)
+            # and forwards the message to Tk AFTER DragFinish frees the HDROP
+            # (use-after-free). Both crash the app right after a drop. Our own
+            # native handler fixes both.
+            self._install_native_dropfiles()
 
         # Ctrl+V on the main window: paste a clipboard image onto the slot
         # under the mouse cursor. Bound at the root level so it works no
@@ -2452,45 +2507,111 @@ class SoundboardApp:
                 break
         return None
 
+    def _app_is_active(self) -> bool:
+        """True only when one of THIS process's windows is the OS foreground window.
+
+        Windows' "scroll inactive windows on hover" setting and the global
+        ``mouse``/``keyboard`` hooks (PTT, hover-preview) deliver input to the
+        soundboard even when the user is working in another window or another
+        window covers it. Every global / ``bind_all`` handler gates on this so
+        the app only reacts to wheel + hover-preview while it is actually the
+        window the user is in.
+
+        We compare the foreground window's owning *process* to our own PID. That
+        is correct for every window this process owns — the main window, the
+        voice / AFK popups, the sound editor, option-menu dropdowns — without
+        having to enumerate or HWND-match them individually (HWND matching is
+        fragile because ``winfo_id`` returns Tk's inner-frame HWND and owned
+        popups don't share the root's parent chain). Non-Windows / API failure →
+        returns True so scrolling is never blocked there.
+        """
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.windll.user32
+            fg = user32.GetForegroundWindow()
+            if not fg:
+                return False
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(fg, ctypes.byref(pid))
+            return pid.value == os.getpid()
+        except Exception:
+            return True
+
+    def _pointer_scroll_region(self):
+        """Classify which scrollable region the mouse pointer is over.
+
+        Returns ``"audio"``, ``"tabs"``, ``"grid"`` or ``None`` by walking the
+        widget hierarchy under the pointer (``winfo_containing`` + ``.master``
+        chain), so overlapping panels resolve correctly: a wheel over the open
+        Audio Options panel returns ``"audio"`` and never leaks into the
+        soundboard grid behind it. Geometry-only checks could not tell them
+        apart, which is what caused the double-scroll.
+        """
+        try:
+            widget = self.root.winfo_containing(
+                self.root.winfo_pointerx(), self.root.winfo_pointery()
+            )
+        except Exception:
+            return None
+        if widget is None:
+            return None
+        grid_canvas = getattr(self.scrollable_grid, "_parent_canvas", None)
+        audio_frame = getattr(self, "audio_options_frame", None)
+        tabs_canvas = getattr(self, "tabs_canvas", None)
+        cur = widget
+        seen = set()
+        while cur is not None and id(cur) not in seen:
+            seen.add(id(cur))
+            if audio_frame is not None and cur is audio_frame:
+                return "audio"
+            if tabs_canvas is not None and cur is tabs_canvas:
+                return "tabs"
+            if cur is self.scrollable_grid or (
+                grid_canvas is not None and cur is grid_canvas
+            ):
+                return "grid"
+            try:
+                cur = cur.master
+            except Exception:
+                break
+        return None
+
     def _on_global_mousewheel(self, event):
         """Apply the app-wide scroll speed to scrollable panels not handled elsewhere.
 
         Specifically handles audio options panel. The soundboard has its own
         faster handler (_on_soundboard_mousewheel).
         """
+        # Ignore wheel events unless the app is the window the user is in.
+        if not self._app_is_active():
+            return None
         if self._is_quick_popup_open():
             return None
 
-        # Check if we're over the audio options frame (if it's expanded)
+        # Only act when the pointer is genuinely inside the Audio Options panel
+        # (by widget ancestry, so it never leaks into the soundboard behind it).
+        if self._pointer_scroll_region() != "audio":
+            return None
         try:
-            x = self.root.winfo_pointerx()
-            y = self.root.winfo_pointery()
-            if hasattr(self, 'audio_options_frame') and self.audio_options_frame.winfo_ismapped():
-                ax = self.audio_options_frame.winfo_rootx()
-                ay = self.audio_options_frame.winfo_rooty()
-                aw = self.audio_options_frame.winfo_width()
-                ah = self.audio_options_frame.winfo_height()
-                if ax <= x <= ax + aw and ay <= y <= ay + ah:
-                    # We're over the audio options - find its scrollable canvas
-                    widget = self.root.winfo_containing(x, y)
-                    canvas = self._find_scroll_canvas_for_widget(widget)
-                    if canvas is not None:
-                        direction, notches = self._mousewheel_direction_and_notches(event)
-                        if direction != 0:
-                            try:
-                                canvas.yview_scroll(
-                                    direction * notches * self._get_scroll_units_per_notch(),
-                                    "units",
-                                )
-                                return "break"
-                            except Exception:
-                                pass
-                    return None
+            widget = self.root.winfo_containing(
+                self.root.winfo_pointerx(), self.root.winfo_pointery()
+            )
+            canvas = self._find_scroll_canvas_for_widget(widget)
+            if canvas is not None:
+                direction, notches = self._mousewheel_direction_and_notches(event)
+                if direction != 0:
+                    canvas.yview_scroll(
+                        direction * notches * self._get_scroll_units_per_notch(),
+                        "units",
+                    )
+                    return "break"
         except Exception:
             pass
-
-        # Default: don't scroll (soundboard has its own handler)
-        return None
+        # We're over the audio options: swallow the event so it doesn't also
+        # reach the soundboard handler on the same bind_all tag.
+        return "break"
 
     def _create_device_section(self, parent):
         """Create the collapsible audio device selection and PTT section."""
@@ -2527,10 +2648,14 @@ class SoundboardApp:
         self.audio_options_frame.pack_propagate(False)
         # Hidden by default
 
-        # Scrollable inner container - holds all the option cards
+        # Scrollable inner container - holds all the option cards. Uses a SOLID
+        # bg (not "transparent") so when the panel opens its canvas paints over
+        # whatever was on screen there before — a transparent canvas could leave
+        # the soundboard "ghosting" through for the split second before the
+        # layout fully repaints.
         device_frame = ctk.CTkScrollableFrame(
             self.audio_options_frame,
-            fg_color="transparent",
+            fg_color=COLORS["bg_dark"],
             scrollbar_button_color=COLORS["bg_light"],
             scrollbar_button_hover_color=COLORS["bg_lighter"],
         )
@@ -3080,6 +3205,189 @@ class SoundboardApp:
         self.ns_strength_slider.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         # ============================================================
+        # CARD: Voice Changer - real-time mic voice modulation. Applied to
+        # the live mic before it reaches the virtual cable, so the people on
+        # the Discord call hear the effect. One-tap presets + an advanced
+        # drawer with a pitch slider and per-effect toggles.
+        # ============================================================
+        vc_body = _make_card(
+            device_frame,
+            "🎙  Voice Changer",
+            "(modulates your live mic — Discord hears it)",
+        )
+
+        # --- Master enable + advanced drawer toggle -------------------------
+        vc_top = ctk.CTkFrame(vc_body, fg_color="transparent")
+        vc_top.pack(fill=tk.X)
+
+        self.voice_enabled_var = tk.BooleanVar(value=self.voice_fx.enabled)
+        self.voice_enabled_checkbox = ctk.CTkCheckBox(
+            vc_top,
+            text="Enable",
+            variable=self.voice_enabled_var,
+            command=self._on_voice_master_toggle,
+            fg_color=COLORS["blurple"],
+            hover_color=COLORS["blurple_hover"],
+            font=self._font_sm,
+            corner_radius=4,
+        )
+        self.voice_enabled_checkbox.pack(side=tk.LEFT, padx=(0, 12))
+
+        self._voice_advanced_btn = ctk.CTkButton(
+            vc_top,
+            text="⚙ Advanced ▸",
+            width=118,
+            height=26,
+            command=self._toggle_voice_advanced,
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_lighter"],
+            text_color=COLORS["text_secondary"],
+            font=self._font_xs,
+            corner_radius=6,
+        )
+        self._voice_advanced_btn.pack(side=tk.RIGHT)
+
+        self._voice_current_label = ctk.CTkLabel(
+            vc_top,
+            text="",
+            font=self._font_xs,
+            text_color=COLORS["text_muted"],
+        )
+        self._voice_current_label.pack(side=tk.RIGHT, padx=(0, 10))
+
+        # --- One-tap preset buttons -----------------------------------------
+        ctk.CTkLabel(
+            vc_body,
+            text="Presets",
+            font=self._font_xs,
+            text_color=COLORS["text_muted"],
+        ).pack(anchor="w", pady=(8, 2))
+
+        preset_grid = ctk.CTkFrame(vc_body, fg_color="transparent")
+        preset_grid.pack(fill=tk.X)
+        self._voice_preset_buttons: Dict[str, Any] = {}
+        per_row = 5
+        for i, name in enumerate(VoiceChanger.PRESETS.keys()):
+            r, c = divmod(i, per_row)
+            btn = ctk.CTkButton(
+                preset_grid,
+                text=name,
+                height=26,
+                command=lambda n=name: self._apply_voice_preset(n),
+                fg_color=COLORS["bg_light"],
+                hover_color=COLORS["bg_lighter"],
+                text_color=COLORS["text_primary"],
+                font=self._font_xs,
+                corner_radius=6,
+            )
+            btn.grid(row=r, column=c, padx=3, pady=3, sticky="ew")
+            self._voice_preset_buttons[name] = btn
+        for c in range(per_row):
+            preset_grid.grid_columnconfigure(c, weight=1, uniform="vpreset")
+
+        # --- Advanced drawer (hidden until ⚙ Advanced is clicked) -----------
+        self._voice_advanced_visible = False
+        self._voice_advanced_frame = ctk.CTkFrame(vc_body, fg_color="transparent")
+
+        # Pitch row: checkbox + semitone slider + live readout.
+        pitch_row = ctk.CTkFrame(self._voice_advanced_frame, fg_color="transparent")
+        pitch_row.pack(fill=tk.X, pady=(8, 0))
+        self.voice_pitch_enabled_var = tk.BooleanVar(value=self.voice_fx.pitch_enabled)
+        ctk.CTkCheckBox(
+            pitch_row,
+            text="Pitch",
+            variable=self.voice_pitch_enabled_var,
+            command=self._on_voice_pitch_toggle,
+            fg_color=COLORS["blurple"],
+            hover_color=COLORS["blurple_hover"],
+            font=self._font_sm,
+            corner_radius=4,
+            width=70,
+        ).pack(side=tk.LEFT, padx=(0, 10))
+        self.voice_pitch_var = tk.DoubleVar(value=self.voice_fx.pitch_semitones)
+        self.voice_pitch_slider = ctk.CTkSlider(
+            pitch_row,
+            from_=-12,
+            to=12,
+            number_of_steps=48,
+            variable=self.voice_pitch_var,
+            command=self._on_voice_pitch_change,
+            height=14,
+            fg_color=COLORS["bg_light"],
+            progress_color=COLORS["blurple"],
+            button_color=COLORS["text_primary"],
+            button_hover_color=COLORS["blurple"],
+        )
+        self.voice_pitch_slider.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self._voice_pitch_label = ctk.CTkLabel(
+            pitch_row,
+            text="0 st",
+            width=46,
+            font=self._font_xs,
+            text_color=COLORS["text_secondary"],
+        )
+        self._voice_pitch_label.pack(side=tk.LEFT, padx=(8, 0))
+
+        # Effect on/off toggles (use each effect's built-in default params).
+        ctk.CTkLabel(
+            self._voice_advanced_frame,
+            text="Effects",
+            font=self._font_xs,
+            text_color=COLORS["text_muted"],
+        ).pack(anchor="w", pady=(10, 2))
+        fx_grid = ctk.CTkFrame(self._voice_advanced_frame, fg_color="transparent")
+        fx_grid.pack(fill=tk.X)
+        effect_toggles = [
+            ("robot", "🤖 Robot"),
+            ("radio", "📻 Radio"),
+            ("echo", "🔁 Echo"),
+            ("reverb", "🏛 Reverb"),
+            ("chorus", "🌊 Chorus"),
+            ("drive", "🎸 Drive"),
+            ("crush", "🕹 Bitcrush"),
+            ("tremolo", "📳 Tremolo"),
+        ]
+        self.voice_fx_toggle_vars: Dict[str, tk.BooleanVar] = {}
+        fx_per_row = 4
+        for i, (key, label) in enumerate(effect_toggles):
+            r, c = divmod(i, fx_per_row)
+            var = tk.BooleanVar(value=bool(getattr(self.voice_fx, f"{key}_enabled", False)))
+            self.voice_fx_toggle_vars[key] = var
+            ctk.CTkCheckBox(
+                fx_grid,
+                text=label,
+                variable=var,
+                command=lambda k=key: self._on_voice_effect_toggle(k),
+                fg_color=COLORS["blurple"],
+                hover_color=COLORS["blurple_hover"],
+                font=self._font_xs,
+                corner_radius=4,
+            ).grid(row=r, column=c, padx=4, pady=3, sticky="w")
+
+        # Output level row.
+        gain_row = ctk.CTkFrame(self._voice_advanced_frame, fg_color="transparent")
+        gain_row.pack(fill=tk.X, pady=(10, 0))
+        ctk.CTkLabel(
+            gain_row,
+            text="Output:",
+            font=self._font_sm,
+            text_color=COLORS["text_secondary"],
+        ).pack(side=tk.LEFT, padx=(0, 6))
+        self.voice_gain_var = tk.DoubleVar(value=self.voice_fx.output_gain * 100.0)
+        ctk.CTkSlider(
+            gain_row,
+            from_=0,
+            to=200,
+            variable=self.voice_gain_var,
+            command=self._on_voice_gain_change,
+            height=14,
+            fg_color=COLORS["bg_light"],
+            progress_color=COLORS["blurple"],
+            button_color=COLORS["text_primary"],
+            button_hover_color=COLORS["blurple"],
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # ============================================================
         # CARD: Call Recording - persistent settings (start button is in
         # the action bar)
         # ============================================================
@@ -3493,21 +3801,16 @@ class SoundboardApp:
         self._recording_after_id = self.root.after(500, self._update_recording_timer)
 
     def _toggle_audio_options(self):
-        """Toggle the audio options visibility."""
-        # Pre-arm resize state so the cascade of CTk child redraws triggered by
-        # mapping/unmapping ~15 widgets is batched into a single post-sweep
-        # instead of N per-widget Canvas redraws. This makes the toggle feel
-        # instant even on slower machines.
-        until = time.time() + 0.20
-        self._resize_active_until = until
-        _SHARED_RESIZE_STATE["until"] = until
-        if self._resize_sweep_after_id is not None:
-            try:
-                self.root.after_cancel(self._resize_sweep_after_id)  # type: ignore[arg-type]
-            except Exception:
-                pass
-        self._resize_sweep_after_id = self.root.after(220, self._post_resize_sweep)
+        """Toggle the audio options panel.
 
+        We deliberately DO NOT pre-arm the resize-defer here. The old code armed
+        a ~200ms defer right before packing the panel so the redraw cascade was
+        "batched" — but that made the panel's ~15 CTk widgets skip their first
+        draw and show BLANK/half-painted for those 200ms, which is the
+        "audio options smudges on open" artifact. Instead we pack normally and
+        force an immediate redraw of the panel so it appears fully painted at
+        once.
+        """
         if self.audio_options_expanded.get():
             self.audio_options_frame.pack_forget()
             self.toggle_audio_btn.configure(text="▶ Audio Options")
@@ -3518,6 +3821,28 @@ class SoundboardApp:
             )
             self.toggle_audio_btn.configure(text="▼ Audio Options")
             self.audio_options_expanded.set(True)
+            # Paint the freshly-shown panel immediately so the window's own
+            # resize-defer (armed by the layout growing) can't leave it blank.
+            try:
+                self.audio_options_frame.update_idletasks()
+                self._force_draw_subtree(self.audio_options_frame)
+            except Exception:
+                pass
+
+    def _force_draw_subtree(self, widget):
+        """Redraw a CTk widget and all descendants NOW, bypassing the resize
+        defer. Used when revealing a panel so it never flashes blank/smudged."""
+        try:
+            draw = getattr(widget, "_draw", None)
+            if callable(draw):
+                draw(no_color_updates=False)
+        except Exception:
+            pass
+        try:
+            for child in widget.winfo_children():
+                self._force_draw_subtree(child)
+        except Exception:
+            pass
 
     def _create_tabs_sidebar(self, parent):
         """Create vertical tabs sidebar on the left side."""
@@ -3552,8 +3877,8 @@ class SoundboardApp:
 
         self.manage_tabs_btn = ctk.CTkButton(
             header_frame,
-            text="...",
-            command=self._show_tab_manager,
+            text="⇅",
+            command=self._toggle_tab_reorder,
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
             font=self._font_sm_bold,
@@ -3562,7 +3887,7 @@ class SoundboardApp:
             width=30,
         )
         self.manage_tabs_btn.pack(side=tk.RIGHT, padx=(6, 0))
-        _Tooltip.attach(self.manage_tabs_btn, "Manage tab order")
+        _Tooltip.attach(self.manage_tabs_btn, "Reorder mode — drag tabs up/down to rearrange")
 
         # Scrollable area for tab buttons
         self.tabs_canvas = tk.Canvas(
@@ -3631,27 +3956,27 @@ class SoundboardApp:
         # Web → MP3 download button (YouTube, Vimeo, Twitter, TikTok, ~1000 sites)
         self.youtube_btn = ctk.CTkButton(
             left_section,
-            text="⬇ Web Audio",
+            text="⬇ Web",
             command=self._show_youtube_download_dialog,
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
             font=self._font_xs,
             corner_radius=6,
             height=32,
-            width=90,
+            width=62,
         )
         self.youtube_btn.pack(side=tk.LEFT, padx=(6, 0), pady=8)
 
         self.open_sounds_btn = ctk.CTkButton(
             left_section,
-            text="Sounds",
+            text="📁",
             command=self._open_sounds_dir,
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
             font=self._font_xs,
             corner_radius=6,
             height=32,
-            width=72,
+            width=40,
         )
         self.open_sounds_btn.pack(side=tk.LEFT, padx=(6, 0), pady=8)
 
@@ -3710,16 +4035,16 @@ class SoundboardApp:
         # Stop All button
         self.stop_all_btn = ctk.CTkButton(
             right_section,
-            text="⏹ Stop All",
+            text="⏹ Stop",
             command=self._stop_all_sounds,
             fg_color=COLORS["red"],
             hover_color=COLORS["red_hover"],
             font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"], weight="bold"),
             corner_radius=6,
             height=32,
-            width=80,
+            width=66,
         )
-        self.stop_all_btn.pack(side=tk.LEFT, padx=(0, 6), pady=8)
+        self.stop_all_btn.pack(side=tk.LEFT, padx=(0, 5), pady=8)
 
         # Sound Scheduler / Queue button
         self.scheduler_btn = ctk.CTkButton(
@@ -3749,17 +4074,33 @@ class SoundboardApp:
         )
         self.afk_btn.pack(side=tk.LEFT, padx=(0, 6), pady=8)
 
+        # Voice Changer palette button — opens a colourful one-tap voice picker.
+        # The button itself reflects state: it turns green and shows the active
+        # preset while the changer is on (see _update_voice_current_label).
+        self.voice_picker_btn = ctk.CTkButton(
+            right_section,
+            text="🎙 Voice",
+            command=self._show_voice_popup,
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_lighter"],
+            font=self._font_xs,
+            corner_radius=6,
+            height=32,
+            width=74,
+        )
+        self.voice_picker_btn.pack(side=tk.LEFT, padx=(0, 5), pady=8)
+
         # DJ Looper toggle button
         self.now_playing_btn = ctk.CTkButton(
             right_section,
-            text="🎧 DJ Looper",
+            text="🎧 DJ",
             command=self._toggle_now_playing_panel,
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
             font=self._font_xs,
             corner_radius=6,
             height=32,
-            width=90,
+            width=54,
         )
         self.now_playing_btn.pack(side=tk.LEFT, pady=8)
 
@@ -3773,6 +4114,7 @@ class SoundboardApp:
         _Tooltip.attach(self.stop_all_btn, "Stop every playing sound, preview and queue")
         _Tooltip.attach(self.scheduler_btn, "Open the Sound Queue / scheduler")
         _Tooltip.attach(self.afk_btn, "AFK Mode — auto-play a sound every X min:sec")
+        _Tooltip.attach(self.voice_picker_btn, "Voice Changer — pick a voice effect for your live mic (Discord hears it)")
         _Tooltip.attach(self.now_playing_btn, "Show / hide the DJ Looper side panel")
 
     def _create_tab_bar(self, parent):
@@ -3789,7 +4131,11 @@ class SoundboardApp:
 
     def _on_tabs_mousewheel(self, event):
         """Handle mousewheel scrolling on tabs canvas (vertical)."""
-        if not getattr(self, "_tabs_mousewheel_bound", False):
+        # Same gating as the soundboard: only when this is the active window and
+        # the pointer is genuinely over the tab strip (not another panel).
+        if not self._app_is_active():
+            return
+        if self._pointer_scroll_region() != "tabs":
             return
         # Only scroll if there's overflow
         canvas_height = self.tabs_canvas.winfo_height()
@@ -3859,6 +4205,23 @@ class SoundboardApp:
                 self.tabs_scrollbar.pack_forget()
             # Reset scroll to beginning when no overflow
             self.tabs_canvas.yview_moveto(0)
+
+    def _tab_style(self, tab, is_active: bool):
+        """Resolve (bg, text_color, border_width, border_color) for a tab chip.
+
+        A tab can carry a custom ``color``. When set it tints the chip in both
+        states; the active tab additionally gets a bright border so the
+        selection is unmistakable regardless of the custom colour. Text colour
+        auto-adapts for contrast.
+        """
+        custom = getattr(tab, "color", None)
+        if is_active:
+            bg = custom or COLORS["blurple"]
+            border_w, border_c = 2, COLORS["text_primary"]
+        else:
+            bg = custom or COLORS["bg_medium"]
+            border_w, border_c = 0, bg
+        return bg, get_text_color_for_bg(bg), border_w, border_c
 
     def _refresh_tab_bar(self):
         """Refresh the tab bar buttons.
@@ -4038,19 +4401,22 @@ class SoundboardApp:
                 w.bind("<Leave>", _stop_marquee, add="+")
 
         def _apply_tab_visual(tab_frame, name_lbl, emoji_lbl, tab, is_active: bool):
-            bg = COLORS["blurple"] if is_active else COLORS["bg_medium"]
+            bg, text_c, bw, bc = self._tab_style(tab, is_active)
             try:
-                tab_frame.configure(fg_color=bg)
+                tab_frame.configure(fg_color=bg, border_width=bw, border_color=bc)
             except Exception:
                 pass
             full = tab.name or ""
             name_lbl._full_tab_name = full  # type: ignore[attr-defined]
             name_lbl._is_active_tab = is_active  # type: ignore[attr-defined]
             try:
+                # Transparent labels show the frame bg through them — this is
+                # what kills the "box-in-box" artifact (an opaque square label
+                # sitting inside the rounded chip).
                 name_lbl.configure(
                     font=self._font_tab_bold if is_active else self._font_tab,
-                    fg_color=bg,
-                    text_color=COLORS["text_primary"],
+                    fg_color="transparent",
+                    text_color=text_c,
                 )
             except Exception:
                 pass
@@ -4066,13 +4432,18 @@ class SoundboardApp:
                         pass
             emoji_img = _tab_emoji_image(tab.emoji)
             try:
-                emoji_lbl.configure(image=emoji_img, fg_color=bg)
+                emoji_lbl.configure(image=emoji_img, fg_color="transparent")
                 emoji_lbl._emoji_image_ref = emoji_img  # type: ignore[attr-defined]
             except Exception:
                 pass
 
         def _bind_tab_click(widget, idx: int):
-            widget.bind("<Button-1>", lambda _e, i=idx: self._switch_tab(i))
+            # Press/motion/release route through reorder-aware handlers so the
+            # same row works as both a tab switch (normal) and a drag handle
+            # (reorder mode). Right-click always opens the tab editor.
+            widget.bind("<Button-1>", lambda _e, i=idx: self._on_tab_press(_e, i))
+            widget.bind("<B1-Motion>", lambda _e, i=idx: self._on_tab_drag(_e, i))
+            widget.bind("<ButtonRelease-1>", lambda _e, i=idx: self._on_tab_release(_e, i))
             widget.bind("<Button-3>", lambda _e, i=idx: self._configure_tab(i))
             try:
                 widget.configure(cursor="hand2")
@@ -4090,31 +4461,37 @@ class SoundboardApp:
 
             for idx, tab in enumerate(self.tabs):
                 is_active = idx == self.current_tab_idx
-                bg = COLORS["blurple"] if is_active else COLORS["bg_medium"]
+                bg, text_c, bw, bc = self._tab_style(tab, is_active)
 
                 tab_frame = ctk.CTkFrame(
                     self.tabs_container,
                     fg_color=bg,
                     corner_radius=6,
-                    height=32,
+                    height=36,
+                    border_width=bw,
+                    border_color=bc,
                 )
                 tab_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 3))
                 tab_frame.pack_propagate(False)
                 tab_frame.grid_columnconfigure(0, weight=1, minsize=10)
                 tab_frame.grid_columnconfigure(1, weight=0, minsize=EMOJI_COL_W)
+                # Let the single row fill the fixed-height frame so the label is
+                # vertically CENTERED (without this the text sits at the top and
+                # its top gets clipped).
+                tab_frame.grid_rowconfigure(0, weight=1)
 
                 name_lbl = ctk.CTkLabel(
                     tab_frame,
                     text=tab.name or "",
                     font=self._font_tab_bold if is_active else self._font_tab,
-                    text_color=COLORS["text_primary"],
-                    fg_color=bg,
+                    text_color=text_c,
+                    fg_color="transparent",
                     anchor="w",
                     justify="left",
                 )
                 name_lbl._full_tab_name = tab.name or ""  # type: ignore[attr-defined]
                 name_lbl._is_active_tab = is_active  # type: ignore[attr-defined]
-                name_lbl.grid(row=0, column=0, sticky="ew", padx=(10, 4), pady=4)
+                name_lbl.grid(row=0, column=0, sticky="ew", padx=(10, 4), pady=2)
                 _attach_ellipsis(tab_frame, name_lbl)
 
                 emoji_img = _tab_emoji_image(tab.emoji)
@@ -4122,7 +4499,7 @@ class SoundboardApp:
                     tab_frame,
                     text="",
                     image=emoji_img,
-                    fg_color=bg,
+                    fg_color="transparent",
                     width=EMOJI_COL_W,
                 )
                 emoji_lbl._emoji_image_ref = emoji_img  # type: ignore[attr-defined]
@@ -4142,11 +4519,14 @@ class SoundboardApp:
 
             self.tabs_canvas.yview_moveto(0)
         else:
-            # Same tab count — only reskin tabs whose active state changed.
+            # Same tab count — reskin tabs whose active state changed, plus all
+            # tabs when forced (e.g. a name/emoji/colour edit, or a reorder).
+            force_all = bool(getattr(self, "_force_full_tab_reskin", False))
+            self._force_full_tab_reskin = False
             for idx, (tab_frame, tab) in enumerate(zip(self.tab_buttons, self.tabs)):
                 is_active = idx == self.current_tab_idx
                 was_active = getattr(self, "_last_active_tab_idx", -1) == idx
-                if not (is_active or was_active):
+                if not (force_all or is_active or was_active):
                     continue
                 name_lbl = getattr(tab_frame, "_name_lbl", None)
                 emoji_lbl = getattr(tab_frame, "_emoji_lbl", None)
@@ -4311,56 +4691,54 @@ class SoundboardApp:
 
     def _add_new_tab(self):
         """Add a new tab."""
-        dialog = ctk.CTkToplevel(self.root)
-        dialog.title("New Tab")
-        dialog.geometry("400x220")
-        dialog.transient(self.root)
-        dialog.grab_set()
-        dialog.after(10, lambda: dialog.focus_force())
+        dialog, body, footer, _accent = self._scaffold_dialog(
+            title="New Tab",
+            subtitle="Create a new soundboard tab.",
+            width=480,
+            height=320,
+            min_width=420,
+            min_height=280,
+            modal=True,
+        )
 
-        frame = ctk.CTkFrame(dialog, fg_color=COLORS["bg_dark"], corner_radius=0)
-        frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        card = ctk.CTkFrame(body, fg_color=COLORS["bg_medium"], corner_radius=10)
+        card.pack(fill=tk.X)
+        form = ctk.CTkFrame(card, fg_color="transparent")
+        form.pack(fill=tk.X, padx=14, pady=14)
+        form.grid_columnconfigure(1, weight=1)
 
         # Name field
-        ctk.CTkLabel(frame, text="Tab Name:", text_color=COLORS["text_primary"]).grid(
-            row=0, column=0, sticky="w", pady=10
-        )
+        ctk.CTkLabel(
+            form, text="Name", text_color=COLORS["text_primary"], font=self._font_sm,
+            anchor="w", width=70,
+        ).grid(row=0, column=0, sticky="w", pady=8, padx=(0, 8))
         name_var = tk.StringVar(value=f"Tab {len(self.tabs) + 1}")
         tab_name_entry = ctk.CTkEntry(
-            frame,
-            textvariable=name_var,
-            width=200,
-            fg_color=COLORS["bg_medium"],
-            border_color=COLORS["bg_light"],
+            form, textvariable=name_var, height=32,
+            fg_color=COLORS["bg_dark"], border_color=COLORS["bg_light"],
         )
-        tab_name_entry.grid(row=0, column=1, pady=10)
+        tab_name_entry.grid(row=0, column=1, columnspan=2, sticky="ew", pady=8)
         _bind_rtl_entry(tab_name_entry, name_var)
 
         # Emoji field
-        ctk.CTkLabel(frame, text="Emoji:", text_color=COLORS["text_primary"]).grid(
-            row=1, column=0, sticky="w", pady=10
-        )
+        ctk.CTkLabel(
+            form, text="Emoji", text_color=COLORS["text_primary"], font=self._font_sm,
+            anchor="w", width=70,
+        ).grid(row=1, column=0, sticky="w", pady=8, padx=(0, 8))
         emoji_var = tk.StringVar(value="")
         ctk.CTkEntry(
-            frame,
-            textvariable=emoji_var,
-            width=80,
-            fg_color=COLORS["bg_medium"],
-            border_color=COLORS["bg_light"],
-        ).grid(row=1, column=1, sticky="w", pady=10)
+            form, textvariable=emoji_var, width=90, height=32,
+            fg_color=COLORS["bg_dark"], border_color=COLORS["bg_light"],
+        ).grid(row=1, column=1, sticky="w", pady=8)
 
-        # Emoji picker button
         def pick_emoji():
             self._show_emoji_picker(emoji_var, dialog)
 
         ctk.CTkButton(
-            frame,
-            text="Choose Emoji",
-            command=pick_emoji,
-            fg_color=COLORS["blurple"],
-            hover_color=COLORS["blurple_hover"],
-            width=100,
-        ).grid(row=1, column=2, padx=10)
+            form, text="Choose Emoji", command=pick_emoji,
+            fg_color=COLORS["blurple"], hover_color=COLORS["blurple_hover"],
+            width=130, height=32,
+        ).grid(row=1, column=2, padx=(8, 0), pady=8, sticky="e")
 
         def save():
             name = name_var.get().strip() or f"Tab {len(self.tabs) + 1}"
@@ -4377,26 +4755,19 @@ class SoundboardApp:
             self._save_config()
             dialog.destroy()
 
-        # Buttons
-        btn_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        btn_frame.grid(row=2, column=0, columnspan=3, pady=25)
+        # Footer (pinned by the scaffold).
+        ctk.CTkButton(
+            footer, text="✓ Create", command=save,
+            fg_color=COLORS["green"], hover_color=COLORS["green_hover"],
+            width=110, height=34,
+        ).pack(side=tk.RIGHT, padx=(6, 14), pady=12)
+        ctk.CTkButton(
+            footer, text="Cancel", command=dialog.destroy,
+            fg_color=COLORS["bg_light"], hover_color=COLORS["bg_lighter"],
+            width=90, height=34,
+        ).pack(side=tk.RIGHT, padx=6, pady=12)
 
-        ctk.CTkButton(
-            btn_frame,
-            text="Create",
-            command=save,
-            fg_color=COLORS["green"],
-            hover_color=COLORS["green_hover"],
-            width=100,
-        ).pack(side=tk.LEFT, padx=5)
-        ctk.CTkButton(
-            btn_frame,
-            text="Cancel",
-            command=dialog.destroy,
-            fg_color=COLORS["bg_medium"],
-            hover_color=COLORS["bg_light"],
-            width=100,
-        ).pack(side=tk.LEFT, padx=5)
+        tab_name_entry.focus_set()
 
     def _configure_tab(self, tab_idx: int):
         """Configure or delete a tab."""
@@ -4405,60 +4776,82 @@ class SoundboardApp:
 
         tab = self.tabs[tab_idx]
 
-        dialog = ctk.CTkToplevel(self.root)
-        dialog.title(f"Edit Tab: {tab.name}")
-        dialog.geometry("400x250")
-        dialog.transient(self.root)
-        dialog.grab_set()
-        dialog.after(10, lambda: dialog.focus_force())
-
-        frame = ctk.CTkFrame(dialog, fg_color=COLORS["bg_dark"], corner_radius=0)
-        frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
-
-        # Name field
-        ctk.CTkLabel(frame, text="Tab Name:", text_color=COLORS["text_primary"]).grid(
-            row=0, column=0, sticky="w", pady=10
+        dialog, body, footer, accent_bar = self._scaffold_dialog(
+            title=f"Edit Tab: {tab.name}",
+            subtitle="Rename, set an emoji, and pick a colour for this tab.",
+            width=600,
+            height=680,
+            min_width=470,
+            min_height=520,
+            accent=(tab.color or COLORS["blurple"]),
+            modal=True,
         )
-        name_var = tk.StringVar(value=tab.name)
-        edit_tab_name_entry = ctk.CTkEntry(
-            frame,
-            textvariable=name_var,
-            width=200,
-            fg_color=COLORS["bg_medium"],
-            border_color=COLORS["bg_light"],
-        )
-        edit_tab_name_entry.grid(row=0, column=1, pady=10)
-        _bind_rtl_entry(edit_tab_name_entry, name_var)
 
-        # Emoji field
-        ctk.CTkLabel(frame, text="Emoji:", text_color=COLORS["text_primary"]).grid(
-            row=1, column=0, sticky="w", pady=10
-        )
-        emoji_var = tk.StringVar(value=tab.emoji or "")
-        ctk.CTkEntry(
-            frame,
-            textvariable=emoji_var,
-            width=80,
-            fg_color=COLORS["bg_medium"],
-            border_color=COLORS["bg_light"],
-        ).grid(row=1, column=1, sticky="w", pady=10)
+        def _card(parent, heading: str) -> ctk.CTkFrame:
+            card = ctk.CTkFrame(parent, fg_color=COLORS["bg_medium"], corner_radius=10)
+            card.pack(fill=tk.X, pady=(0, 12))
+            ctk.CTkLabel(
+                card, text=heading, text_color=COLORS["text_secondary"],
+                font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"], weight="bold"),
+                anchor="w",
+            ).pack(fill=tk.X, padx=14, pady=(12, 4))
+            return card
 
-        # Emoji picker button
         def pick_emoji():
             self._show_emoji_picker(emoji_var, dialog)
 
+        def _live_accent(hx):
+            try:
+                accent_bar.configure(fg_color=hx or COLORS["blurple"])
+            except Exception:
+                pass
+
+        # ---- Card 1: details (name + emoji) --------------------------------
+        details = _card(body, "DETAILS")
+        form = ctk.CTkFrame(details, fg_color="transparent")
+        form.pack(fill=tk.X, padx=14, pady=(0, 12))
+        form.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            form, text="Name", text_color=COLORS["text_primary"], font=self._font_sm,
+            anchor="w", width=70,
+        ).grid(row=0, column=0, sticky="w", pady=8, padx=(0, 8))
+        name_var = tk.StringVar(value=tab.name)
+        edit_tab_name_entry = ctk.CTkEntry(
+            form, textvariable=name_var, height=32,
+            fg_color=COLORS["bg_dark"], border_color=COLORS["bg_light"],
+        )
+        edit_tab_name_entry.grid(row=0, column=1, columnspan=2, sticky="ew", pady=8)
+        _bind_rtl_entry(edit_tab_name_entry, name_var)
+
+        ctk.CTkLabel(
+            form, text="Emoji", text_color=COLORS["text_primary"], font=self._font_sm,
+            anchor="w", width=70,
+        ).grid(row=1, column=0, sticky="w", pady=8, padx=(0, 8))
+        emoji_var = tk.StringVar(value=tab.emoji or "")
+        ctk.CTkEntry(
+            form, textvariable=emoji_var, width=90, height=32,
+            fg_color=COLORS["bg_dark"], border_color=COLORS["bg_light"],
+        ).grid(row=1, column=1, sticky="w", pady=8)
         ctk.CTkButton(
-            frame,
-            text="Choose Emoji",
-            command=pick_emoji,
-            fg_color=COLORS["blurple"],
-            hover_color=COLORS["blurple_hover"],
-            width=100,
-        ).grid(row=1, column=2, padx=10)
+            form, text="Choose Emoji", command=pick_emoji,
+            fg_color=COLORS["blurple"], hover_color=COLORS["blurple_hover"],
+            width=130, height=32,
+        ).grid(row=1, column=2, padx=(8, 0), pady=8, sticky="e")
+
+        # ---- Card 2: colour (modern picker) --------------------------------
+        color_card = _card(body, "TAB COLOUR")
+        tab_color_picker = SlickColorPicker(
+            color_card, self, initial=tab.color, allow_none=True,
+            default_hex=COLORS["bg_medium"], on_change=_live_accent,
+        )
+        tab_color_picker.pack(fill=tk.X, padx=12, pady=(0, 12))
 
         def save():
             tab.name = name_var.get().strip() or f"Tab {tab_idx + 1}"
             tab.emoji = emoji_var.get().strip() or None
+            tab.color = tab_color_picker.get()
+            self._force_full_tab_reskin = True
             self._refresh_tab_bar()
             self._save_config()
             dialog.destroy()
@@ -4520,34 +4913,34 @@ class SoundboardApp:
                 self._save_config()
                 dialog.destroy()
 
-        # Buttons
-        btn_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        btn_frame.grid(row=2, column=0, columnspan=3, pady=25)
-
+        # Footer (pinned by the scaffold — buttons are never clipped).
         ctk.CTkButton(
-            btn_frame,
-            text="Save",
+            footer,
+            text="✓ Save",
             command=save,
             fg_color=COLORS["green"],
             hover_color=COLORS["green_hover"],
-            width=100,
-        ).pack(side=tk.LEFT, padx=5)
+            width=104,
+            height=34,
+        ).pack(side=tk.RIGHT, padx=(6, 14), pady=12)
         ctk.CTkButton(
-            btn_frame,
-            text="Delete Tab",
+            footer,
+            text="Cancel",
+            command=dialog.destroy,
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_lighter"],
+            width=90,
+            height=34,
+        ).pack(side=tk.RIGHT, padx=6, pady=12)
+        ctk.CTkButton(
+            footer,
+            text="🗑 Delete Tab",
             command=delete,
             fg_color=COLORS["red"],
             hover_color=COLORS["red_hover"],
-            width=100,
-        ).pack(side=tk.LEFT, padx=5)
-        ctk.CTkButton(
-            btn_frame,
-            text="Cancel",
-            command=dialog.destroy,
-            fg_color=COLORS["bg_medium"],
-            hover_color=COLORS["bg_light"],
-            width=100,
-        ).pack(side=tk.LEFT, padx=5)
+            width=120,
+            height=34,
+        ).pack(side=tk.LEFT, padx=(14, 0), pady=12)
 
     def _show_tab_manager(self):
         """Open a modal dialog for reordering tabs."""
@@ -4741,6 +5134,116 @@ class SoundboardApp:
         self._save_config()
         self.status_var.set("Tab order saved")
 
+    # ───────────────────────────── inline tab reorder ─────────────────────────
+    def _toggle_tab_reorder(self):
+        """Toggle drag-to-reorder mode for the tab sidebar (replaces the old
+        Manage Tabs window)."""
+        self._tab_reorder_mode = not self._tab_reorder_mode
+        on = self._tab_reorder_mode
+        try:
+            self.manage_tabs_btn.configure(
+                fg_color=COLORS["green"] if on else COLORS["bg_light"],
+                hover_color=COLORS["green_hover"] if on else COLORS["bg_lighter"],
+            )
+        except Exception:
+            pass
+        # Cursor hint on every tab row.
+        for frame in getattr(self, "tab_buttons", []):
+            try:
+                cur = "fleur" if on else "hand2"
+                frame.configure(cursor=cur)
+                for child in frame.winfo_children():
+                    child.configure(cursor=cur)
+            except Exception:
+                pass
+        if on:
+            self.status_var.set("Reorder mode: drag tabs up/down. Click ⇅ again when done.")
+        else:
+            self.status_var.set("Tab order locked")
+
+    def _on_tab_press(self, event, idx: int):
+        """Tab row pressed: switch tab (normal) or start a drag (reorder mode)."""
+        if not self._tab_reorder_mode:
+            self._switch_tab(idx)
+            return
+        # Begin a reorder drag from this position.
+        self._tab_drag_pos = idx
+        self._tab_drag_order = list(range(len(self.tabs)))
+        self._tab_drag_moved = False
+
+    def _tab_pos_at_pointer(self, y_root: int) -> int:
+        """Return the working position whose row currently contains ``y_root``."""
+        order = self._tab_drag_order
+        best = self._tab_drag_pos if self._tab_drag_pos is not None else 0
+        for pos, orig in enumerate(order):
+            try:
+                frame = self.tab_buttons[orig]
+                fy = frame.winfo_rooty()
+                fh = frame.winfo_height()
+            except Exception:
+                continue
+            if y_root < fy + fh / 2:
+                return pos
+            best = pos
+        return best
+
+    def _on_tab_drag(self, event, idx: int):
+        """Reorder-mode drag motion: live-repack rows to follow the cursor."""
+        if not self._tab_reorder_mode or self._tab_drag_pos is None:
+            return
+        target = self._tab_pos_at_pointer(event.y_root)
+        if target == self._tab_drag_pos:
+            return
+        order = self._tab_drag_order
+        moved = order.pop(self._tab_drag_pos)
+        order.insert(target, moved)
+        self._tab_drag_pos = target
+        self._tab_drag_moved = True
+        # Reposition ONLY the dragged frame to its new slot via `before=` instead
+        # of pack_forget()+pack() on ALL ~20 frames every motion step. That cuts
+        # the per-step work from ~40 geometry ops to 2, which is what made
+        # reordering a long tab list feel laggy / flickery.
+        try:
+            moved_frame = self.tab_buttons[moved]
+            moved_frame.pack_forget()
+            if target + 1 < len(order):
+                after_frame = self.tab_buttons[order[target + 1]]
+                moved_frame.pack(
+                    side=tk.TOP, fill=tk.X, pady=(0, 3), before=after_frame
+                )
+            else:
+                moved_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 3))
+        except Exception:
+            # Fallback: full re-pack in the new visual order.
+            for orig in order:
+                try:
+                    frame = self.tab_buttons[orig]
+                    frame.pack_forget()
+                    frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 3))
+                except Exception:
+                    pass
+
+    def _on_tab_release(self, event, idx: int):
+        """Reorder-mode drop: commit the new order (rebuild once)."""
+        if not self._tab_reorder_mode or self._tab_drag_pos is None:
+            self._tab_drag_pos = None
+            return
+        order = list(self._tab_drag_order)
+        moved = bool(getattr(self, "_tab_drag_moved", False))
+        self._tab_drag_pos = None
+        self._tab_drag_order = []
+        self._tab_drag_moved = False
+        if moved and order != list(range(len(self.tabs))):
+            self._apply_tab_order(order)
+            # Keep cursor hint correct after the rebuild creates fresh frames.
+            for frame in getattr(self, "tab_buttons", []):
+                try:
+                    frame.configure(cursor="fleur")
+                    for child in frame.winfo_children():
+                        child.configure(cursor="fleur")
+                except Exception:
+                    pass
+
     def _show_emoji_picker(self, target_var: tk.StringVar, parent):
         """Show the native Tk emoji picker (no PyQt6, no subprocess)."""
         from .emoji_picker import pick_emoji
@@ -4799,6 +5302,52 @@ class SoundboardApp:
             text_color=COLORS["text_secondary"],
         )
         header_label.pack(side=tk.LEFT)
+
+        # Live grid-density control (how many slots appear per row). Lets the
+        # user make the board denser (more, smaller slots) or roomier (fewer,
+        # bigger slots) on the fly. Rebuilds the grid + persists the choice.
+        density = ctk.CTkFrame(header_frame, fg_color="transparent")
+        density.pack(side=tk.RIGHT)
+        ctk.CTkLabel(
+            density,
+            text="⊞ Columns",
+            font=self._font_xs,
+            text_color=COLORS["text_muted"],
+        ).pack(side=tk.LEFT, padx=(0, 6))
+        self._grid_cols_minus_btn = ctk.CTkButton(
+            density,
+            text="−",
+            width=26,
+            height=24,
+            command=lambda: self._apply_grid_columns(self.grid_columns - 1),
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_lighter"],
+            text_color=COLORS["text_primary"],
+            font=self._font_sm_bold,
+            corner_radius=6,
+        )
+        self._grid_cols_minus_btn.pack(side=tk.LEFT)
+        self._grid_cols_label = ctk.CTkLabel(
+            density,
+            text=str(self.grid_columns),
+            width=22,
+            font=self._font_sm_bold,
+            text_color=COLORS["text_primary"],
+        )
+        self._grid_cols_label.pack(side=tk.LEFT, padx=2)
+        self._grid_cols_plus_btn = ctk.CTkButton(
+            density,
+            text="+",
+            width=26,
+            height=24,
+            command=lambda: self._apply_grid_columns(self.grid_columns + 1),
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_lighter"],
+            text_color=COLORS["text_primary"],
+            font=self._font_sm_bold,
+            corner_radius=6,
+        )
+        self._grid_cols_plus_btn.pack(side=tk.LEFT)
 
         # Search & filter bar
         search_bar = ctk.CTkFrame(board_frame, fg_color="transparent")
@@ -4897,58 +5446,56 @@ class SoundboardApp:
         # After config loads, _build_all_tab_widgets() will create them
 
     def _install_soundboard_mousewheel_acceleration(self):
-        """Add a faster scoped mousewheel handler for the soundboard grid."""
+        """Add a faster scoped mousewheel handler for the soundboard grid.
+
+        The handler self-gates on _app_is_active() + _pointer_scroll_region(),
+        so no <Enter>/<Leave> hover flag is needed — the region is resolved per
+        event from the pointer's actual widget ancestry.
+        """
         canvas = getattr(self.scrollable_grid, "_parent_canvas", None)
-        targets = [self.scrollable_grid]
-        if canvas is not None:
-            targets.append(canvas)
-
-        for widget in targets:
-            try:
-                widget.bind("<Enter>", self._bind_soundboard_mousewheel, add="+")
-                widget.bind("<Leave>", self._unbind_soundboard_mousewheel, add="+")
-            except Exception:
-                pass
-
         if canvas is not None:
             try:
                 canvas.bind_all("<MouseWheel>", self._on_soundboard_mousewheel, add="+")
             except Exception:
                 pass
 
-    def _bind_soundboard_mousewheel(self, _event=None):
-        self._soundboard_mousewheel_active = True
-
-    def _unbind_soundboard_mousewheel(self, _event=None):
-        self._soundboard_mousewheel_active = False
-
     def _on_soundboard_mousewheel(self, event):
         """Scroll the soundboard faster while the pointer is over it.
 
         Shift+wheel adjusts the hovered slot's volume instead of scrolling.
         """
-        if not getattr(self, "_soundboard_mousewheel_active", False):
-            try:
-                x = self.root.winfo_pointerx()
-                y = self.root.winfo_pointery()
-                gx = self.scrollable_grid.winfo_rootx()
-                gy = self.scrollable_grid.winfo_rooty()
-                gw = self.scrollable_grid.winfo_width()
-                gh = self.scrollable_grid.winfo_height()
-                if not (gx <= x <= gx + gw and gy <= y <= gy + gh):
-                    return None
-            except Exception:
-                return None
-        if self._is_quick_popup_open():
-            return "break"
+        # Only react when the soundboard is the active window — stops the grid
+        # from scrolling while the user works in another window (or one covers
+        # it) via Windows' "scroll inactive windows on hover".
+        if not self._app_is_active():
+            return None
 
-        # Check for Shift key (0x0001 is Shift in Tk event.state)
+        # Shift+wheel over a filled slot adjusts its volume. Check this FIRST,
+        # gated on an actual hovered slot rather than the ancestry region —
+        # winfo_containing can momentarily miss over a slot's child canvas, and
+        # that was swallowing the volume gesture.
         is_shift = bool(getattr(event, "state", 0) & 0x0001)
-
         if is_shift:
-            # Shift+wheel: adjust hovered slot volume, don't scroll soundboard
+            target = self._hovered_slot
+            if target is None:
+                try:
+                    target = self._find_slot_at_position(
+                        self.root.winfo_pointerx(), self.root.winfo_pointery()
+                    )
+                except Exception:
+                    target = None
+            if target is None:
+                return None
             result = self._adjust_hovered_slot_volume_from_wheel(event)
             return result if result is not None else "break"
+
+        # Normal wheel scrolling: resolve the region under the pointer by widget
+        # ancestry so an open Audio Options panel (on top of the grid) takes the
+        # wheel instead of double-scrolling the soundboard behind it.
+        if self._pointer_scroll_region() != "grid":
+            return None
+        if self._is_quick_popup_open():
+            return "break"
 
         # Normal wheel: scroll soundboard with speed multiplier
         canvas = getattr(self.scrollable_grid, "_parent_canvas", None)
@@ -5112,24 +5659,33 @@ class SoundboardApp:
             tab_grid.grid_remove()
         self.tab_grid_frames[tab_idx] = tab_grid
 
-        # Configure columns for even distribution (flex layout)
-        for c in range(UI["grid_columns"]):
+        # Configure columns for even distribution (flex layout). Uses the live
+        # self.grid_columns so the density control takes effect on rebuild.
+        cols = max(1, int(self.grid_columns))
+        for c in range(cols):
             tab_grid.grid_columnconfigure(c, weight=1, uniform="slot")
 
-        # Calculate slots needed
+        # Calculate slots needed. Keep at least one full extra row of empties so
+        # there's always somewhere to add a sound, regardless of column count.
         max_idx = max(tab.slots.keys()) if tab.slots else -1
-        num_slots = max(max_idx + 2, UI["total_slots"])
+        num_slots = max(max_idx + 1 + cols, UI["total_slots"])
 
         BOTTOM_HEIGHT = 32
 
         for i in range(num_slots):
-            row, col = divmod(i, UI["grid_columns"])
+            row, col = divmod(i, cols)
 
             # Wrapper frame holds the slot widget + a small footer label
             # listing the slot's groups. Footer is always present (height
             # reserved) so the grid stays uniform whether or not a slot has
             # groups assigned.
-            wrapper = ctk.CTkFrame(tab_grid, fg_color="transparent", corner_radius=0)
+            # Plain tk.Frame, NOT CTkFrame: this is purely a layout container
+            # (transparent, no rounded corners). Every CTkFrame carries its own
+            # Canvas that repaints on each resize — with ~60 slots that was a big
+            # slice of the ~1.2-1.7s relayout cost, and the reason chrome briefly
+            # flashed blank/ghosted during a resize. tk.Frame has no canvas to
+            # repaint, so the grid relays out far faster and the flashes go away.
+            wrapper = tk.Frame(tab_grid, bg=COLORS["bg_dark"], highlightthickness=0, bd=0)
             wrapper.grid(
                 row=row,
                 column=col,
@@ -5378,6 +5934,83 @@ class SoundboardApp:
                 storage[old_key - 1] = storage[old_key]
                 del storage[old_key]
 
+    # Allowed range for the live grid-density (columns-per-row) control.
+    GRID_COLUMNS_MIN = 2
+    GRID_COLUMNS_MAX = 12
+
+    def _apply_grid_columns(self, n, save: bool = True):
+        """Set the soundboard density (slots per row) and rebuild the grid.
+
+        Clamped to [GRID_COLUMNS_MIN, GRID_COLUMNS_MAX]. No-op if unchanged.
+        """
+        try:
+            n = int(n)
+        except (TypeError, ValueError):
+            return
+        n = max(self.GRID_COLUMNS_MIN, min(self.GRID_COLUMNS_MAX, n))
+        if n == self.grid_columns:
+            self._update_grid_cols_label()
+            return
+        self.grid_columns = n
+        self._update_grid_cols_label()
+        self._rebuild_all_tab_grids()
+        if save:
+            self._save_config()
+
+    def _update_grid_cols_label(self):
+        """Refresh the density readout + dim the +/- buttons at the limits."""
+        lbl = getattr(self, "_grid_cols_label", None)
+        if lbl is not None:
+            try:
+                lbl.configure(text=str(self.grid_columns))
+            except Exception:
+                pass
+        try:
+            minus = getattr(self, "_grid_cols_minus_btn", None)
+            if minus is not None:
+                minus.configure(
+                    state="disabled" if self.grid_columns <= self.GRID_COLUMNS_MIN else "normal"
+                )
+            plus = getattr(self, "_grid_cols_plus_btn", None)
+            if plus is not None:
+                plus.configure(
+                    state="disabled" if self.grid_columns >= self.GRID_COLUMNS_MAX else "normal"
+                )
+        except Exception:
+            pass
+
+    def _rebuild_all_tab_grids(self):
+        """Tear down and rebuild every tab's slot grid.
+
+        Used when the column count changes. All per-tab widgets are destroyed
+        and recreated at the new density; playing/preview visuals are restored
+        by the per-slot build update and the animation loop on the next tick.
+        Audio playback is unaffected (only the UI is rebuilt).
+        """
+        for idx in list(self._tab_built.keys()):
+            try:
+                self._cleanup_tab_widgets(idx)
+            except Exception:
+                pass
+        # Defensive: clear anything the cleanup helper might have missed so the
+        # rebuild starts from a clean slate.
+        self.tab_grid_frames.clear()
+        self._tab_built.clear()
+        # The "currently shown" pointer now references a destroyed frame.
+        self._currently_shown_tab = None
+        # Progress micro-cache references slots that no longer exist.
+        self._last_progress_values.clear()
+        # Rebuild current tab now (+ show it), schedule the rest in background.
+        self._build_all_tab_widgets()
+        # If a search overlay is open, re-render it (not just re-raise) so its
+        # own column layout matches the new density too — otherwise it would
+        # keep the old grid_columns until the next keystroke.
+        if self._search_results is not None:
+            try:
+                self._show_search_results()
+            except Exception:
+                pass
+
     def _build_all_tab_widgets(self):
         """Build current tab immediately, then build remaining tabs in background.
 
@@ -5424,6 +6057,41 @@ class SoundboardApp:
         if not self._tab_built.get(tab_idx, False):
             self._build_tab_widgets(tab_idx)
 
+    def _ptt_watchdog_check(self):
+        """Force-release PTT if it's stuck held while nothing is playing.
+
+        Belt-and-suspenders on top of the audio thread's own release logic: if
+        the mixer reports PTT active but there are NO sounds playing or queued
+        (and it isn't a deliberate manual hold), and that persists ~1.5s, we
+        release it directly. Catches a stuck key from a callback stall, a failed
+        OS key-up, or a race — without ever cutting PTT while audio is mixing.
+        """
+        m = self.mixer
+        if not m:
+            self._ptt_stuck_since = None
+            return
+        try:
+            stuck = (
+                getattr(m, "ptt_active", False)
+                and not getattr(m, "manual_ptt_hold", False)
+                and not m.currently_playing
+                and m.sound_queue.empty()
+            )
+        except Exception:
+            stuck = False
+        if not stuck:
+            self._ptt_stuck_since = None
+            return
+        now = time.time()
+        if self._ptt_stuck_since is None:
+            self._ptt_stuck_since = now
+        elif now - self._ptt_stuck_since >= 1.5:
+            try:
+                m._force_release_ptt()
+            except Exception:
+                pass
+            self._ptt_stuck_since = None
+
     def _animate_progress(self):
         """Update progress bars for playing sounds.
 
@@ -5439,6 +6107,11 @@ class SoundboardApp:
         if time.time() < getattr(self, "_resize_active_until", 0.0):
             self.root.after(150, self._animate_progress)
             return
+
+        # PTT stuck-key watchdog — independent of the audio thread.
+        self._ptt_watchdog_check()
+        # Live "Discord level" meter (when the voice popup is open).
+        self._update_voice_level_meter()
 
         # Idle fast-path: no sounds playing anywhere, nothing to animate.
         if not self.playing_slots and not self.preview_slots:
@@ -6061,7 +6734,8 @@ class SoundboardApp:
         self._search_results_frame.grid(row=0, column=0, sticky="nsew")
         self._search_results_frame.tkraise()
 
-        for c in range(UI["grid_columns"]):
+        cols = max(1, int(self.grid_columns))
+        for c in range(cols):
             self._search_results_frame.grid_columnconfigure(c, weight=1, uniform="slot")
 
         results = self._search_results or []
@@ -6073,7 +6747,7 @@ class SoundboardApp:
                 font=self._font_sm,
                 text_color=COLORS["text_muted"],
             )
-            no_results.grid(row=0, column=0, columnspan=UI["grid_columns"], pady=40)
+            no_results.grid(row=0, column=0, columnspan=cols, pady=40)
             return
 
         # Header showing result count
@@ -6084,7 +6758,7 @@ class SoundboardApp:
             text_color=COLORS["text_muted"],
         )
         count_label.grid(
-            row=0, column=0, columnspan=UI["grid_columns"], sticky="w", padx=8, pady=(4, 2)
+            row=0, column=0, columnspan=cols, sticky="w", padx=8, pady=(4, 2)
         )
 
         self._search_result_widgets = []
@@ -6093,8 +6767,8 @@ class SoundboardApp:
         #   row 0 : SlotWidget (full slot rendering — playing/progress/menu/stop)
         #   row 1 : footer label (tab source + groups)
         for i, result in enumerate(results):
-            row = (i // UI["grid_columns"]) + 1  # +1 for count label
-            col = i % UI["grid_columns"]
+            row = (i // cols) + 1  # +1 for count label
+            col = i % cols
             tab_idx: int = result["tab_idx"]
             slot_idx: int = result["slot_idx"]
 
@@ -6195,6 +6869,9 @@ class SoundboardApp:
             self._search_results_frame = None
 
         self._search_result_widgets = []
+        # Drop references to the (now destroyed) overlay slot widgets so the
+        # animation loop stops doing per-frame progress `.set()` calls on them.
+        self._search_slot_widgets = {}
 
         # Re-show only the current tab (hides everything else)
         self._show_tab_only(self.current_tab_idx)
@@ -6480,6 +7157,8 @@ class SoundboardApp:
                 if hasattr(self, "noise_suppress_var"):
                     self.mixer.noise_suppressor.enabled = self.noise_suppress_var.get()
                     self.mixer.noise_suppressor.set_strength(self.ns_strength_var.get() / 100.0)
+                # Apply voice changer settings (mirror GUI model into the mixer).
+                self._sync_voice_fx()
                 self.mixer.start()
                 # Save device selection
                 self._save_config()
@@ -6759,6 +7438,578 @@ class SoundboardApp:
             self.mixer.noise_suppressor.set_strength(self.ns_strength_var.get() / 100.0)
         # Debounced save (slider drag triggers many calls)
         self._save_config()
+
+    # ----------------------------------------------------------- Voice Changer
+    def _sync_voice_fx(self):
+        """Mirror the GUI-side voice model into the live mixer (if streaming).
+
+        The mixer's voice_changer reads params lock-free in the audio thread;
+        load_dict copies plain attributes, so a torn read costs at most one
+        glitchy block.
+        """
+        if self.mixer is not None:
+            try:
+                self.mixer.voice_changer.load_dict(self.voice_fx.to_dict())
+            except Exception:
+                pass
+
+    def _on_voice_master_toggle(self):
+        """Master on/off for the voice changer."""
+        self.voice_fx.enabled = bool(self.voice_enabled_var.get())
+        self._update_voice_current_label()
+        self._sync_voice_fx()
+        self._save_config()
+
+    def _apply_voice_preset(self, name: str):
+        """Apply a one-tap preset and switch the changer on for instant feedback."""
+        self.voice_fx.apply_preset(name)
+        self.voice_fx.enabled = True
+        self._sync_voice_card_from_model()  # reflect preset in master + advanced controls
+        self._sync_voice_fx()
+        self._save_config()
+
+    def _on_voice_pitch_toggle(self):
+        self.voice_fx.pitch_enabled = bool(self.voice_pitch_enabled_var.get())
+        self._mark_voice_custom()
+        self._sync_voice_fx()
+        self._save_config()
+
+    def _on_voice_pitch_change(self, _=None):
+        val = float(self.voice_pitch_var.get())
+        self.voice_fx.pitch_semitones = val
+        if hasattr(self, "_voice_pitch_label"):
+            try:
+                self._voice_pitch_label.configure(
+                    text="0 st" if abs(val) < 0.5 else f"{val:+.0f} st"
+                )
+            except Exception:
+                pass
+        # Dragging the pitch slider implies you want pitch enabled.
+        if not self.voice_fx.pitch_enabled and abs(val) > 0.01:
+            self.voice_fx.pitch_enabled = True
+            if hasattr(self, "voice_pitch_enabled_var"):
+                self.voice_pitch_enabled_var.set(True)
+        self._mark_voice_custom()
+        self._sync_voice_fx()
+        self._save_config()
+
+    def _on_voice_effect_toggle(self, key: str):
+        var = self.voice_fx_toggle_vars.get(key)
+        if var is None:
+            return
+        setattr(self.voice_fx, f"{key}_enabled", bool(var.get()))
+        self._mark_voice_custom()
+        self._sync_voice_fx()
+        self._save_config()
+
+    def _on_voice_gain_change(self, _=None):
+        self.voice_fx.output_gain = float(self.voice_gain_var.get()) / 100.0
+        self._sync_voice_fx()
+        self._save_config()
+
+    def _toggle_voice_advanced(self):
+        """Show/hide the advanced voice controls drawer."""
+        self._voice_advanced_visible = not getattr(self, "_voice_advanced_visible", False)
+        if self._voice_advanced_visible:
+            self._voice_advanced_frame.pack(fill=tk.X)
+            self._voice_advanced_btn.configure(text="⚙ Advanced ▾")
+        else:
+            self._voice_advanced_frame.pack_forget()
+            self._voice_advanced_btn.configure(text="⚙ Advanced ▸")
+
+    def _mark_voice_custom(self):
+        """A manual tweak means the chain no longer matches a named preset."""
+        self.voice_fx.preset = "Custom"
+        self._highlight_voice_preset("Custom")
+        self._update_voice_current_label()  # also refreshes the open voice popup
+
+    def _highlight_voice_preset(self, name: str):
+        """Highlight the active preset button (blurple) and reset the others."""
+        for pname, btn in getattr(self, "_voice_preset_buttons", {}).items():
+            try:
+                if pname == name:
+                    btn.configure(
+                        fg_color=COLORS["blurple"], hover_color=COLORS["blurple_hover"]
+                    )
+                else:
+                    btn.configure(
+                        fg_color=COLORS["bg_light"], hover_color=COLORS["bg_lighter"]
+                    )
+            except Exception:
+                pass
+
+    def _update_voice_current_label(self):
+        """Update the small 'on/off + preset' readout next to the master toggle.
+
+        Also keeps the action-bar 🎙 Voice button and the open voice popup (if
+        any) in sync, so the active voice is reflected everywhere it shows.
+        """
+        on = bool(getattr(self.voice_fx, "enabled", False))
+        preset = getattr(self.voice_fx, "preset", "Clean")
+        if hasattr(self, "_voice_current_label"):
+            try:
+                if on:
+                    self._voice_current_label.configure(
+                        text=f"▶ {preset}", text_color=COLORS["green"]
+                    )
+                else:
+                    self._voice_current_label.configure(
+                        text="off", text_color=COLORS["text_muted"]
+                    )
+            except Exception:
+                pass
+
+        # Reflect state on the action-bar button: green + preset name when on.
+        if hasattr(self, "voice_picker_btn"):
+            try:
+                if on:
+                    icon = self._VOICE_PRESET_META.get(preset, ("🎙", ""))[0]
+                    # Keep it short so it fits the compact button width.
+                    label = f"{icon} {preset}"
+                    if len(label) > 9:
+                        label = f"{icon} {preset[:6]}…"
+                    self.voice_picker_btn.configure(
+                        text=label,
+                        fg_color=COLORS["green"],
+                        hover_color=COLORS["green_hover"],
+                    )
+                else:
+                    self.voice_picker_btn.configure(
+                        text="🎙 Voice",
+                        fg_color=COLORS["bg_light"],
+                        hover_color=COLORS["bg_lighter"],
+                    )
+            except Exception:
+                pass
+
+        # Keep an open voice palette popup in sync no matter which surface drove
+        # the change (Audio Options card master toggle / preset buttons, config
+        # load, or a manual tweak). No-ops when the popup is closed.
+        self._refresh_voice_popup()
+
+    # Per-preset icon + accent colour for the voice palette tiles. The accent
+    # tints each tile so the picker reads as a colourful "palette of voices".
+    _VOICE_PRESET_META: Dict[str, tuple] = {
+        "Clean": ("✨", "#B5BAC1"),
+        "Deep": ("🐻", "#8B5A2B"),
+        "Demon": ("😈", "#DA373C"),
+        "Chipmunk": ("🐿️", "#F5A623"),
+        "Helium": ("🎈", "#FF69B4"),
+        "Robot": ("🤖", "#00AFF4"),
+        "Cylon": ("👾", "#9B59B6"),
+        "Radio": ("📻", "#F0B232"),
+        "Megaphone": ("📣", "#FF6600"),
+        "Telephone": ("☎️", "#23A559"),
+        "Alien": ("👽", "#39FF14"),
+        "Underwater": ("🌊", "#04D9FF"),
+        "Cave": ("🕳️", "#80848E"),
+        "Ghost": ("👻", "#CE93D8"),
+        "Drunk": ("🍺", "#FFBF00"),
+        "8-Bit": ("🕹️", "#FF10F0"),
+        "Stadium": ("🏟️", "#1ABC9C"),
+    }
+
+    def _show_voice_popup(self):
+        """Slick, borderless circular Voice palette anchored under the button.
+
+        Not a full window — a dropdown-style pop-over with round voice chips, a
+        master on/off, a "hear myself" self-test, and a quick pitch slider.
+        Clicking the 🎙 Voice button again (or clicking outside / Esc) closes it.
+        """
+        existing = getattr(self, "_voice_popup", None)
+        if existing is not None:
+            # Toggle: a second click closes the open palette.
+            try:
+                if existing.winfo_exists():
+                    self._close_voice_popup()
+                    return
+            except Exception:
+                pass
+            self._voice_popup = None
+
+        from . import emoji_render as _er
+
+        # Borderless tk.Toplevel (same approach as the tooltip) so there's no
+        # title bar — it reads as a pop-over, not a window.
+        popup = tk.Toplevel(self.root)
+        popup.withdraw()
+        popup.wm_overrideredirect(True)
+        try:
+            popup.attributes("-topmost", True)
+        except Exception:
+            pass
+        popup.configure(bg=COLORS["bg_light"])
+
+        self._voice_popup = popup
+        self._voice_popup_tiles = {}
+        self._voice_popup_icon_refs = {}
+
+        popup.protocol("WM_DELETE_WINDOW", self._close_voice_popup)
+        popup.bind("<Escape>", lambda _e: self._close_voice_popup())
+
+        # 1px light border via padding on the outer bg, then the card.
+        card = ctk.CTkFrame(popup, fg_color=COLORS["bg_medium"], corner_radius=12)
+        card.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
+
+        # ── Header: title + master switch + close ───────────────────────────
+        header = ctk.CTkFrame(card, fg_color="transparent")
+        header.pack(fill=tk.X, padx=14, pady=(12, 2))
+        ctk.CTkLabel(
+            header, text="🎙 Voice",
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_md"], weight="bold"),
+            text_color=COLORS["text_primary"], anchor="w",
+        ).pack(side=tk.LEFT)
+
+        ctk.CTkButton(
+            header, text="✕", width=24, height=24, command=self._close_voice_popup,
+            fg_color="transparent", hover_color=COLORS["bg_light"],
+            text_color=COLORS["text_muted"], font=self._font_sm,
+        ).pack(side=tk.RIGHT)
+
+        self._voice_popup_master_var = tk.BooleanVar(value=bool(self.voice_fx.enabled))
+        self._voice_popup_master_switch = ctk.CTkSwitch(
+            header, text="On", variable=self._voice_popup_master_var,
+            command=self._on_voice_popup_master_toggle,
+            progress_color=COLORS["green"], font=self._font_xs, width=44,
+        )
+        self._voice_popup_master_switch.pack(side=tk.RIGHT, padx=(0, 10))
+
+        # ── Self-test row (hear your own modulated voice, no PTT) ────────────
+        test_row = ctk.CTkFrame(card, fg_color="transparent")
+        test_row.pack(fill=tk.X, padx=14, pady=(2, 4))
+        if not hasattr(self, "_voice_selftest_var"):
+            self._voice_selftest_var = tk.BooleanVar(value=False)
+        self._voice_selftest_var.set(self._voice_selftest_active())
+        ctk.CTkSwitch(
+            test_row, text="🎧 Hear myself (local, no PTT)",
+            variable=self._voice_selftest_var, command=self._toggle_voice_selftest,
+            progress_color=COLORS["blurple"], font=self._font_xs,
+        ).pack(side=tk.LEFT)
+
+        # ── Discord level meter — the TRUE level sent to the call, regardless of
+        # your local speaker volume. A sound that's quiet on YOUR speakers but
+        # loud for everyone else pegs this high; if it hits red it's clipping. ─
+        meter_row = ctk.CTkFrame(card, fg_color="transparent")
+        meter_row.pack(fill=tk.X, padx=14, pady=(2, 2))
+        ctk.CTkLabel(
+            meter_row, text="🎚 Discord level", font=self._font_xs,
+            text_color=COLORS["text_secondary"], width=92, anchor="w",
+        ).pack(side=tk.LEFT)
+        self._voice_level_meter = ctk.CTkProgressBar(
+            meter_row, height=12, corner_radius=6,
+            fg_color=COLORS["bg_light"], progress_color=COLORS["green"],
+        )
+        self._voice_level_meter.set(0)
+        self._voice_level_meter.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 0))
+
+        self._voice_popup_status_label = ctk.CTkLabel(
+            card, text="", font=self._font_xs, text_color=COLORS["text_muted"], anchor="w",
+        )
+        self._voice_popup_status_label.pack(fill=tk.X, padx=14, pady=(0, 4))
+
+        # ── Circular voice chips ─────────────────────────────────────────────
+        tiles = ctk.CTkFrame(card, fg_color="transparent")
+        tiles.pack(fill=tk.X, padx=10, pady=(0, 4))
+        per_row = 5
+        D = 50
+        for i, name in enumerate(VoiceChanger.PRESETS.keys()):
+            r, c = divmod(i, per_row)
+            icon, accent = self._VOICE_PRESET_META.get(name, ("🎙", COLORS["blurple"]))
+            cell = ctk.CTkFrame(tiles, fg_color="transparent")
+            cell.grid(row=r, column=c, padx=4, pady=(4, 2), sticky="n")
+            cv = tk.Canvas(cell, width=D, height=D, highlightthickness=0, bd=0,
+                           bg=COLORS["bg_medium"], cursor="hand2")
+            cv.pack()
+            icon_img = None
+            try:
+                icon_img = _er.get_tk_image(icon, 26)
+            except Exception:
+                icon_img = None
+            if icon_img is not None:
+                self._voice_popup_icon_refs[name] = icon_img
+            lbl = ctk.CTkLabel(cell, text=name, font=self._font_xs,
+                               text_color=COLORS["text_secondary"])
+            lbl.pack(pady=(1, 0))
+            for w in (cv, lbl):
+                w.bind("<Button-1>", lambda _e, n=name: self._apply_voice_preset_from_popup(n))
+            self._voice_popup_tiles[name] = (cv, accent, icon, icon_img, lbl)
+        for c in range(per_row):
+            tiles.grid_columnconfigure(c, weight=1)
+
+        # ── Quick pitch ──────────────────────────────────────────────────────
+        pitch_row = ctk.CTkFrame(card, fg_color="transparent")
+        pitch_row.pack(fill=tk.X, padx=14, pady=(4, 12))
+        ctk.CTkLabel(pitch_row, text="Pitch", font=self._font_xs,
+                     text_color=COLORS["text_secondary"], width=36, anchor="w").pack(side=tk.LEFT)
+        if not hasattr(self, "voice_pitch_var"):
+            self.voice_pitch_var = tk.DoubleVar(value=float(self.voice_fx.pitch_semitones))
+        ctk.CTkSlider(
+            pitch_row, from_=-12, to=12, number_of_steps=48, variable=self.voice_pitch_var,
+            command=self._on_voice_pitch_change, height=14,
+            fg_color=COLORS["bg_light"], progress_color=COLORS["blurple"],
+            button_color=COLORS["text_primary"], button_hover_color=COLORS["blurple"],
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 0))
+
+        # Position under the Voice button, clamped to the WHOLE virtual desktop
+        # (all monitors) so a secondary-monitor app doesn't fling the palette
+        # back to the primary screen — same fix as the dialog centering.
+        popup.update_idletasks()
+        pw = popup.winfo_reqwidth()
+        ph = popup.winfo_reqheight()
+        try:
+            btn = self.voice_picker_btn
+            bx = btn.winfo_rootx()
+            by = btn.winfo_rooty() + btn.winfo_height() + 6
+            vx, vy, vw, vh = self._virtual_screen_bounds()
+            # Right-align the palette to the button, then clamp into the desktop.
+            x = bx + btn.winfo_width() - pw
+            x = max(vx + 8, min(x, vx + vw - pw - 8))
+            # Drop below the button; if that overflows the bottom edge of this
+            # monitor span, flip the palette to sit ABOVE the button instead.
+            y = by
+            if y + ph > vy + vh - 8:
+                y = btn.winfo_rooty() - ph - 6
+            y = max(vy + 8, min(y, vy + vh - ph - 8))
+        except Exception:
+            x, y = 200, 200
+        popup.geometry(f"{pw}x{ph}+{x}+{y}")
+        popup.deiconify()
+        popup.after(10, lambda: popup.focus_force())
+
+        self._refresh_voice_popup()
+        # Click anywhere on the main window closes the palette (except the Voice
+        # button itself, whose command handles the open/close toggle).
+        self._attach_click_outside_close(
+            popup, self._close_voice_popup, ignore_widget=self.voice_picker_btn
+        )
+
+    def _close_voice_popup(self):
+        """Tear down the voice palette and stop the self-test monitor."""
+        # Don't leave "hear myself" running once the palette is gone.
+        try:
+            if self._voice_selftest_active():
+                self._set_voice_selftest(False)
+        except Exception:
+            pass
+        popup = getattr(self, "_voice_popup", None)
+        self._voice_popup = None
+        self._voice_popup_tiles = {}
+        self._voice_popup_icon_refs = {}
+        self._voice_popup_master_var = None
+        self._voice_popup_master_switch = None
+        self._voice_popup_status_label = None
+        self._voice_level_meter = None
+        if popup is not None:
+            try:
+                popup.destroy()
+            except Exception:
+                pass
+
+    def _update_voice_level_meter(self):
+        """Drive the voice popup's 'Discord level' meter from the live mixer."""
+        meter = getattr(self, "_voice_level_meter", None)
+        if meter is None:
+            return
+        try:
+            if not meter.winfo_exists():
+                self._voice_level_meter = None
+                return
+        except Exception:
+            self._voice_level_meter = None
+            return
+        peak = 0.0
+        m = self.mixer
+        if m and getattr(m, "running", False):
+            peak = max(
+                float(getattr(m, "output_peak", 0.0)),
+                float(getattr(m, "sounds_peak", 0.0)),
+            )
+        try:
+            meter.set(max(0.0, min(1.0, peak)))
+            if peak >= 0.98:
+                meter.configure(progress_color=COLORS["red"])      # clipping
+            elif peak >= 0.7:
+                meter.configure(progress_color=COLORS["yellow"])    # hot
+            else:
+                meter.configure(progress_color=COLORS["green"])
+        except Exception:
+            pass
+
+    def _draw_voice_chip(self, canvas, accent, icon_char, icon_img, selected):
+        """Render one circular voice chip (filled when selected)."""
+        try:
+            canvas.delete("all")
+            d = int(canvas.cget("width"))
+            if selected:
+                canvas.create_oval(2, 2, d - 3, d - 3, fill=accent,
+                                   outline=COLORS["text_primary"], width=3)
+            else:
+                canvas.create_oval(3, 3, d - 4, d - 4, fill=COLORS["bg_light"],
+                                   outline=accent, width=2)
+            if icon_img is not None:
+                canvas.create_image(d / 2, d / 2, image=icon_img)
+            else:
+                canvas.create_text(d / 2, d / 2, text=icon_char,
+                                   font=(FONTS["family"], 18))
+        except Exception:
+            pass
+
+    def _refresh_voice_popup(self):
+        """Update the chips + master switch + status to mirror current state."""
+        popup = getattr(self, "_voice_popup", None)
+        if popup is None:
+            return
+        try:
+            if not popup.winfo_exists():
+                return
+        except Exception:
+            return
+
+        on = bool(self.voice_fx.enabled)
+        active = getattr(self.voice_fx, "preset", "Clean")
+
+        if self._voice_popup_master_var is not None:
+            try:
+                self._voice_popup_master_var.set(on)
+            except Exception:
+                pass
+        if self._voice_popup_master_switch is not None:
+            try:
+                self._voice_popup_master_switch.configure(text="On" if on else "Off")
+            except Exception:
+                pass
+        if self._voice_popup_status_label is not None:
+            try:
+                if on:
+                    self._voice_popup_status_label.configure(
+                        text=f"▶ {active}", text_color=COLORS["green"]
+                    )
+                else:
+                    self._voice_popup_status_label.configure(
+                        text="Voice changer is off", text_color=COLORS["text_muted"]
+                    )
+            except Exception:
+                pass
+
+        for name, (cv, accent, icon, icon_img, lbl) in self._voice_popup_tiles.items():
+            selected = on and name == active
+            self._draw_voice_chip(cv, accent, icon, icon_img, selected)
+            try:
+                lbl.configure(
+                    text_color=COLORS["text_primary"] if selected else COLORS["text_secondary"]
+                )
+            except Exception:
+                pass
+
+    def _apply_voice_preset_from_popup(self, name: str):
+        """Apply a preset chosen from the voice palette and refresh the popup."""
+        self._apply_voice_preset(name)  # enables changer, syncs card + mixer, saves
+        self._refresh_voice_popup()
+
+    def _on_voice_popup_master_toggle(self):
+        """Master on/off driven from the voice palette switch."""
+        if self._voice_popup_master_var is None:
+            return
+        enabled = bool(self._voice_popup_master_var.get())
+        if hasattr(self, "voice_enabled_var"):
+            self.voice_enabled_var.set(enabled)
+            self._on_voice_master_toggle()
+        else:
+            self.voice_fx.enabled = enabled
+            self._update_voice_current_label()
+            self._sync_voice_fx()
+            self._save_config()
+        self._refresh_voice_popup()
+
+    # ───────────────────────── voice self-test (hear myself) ──────────────────
+    def _voice_selftest_active(self) -> bool:
+        """True if the local self-test monitor is currently routing to speakers."""
+        m = self.mixer
+        return bool(m and getattr(m, "running", False)
+                    and getattr(m, "test_output_enabled", False))
+
+    def _set_voice_selftest(self, enabled: bool):
+        """Route the Discord-bound signal (mic + voice FX) to local speakers.
+
+        This is the existing Test Output path — it lets the user hear exactly
+        what Discord would hear, locally, WITHOUT pressing Push-to-Talk. Keeps
+        the Audio Options 'Test Output' checkbox in sync if present.
+        """
+        if not self.mixer:
+            return False
+        if enabled and not self.mixer.running:
+            return False
+        try:
+            self.mixer.set_test_output_enabled(bool(enabled))
+        except Exception as e:
+            print(f"[gui] voice self-test toggle failed: {e}")
+            return False
+        if hasattr(self, "test_live_var"):
+            try:
+                self.test_live_var.set(bool(enabled))
+            except Exception:
+                pass
+        return True
+
+    def _toggle_voice_selftest(self):
+        """Self-test switch handler in the voice palette."""
+        want = bool(self._voice_selftest_var.get())
+        # Need a running stream to monitor. Try to start it if the user has
+        # picked devices.
+        if want and (not self.mixer or not self.mixer.running):
+            if self.input_var.get() and self.output_var.get():
+                try:
+                    self._toggle_stream()
+                except Exception:
+                    pass
+        if want and (not self.mixer or not self.mixer.running):
+            self._voice_selftest_var.set(False)
+            if self._voice_popup_status_label is not None:
+                self._voice_popup_status_label.configure(
+                    text="Start the stream first (▶ in Audio Options)",
+                    text_color=COLORS["red"],
+                )
+            return
+        # Turning the test on with no effect would be silent — switch the
+        # changer on too so there's something to hear.
+        if want and not self.voice_fx.enabled and hasattr(self, "voice_enabled_var"):
+            self.voice_enabled_var.set(True)
+            self._on_voice_master_toggle()
+        ok = self._set_voice_selftest(want)
+        if not ok:
+            self._voice_selftest_var.set(False)
+        self._refresh_voice_popup()
+
+    def _sync_voice_card_from_model(self):
+        """Push the voice model's state into the card controls.
+
+        Called after config load and after applying a preset. Guarded so it is
+        safe even if some controls don't exist yet.
+        """
+        vfx = self.voice_fx
+        if hasattr(self, "voice_enabled_var"):
+            self.voice_enabled_var.set(bool(vfx.enabled))
+        if hasattr(self, "voice_pitch_enabled_var"):
+            self.voice_pitch_enabled_var.set(bool(vfx.pitch_enabled))
+        if hasattr(self, "voice_pitch_var"):
+            self.voice_pitch_var.set(float(vfx.pitch_semitones))
+        if hasattr(self, "_voice_pitch_label"):
+            try:
+                v = float(vfx.pitch_semitones)
+                self._voice_pitch_label.configure(
+                    text="0 st" if abs(v) < 0.5 else f"{v:+.0f} st"
+                )
+            except Exception:
+                pass
+        if hasattr(self, "voice_gain_var"):
+            self.voice_gain_var.set(float(vfx.output_gain) * 100.0)
+        for key, var in getattr(self, "voice_fx_toggle_vars", {}).items():
+            try:
+                var.set(bool(getattr(vfx, f"{key}_enabled", False)))
+            except Exception:
+                pass
+        self._highlight_voice_preset(getattr(vfx, "preset", "Clean"))
+        self._update_voice_current_label()
 
     def _toggle_now_playing_panel(self):
         """Toggle the DJ Looper side panel visibility."""
@@ -7888,6 +9139,14 @@ class SoundboardApp:
 
     def _preview_hovered_slot(self):
         """Preview the slot currently under the pointer via the hover binding."""
+        # The hover-preview binding (default: middle mouse / mouse3) runs on a
+        # GLOBAL mouse/keyboard hook, so it fires even while another app is
+        # focused or on top of the soundboard. Without this gate, pressing the
+        # bound button in Discord/a browser/a game would play a preview whenever
+        # the cursor happened to sit over where a slot is. Only preview when the
+        # soundboard is the window the user is actually in.
+        if not self._app_is_active():
+            return
         if self._is_quick_popup_open():
             return
 
@@ -8639,6 +9898,23 @@ class SoundboardApp:
 
         popup.bind("<Escape>", lambda _e: close_popup())
 
+        # Click anywhere outside the popup closes it (no need for ✕ / Apply).
+        # The local grab routes in-app clicks here, so we compare the click's
+        # screen position against the popup's own bounds; a click on the popup's
+        # own widgets falls inside and is left alone.
+        def _on_quick_popup_click(ev):
+            try:
+                if not popup.winfo_exists():
+                    return
+                px, py = popup.winfo_rootx(), popup.winfo_rooty()
+                pw, ph = popup.winfo_width(), popup.winfo_height()
+                if not (px <= ev.x_root <= px + pw and py <= ev.y_root <= py + ph):
+                    close_popup()
+            except Exception:
+                pass
+
+        popup.bind("<Button-1>", _on_quick_popup_click, add="+")
+
     def _clone_slot_for_retrim(self, slot_idx: int):
         """Clone an existing slot into a new slot with a different cut.
 
@@ -8807,11 +10083,12 @@ class SoundboardApp:
         dialog = ctk.CTkToplevel(self.root)
         title_suffix = f" — {existing.name}" if existing and existing.name else ""
         dialog.title(f"Configure Slot {slot_idx + 1}{title_suffix}")
-        dialog.geometry("640x780")
         dialog.minsize(560, 600)
         dialog.configure(fg_color=COLORS["bg_dark"])
         dialog.transient(self.root)
-        dialog.grab_set()
+        # Open centered inside the app window. NOT grab_set: the dialog
+        # auto-saves and closes when the user clicks outside it (wired below).
+        self._center_dialog_over_root(dialog, 640, 780)
         dialog.after(10, lambda: dialog.focus_force())
 
         # Layout: header (top) + scrollable body (middle) + sticky footer (bottom)
@@ -8922,7 +10199,10 @@ class SoundboardApp:
 
         def browse():
             filetypes = [("Audio", " ".join(SUPPORTED_FORMATS))]
-            fp = filedialog.askopenfilename(filetypes=filetypes)
+            # parent=dialog owns the native picker to the (non-modal) config
+            # dialog so it stays in front and the main window isn't clickable
+            # behind it (which would otherwise auto-close this dialog).
+            fp = filedialog.askopenfilename(filetypes=filetypes, parent=dialog)
             if fp:
                 path_var.set(fp)
                 if not name_var.get():
@@ -9022,7 +10302,7 @@ class SoundboardApp:
 
         def browse_image():
             filetypes = [("Images", " ".join(SUPPORTED_IMAGE_FORMATS))]
-            fp = filedialog.askopenfilename(filetypes=filetypes)
+            fp = filedialog.askopenfilename(filetypes=filetypes, parent=dialog)
             if fp:
                 local_path = self._copy_image_to_storage(fp)
                 image_var.set(local_path)
@@ -9050,90 +10330,26 @@ class SoundboardApp:
             font=self._font_sm,
         ).pack(side=tk.LEFT)
 
-        # Color picker — visual swatch palette
+        # Color picker — slick swatches + HSV creator + saved colours.
         _row_label(appearance_card, "Color", 3)
-        color_names = list(ALL_SLOT_COLORS.keys())
-        existing_color_name = "Default"
-        if existing and existing.color:
-            for name, hex_val in ALL_SLOT_COLORS.items():
-                if hex_val.lower() == existing.color.lower():
-                    existing_color_name = name
-                    break
-        color_var = tk.StringVar(value=existing_color_name)
 
-        palette_outer = ctk.CTkFrame(
-            appearance_card, fg_color=COLORS["bg_dark"], corner_radius=6
+        def _on_slot_color_change(hx):
+            try:
+                accent.configure(fg_color=hx or COLORS["blurple"])
+            except Exception:
+                pass
+
+        color_picker = SlickColorPicker(
+            appearance_card,
+            self,
+            initial=(existing.color if existing else None),
+            on_change=_on_slot_color_change,
+            allow_none=True,
+            default_hex=COLORS["blurple"],
         )
-        palette_outer.grid(
+        color_picker.grid(
             row=3, column=1, columnspan=3, sticky="ew", padx=(0, 14), pady=(6, 12)
         )
-        selected_lbl = ctk.CTkLabel(
-            palette_outer,
-            text=existing_color_name,
-            text_color=COLORS["text_secondary"],
-            font=self._font_xs,
-            anchor="w",
-        )
-        selected_lbl.pack(fill=tk.X, padx=10, pady=(8, 4))
-        palette_grid = ctk.CTkFrame(palette_outer, fg_color="transparent")
-        palette_grid.pack(fill=tk.X, padx=8, pady=(0, 8))
-
-        SWATCH_SIZE = 26
-        SWATCH_PER_ROW = 8
-        swatches: Dict[str, tk.Canvas] = {}
-
-        def _select_color(name: str):
-            color_var.set(name)
-
-        def _draw_swatch(canvas: tk.Canvas, fill: str, selected: bool):
-            canvas.delete("all")
-            w = SWATCH_SIZE
-            if selected:
-                canvas.create_rectangle(
-                    0, 0, w - 1, w - 1,
-                    outline=COLORS["text_primary"], width=2, fill="",
-                )
-                canvas.create_rectangle(3, 3, w - 4, w - 4, outline="", fill=fill)
-            else:
-                canvas.create_rectangle(
-                    1, 1, w - 2, w - 2,
-                    outline=COLORS["bg_light"], width=1, fill=fill,
-                )
-
-        for i, name in enumerate(color_names):
-            r, c = divmod(i, SWATCH_PER_ROW)
-            hex_val = ALL_SLOT_COLORS[name]
-            cv = tk.Canvas(
-                palette_grid,
-                width=SWATCH_SIZE,
-                height=SWATCH_SIZE,
-                bg=COLORS["bg_dark"],
-                highlightthickness=0,
-                bd=0,
-                cursor="hand2",
-            )
-            cv.grid(row=r, column=c, padx=2, pady=2)
-            _draw_swatch(cv, hex_val, name == existing_color_name)
-            cv.bind("<Button-1>", lambda _e, n=name: _select_color(n))
-            try:
-                _Tooltip.attach(cv, name)
-            except Exception:
-                pass
-            swatches[name] = cv
-
-        def update_color_preview(*_args):
-            selected = color_var.get()
-            if selected not in ALL_SLOT_COLORS:
-                return
-            selected_lbl.configure(text=selected)
-            try:
-                accent.configure(fg_color=ALL_SLOT_COLORS[selected])
-            except Exception:
-                pass
-            for name, cv in swatches.items():
-                _draw_swatch(cv, ALL_SLOT_COLORS[name], name == selected)
-
-        color_var.trace("w", update_color_preview)
 
         # ====================================================================
         # CARD 3 — Playback (volume, speed, hotkey)
@@ -9412,7 +10628,8 @@ class SoundboardApp:
                 volume=volume_var.get() / 100.0,
                 emoji=emoji_var.get() or None,
                 image_path=image_var.get() or None,
-                color=ALL_SLOT_COLORS.get(color_var.get()),
+                # Hex chosen in the slick colour picker (None = default accent).
+                color=color_picker.get(),
                 speed=speed_var.get() / 100.0,
                 preserve_pitch=existing.preserve_pitch if existing else True,
                 loop=loop_var.get(),
@@ -9500,6 +10717,11 @@ class SoundboardApp:
             height=36,
             font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"], weight="bold"),
         ).pack(side=tk.LEFT)
+
+        # Click outside the dialog (on the main window) auto-saves & closes it,
+        # so the user never has to hit X / Save. Esc still cancels.
+        self._attach_click_outside_close(dialog, save)
+        dialog.bind("<Escape>", lambda _e: dialog.destroy())
 
     def _clear_slot_image(self, tab_idx: int, slot_idx: int):
         """Remove the custom image from a slot (the file on disk is left alone)."""
@@ -9600,21 +10822,18 @@ class SoundboardApp:
     def _on_paste_image_to_slot(self, event=None):
         """Ctrl+V: paste a clipboard image onto the slot under the cursor.
 
-        Ignored when the focus is on a text entry (so normal paste still
-        works). Uses PIL.ImageGrab to read the clipboard bitmap; if no
-        image is on the clipboard this is a no-op.
+        If the cursor is over a sound slot in the main window, paste the
+        clipboard image there — even if the main-window search box holds focus,
+        since the user is clearly aiming at the slot. We only step aside when
+        focus is inside a SEPARATE dialog/popup (e.g. the Configure-Slot name
+        field), so text paste there keeps working.
         """
-        # Don't hijack paste when typing into an entry / textbox
+        # Focus inside another toplevel (a dialog/popup) → it's a text paste;
+        # leave it alone.
         try:
             focused = self.root.focus_get()
-            if focused is not None:
-                cls = focused.winfo_class()
-                if cls in ("Entry", "Text", "TEntry", "TCombobox", "CTkEntry"):
-                    return None
-                if hasattr(focused, "master") and focused.master is not None:
-                    mcls = focused.master.winfo_class()
-                    if "Entry" in mcls or "Combobox" in mcls:
-                        return None
+            if focused is not None and focused.winfo_toplevel() is not self.root:
+                return None
         except Exception:
             pass
 
@@ -9623,82 +10842,308 @@ class SoundboardApp:
             cursor_y = self.root.winfo_pointery()
         except Exception:
             return None
+
         target = self._find_slot_at_position(cursor_x, cursor_y)
         if target is None:
-            self.status_var.set("Hover a sound slot to paste an image")
             return None
+
         tab_idx, slot_idx = target
         if self._apply_clipboard_image_to_slot(tab_idx, slot_idx, show_errors=False):
             return "break"
         return None
 
-    def _on_files_dropped(self, files):
-        """Handle files dropped from file explorer onto the main window.
-
-        Determines which slot is under the cursor and applies the image to it.
-        Accepts image files dropped onto filled sound slots.
-        """
-        # Determine cursor position
+    def _drop_log(self, msg: str):
+        """Append a flushed line to debug.log so the LAST step before a hard
+        crash is always on disk (helps diagnose the drop path)."""
         try:
-            cursor_x = self.root.winfo_pointerx()
-            cursor_y = self.root.winfo_pointery()
+            with open("debug.log", "a", encoding="utf-8") as f:
+                f.write(f"[DROP] {msg}\n")
+                f.flush()
+        except Exception:
+            pass
+
+    def _install_native_dropfiles(self):
+        """Subclass the Tk window's WNDPROC to handle WM_DROPFILES correctly.
+
+        Replaces the ``windnd`` library. Fixes its two crash bugs:
+          1. windnd reads each path into a fixed 260-BYTE buffer — a long or
+             Unicode path overflows it and corrupts memory.
+          2. windnd calls the original wndproc with the message AFTER
+             ``DragFinish`` frees the HDROP — a use-after-free.
+        Both manifest as a hard crash with no Python traceback right after the
+        drop callback returns (exactly what the [DROP] log showed).
+
+        Our handler queries the exact length, reads via ``DragQueryFileW`` into
+        a correctly-sized wide buffer, frees the HDROP, stashes the paths for
+        the Tk loop, and returns 0 WITHOUT forwarding the freed HDROP. The
+        window proc itself does ZERO Tk work — a poller drains the queue.
+        """
+        try:
+            import ctypes
+            from ctypes import wintypes
         except Exception:
             return
+        try:
+            user32 = ctypes.windll.user32
+            shell32 = ctypes.windll.shell32
 
-        # Decode file paths (windnd passes bytes on some versions)
-        file_paths = []
-        for f in files:
-            if isinstance(f, bytes):
-                try:
-                    file_paths.append(f.decode("utf-8"))
-                except UnicodeDecodeError:
+            hwnd = self.root.winfo_id()
+            WM_DROPFILES = 0x0233
+            GWLP_WNDPROC = -4
+
+            DragQueryFileW = shell32.DragQueryFileW
+            DragQueryFileW.restype = wintypes.UINT
+            DragQueryFileW.argtypes = [
+                wintypes.HANDLE, wintypes.UINT, wintypes.LPWSTR, wintypes.UINT,
+            ]
+            DragFinish = shell32.DragFinish
+            DragFinish.argtypes = [wintypes.HANDLE]
+            shell32.DragAcceptFiles(wintypes.HWND(hwnd), True)
+
+            LRESULT = ctypes.c_ssize_t  # pointer-sized signed (LONG_PTR)
+            WNDPROC = ctypes.WINFUNCTYPE(
+                LRESULT, wintypes.HWND, ctypes.c_uint, wintypes.WPARAM, wintypes.LPARAM
+            )
+
+            is64 = ctypes.sizeof(ctypes.c_void_p) == 8
+            GetWindowLong = user32.GetWindowLongPtrW if is64 else user32.GetWindowLongW
+            SetWindowLong = user32.SetWindowLongPtrW if is64 else user32.SetWindowLongW
+            GetWindowLong.restype = ctypes.c_void_p
+            GetWindowLong.argtypes = [wintypes.HWND, ctypes.c_int]
+            SetWindowLong.restype = ctypes.c_void_p
+            SetWindowLong.argtypes = [wintypes.HWND, ctypes.c_int, WNDPROC]
+
+            CallWindowProc = user32.CallWindowProcW
+            CallWindowProc.restype = LRESULT
+            CallWindowProc.argtypes = [
+                ctypes.c_void_p, wintypes.HWND, ctypes.c_uint,
+                wintypes.WPARAM, wintypes.LPARAM,
+            ]
+
+            old_wndproc = GetWindowLong(hwnd, GWLP_WNDPROC)
+
+            def _wndproc(h, msg, wparam, lparam):
+                if msg == WM_DROPFILES:
                     try:
-                        file_paths.append(f.decode("gbk"))
-                    except UnicodeDecodeError:
-                        continue
+                        hdrop = wparam
+                        count = DragQueryFileW(hdrop, 0xFFFFFFFF, None, 0)
+                        paths = []
+                        for i in range(count):
+                            need = DragQueryFileW(hdrop, i, None, 0)  # chars, no NUL
+                            buf = ctypes.create_unicode_buffer(int(need) + 1)
+                            DragQueryFileW(hdrop, i, buf, int(need) + 1)
+                            if buf.value:
+                                paths.append(buf.value)
+                        try:
+                            DragFinish(hdrop)
+                        except Exception:
+                            pass
+                        # No Tk work here — just stash; the poller does the rest.
+                        self._pending_drops.append(paths)
+                    except Exception as e:
+                        try:
+                            self._drop_log(f"native WNDPROC error: {e}")
+                            DragFinish(wparam)
+                        except Exception:
+                            pass
+                    return 0  # handled; do NOT forward the freed HDROP
+                return CallWindowProc(old_wndproc, h, msg, wparam, lparam)
+
+            # Strong refs (so the trampoline + old proc aren't GC'd).
+            self._dropfiles_wndproc = WNDPROC(_wndproc)
+            self._dropfiles_old = old_wndproc
+            SetWindowLong(hwnd, GWLP_WNDPROC, self._dropfiles_wndproc)
+            self._start_drop_poller()
+            self._drop_log("native dropfiles installed")
+        except Exception as e:
+            try:
+                self._drop_log(f"native dropfiles install FAILED: {e}")
+            except Exception:
+                pass
+
+    def _start_drop_poller(self):
+        if self._drop_poller_running:
+            return
+        self._drop_poller_running = True
+        self._poll_pending_drops()
+
+    def _poll_pending_drops(self):
+        """Drain queued drops on the Tk loop (off the window proc)."""
+        try:
+            while self._pending_drops:
+                paths = self._pending_drops.pop(0)
+                self._drop_log(f"poller draining {len(paths)} path(s)")
+                try:
+                    self._process_drop(paths)
+                except Exception as e:
+                    self._drop_log(f"poller process error: {e}")
+        except Exception:
+            pass
+        try:
+            self.root.after(120, self._poll_pending_drops)
+        except Exception:
+            self._drop_poller_running = False
+
+    def _on_files_dropped(self, files):
+        """windnd WM_DROPFILES callback. Does the BARE MINIMUM possible.
+
+        It runs inside windnd's hooked window-proc on the message thread. ANY
+        real work here (even reading the pointer or decoding bytes) reenters
+        Tk/Win32 and can hard-crash the app. So we only copy the raw items out
+        of windnd's buffer and hand off to the Tk idle loop; everything else
+        happens in _process_drop.
+        """
+        try:
+            raw = list(files)
+        except Exception:
+            raw = []
+        self._drop_log(f"callback received {len(raw)} item(s)")
+        try:
+            self.root.after(0, lambda r=raw: self._process_drop(r))
+            self._drop_log("scheduled _process_drop via after(0)")
+        except Exception as e:
+            self._drop_log(f"after(0) schedule FAILED: {e}")
+
+    def _process_drop(self, raw):
+        """Decode + dispatch a drop on the Tk loop (off the windnd callback)."""
+        self._drop_log("process_drop START")
+        try:
+            cursor_x = cursor_y = None
+            try:
+                cursor_x = self.root.winfo_pointerx()
+                cursor_y = self.root.winfo_pointery()
+            except Exception:
+                pass
+
+            # Decode paths (windnd passes bytes). UTF-8, then the Windows ANSI
+            # code page (mbcs) for localized/Hebrew names, then fallbacks.
+            file_paths = []
+            for f in raw:
+                if isinstance(f, bytes):
+                    decoded = None
+                    for enc in ("utf-8", "mbcs", "gbk", "latin-1"):
+                        try:
+                            decoded = f.decode(enc)
+                            break
+                        except Exception:
+                            continue
+                    if decoded is not None:
+                        file_paths.append(decoded)
+                else:
+                    file_paths.append(str(f))
+
+            try:
+                names = [os.path.basename(p) for p in file_paths[:3]]
+            except Exception:
+                names = []
+            self._drop_log(f"decoded {len(file_paths)} path(s): {names}")
+
+            if file_paths:
+                self._handle_dropped_files(file_paths, cursor_x, cursor_y)
+            self._drop_log("process_drop DONE")
+        except Exception as e:
+            self._drop_log(f"process_drop ERROR: {e}")
+            import traceback
+            self._drop_log(traceback.format_exc())
+
+    def _handle_dropped_files(self, file_paths, cursor_x, cursor_y):
+        """Process dropped files on the Tk loop (off the windnd callback)."""
+        try:
+            self._drop_log("handle_dropped_files START")
+            # Split the drop into audio vs image by extension.
+            audio_exts = {p.lstrip("*").lower() for p in SUPPORTED_FORMATS}
+            image_exts = {".png", ".jpg", ".jpeg", ".jfif", ".gif", ".bmp", ".ico"}
+            audio_files = [
+                f for f in file_paths
+                if Path(f).suffix.lower() in audio_exts and os.path.isfile(f)
+            ]
+            image_files = [
+                f for f in file_paths
+                if Path(f).suffix.lower() in image_exts and os.path.isfile(f)
+            ]
+
+            target_slot = None
+            if cursor_x is not None and cursor_y is not None:
+                target_slot = self._find_slot_at_position(cursor_x, cursor_y)
+
+            # ---- Audio files → create new sound slots (name from filename) ---
+            self._drop_log(f"classified: {len(audio_files)} audio, {len(image_files)} image")
+
+            if audio_files:
+                target_tab = self.current_tab_idx
+                first_target = None
+                if target_slot is not None:
+                    t_tab, t_slot = target_slot
+                    target_tab = t_tab
+                    if t_slot not in self.tabs[t_tab].slots:
+                        first_target = t_slot
+                self._import_dropped_audio(audio_files, target_tab, first_target)
+                return
+
+            # ---- Image files → apply to the slot under the cursor ------------
+            if not image_files:
+                self.status_var.set("Drop a sound or image file onto a slot")
+                return
+
+            image_path = image_files[0]
+            if target_slot is None:
+                self.status_var.set("Drop the image onto a sound slot")
+                return
+
+            tab_idx, slot_idx = target_slot
+            slot = self.tabs[tab_idx].slots.get(slot_idx)
+            if not slot:
+                self.status_var.set("Drop the image onto a filled sound slot")
+                return
+
+            local_path = self._copy_image_to_storage(image_path)
+            slot.image_path = local_path
+            self._update_slot_button_for_tab(tab_idx, slot_idx)
+            if tab_idx == self.current_tab_idx:
+                self._update_slot_button(slot_idx)
+            self._save_config()
+            self.status_var.set(f"Image set for: {slot.name}")
+        except Exception as e:
+            try:
+                print(f"[gui] _handle_dropped_files error: {e}")
+                self.status_var.set("Couldn't handle the dropped file(s)")
+            except Exception:
+                pass
+
+    def _import_dropped_audio(self, audio_files, target_tab: int, first_target):
+        """Create slots for dropped audio files (runs on the Tk loop, off the
+        windnd drop callback — see _on_files_dropped)."""
+        added = 0
+        for i, audio_path in enumerate(audio_files):
+            try:
+                self._drop_log(f"importing [{i}] {os.path.basename(audio_path)}")
+                title = Path(audio_path).stem
+                self._create_slot_from_audio_file(
+                    audio_path,
+                    title,
+                    target_tab,
+                    remove_source=False,
+                    open_config=False,
+                    prefer_slot_idx=first_target if i == 0 else None,
+                )
+                added += 1
+                self._drop_log(f"imported [{i}] OK")
+            except Exception as e:
+                self._drop_log(f"import [{i}] FAILED: {e}")
+        # Persist immediately so a later crash can't lose these additions.
+        try:
+            self._flush_save_config()
+        except Exception:
+            pass
+        try:
+            if added:
+                self.status_var.set(
+                    f"Added {added} sound{'s' if added != 1 else ''} from drop"
+                )
             else:
-                file_paths.append(str(f))
-
-        if not file_paths:
-            return
-
-        # Find image files among the dropped files
-        image_exts = {".png", ".jpg", ".jpeg", ".jfif", ".gif", ".bmp", ".ico"}
-        image_files = [
-            f for f in file_paths if Path(f).suffix.lower() in image_exts and os.path.isfile(f)
-        ]
-
-        if not image_files:
-            self.status_var.set("Drop an image file onto a sound slot")
-            return
-
-        image_path = image_files[0]  # Use first image
-
-        # Find which slot is under the cursor
-        target_slot = self._find_slot_at_position(cursor_x, cursor_y)
-        if target_slot is None:
-            self.status_var.set("Drop the image onto a sound slot")
-            return
-
-        tab_idx, slot_idx = target_slot
-        tab = self.tabs[tab_idx]
-        slot = tab.slots.get(slot_idx)
-
-        if not slot:
-            self.status_var.set("Drop the image onto a filled sound slot")
-            return
-
-        # Copy image to local storage and assign to slot
-        local_path = self._copy_image_to_storage(image_path)
-        slot.image_path = local_path
-
-        # Update the slot appearance
-        self._update_slot_button_for_tab(tab_idx, slot_idx)
-        if tab_idx == self.current_tab_idx:
-            self._update_slot_button(slot_idx)
-
-        self._save_config()
-        self.status_var.set(f"Image set for: {slot.name}")
+                self.status_var.set("Couldn't add the dropped sound(s)")
+        except Exception:
+            pass
 
     def _find_slot_at_position(self, screen_x: int, screen_y: int):
         """Find slot under screen coordinates. Returns (tab_idx, slot_idx) or None."""
@@ -11099,8 +12544,14 @@ class SoundboardApp:
         target_tab_idx: int,
         remove_source: bool = False,
         open_config: bool = True,
+        prefer_slot_idx: Optional[int] = None,
     ):
-        """Add an audio file to the cache and optionally open the configure dialog."""
+        """Add an audio file to the cache and optionally open the configure dialog.
+
+        ``prefer_slot_idx`` lets a drag-and-drop drop land the sound on the exact
+        empty block the user aimed at; if it's already filled (or None) we fall
+        back to the first empty slot.
+        """
         try:
             preload_now = not self._is_long_audio_file(file_path)
             local_path = self.sound_cache.add_sound(file_path, preload=preload_now)
@@ -11121,10 +12572,13 @@ class SoundboardApp:
             target_tab_idx = self.current_tab_idx
         tab = self.tabs[target_tab_idx]
 
-        # Find first empty slot in the target tab (or grow)
-        slot_idx = 0
-        while slot_idx in tab.slots:
-            slot_idx += 1
+        # Drop target wins if it's free; otherwise first empty slot (or grow).
+        if prefer_slot_idx is not None and prefer_slot_idx not in tab.slots:
+            slot_idx = prefer_slot_idx
+        else:
+            slot_idx = 0
+            while slot_idx in tab.slots:
+                slot_idx += 1
 
         tab.slots[slot_idx] = SoundSlot(
             name=title,
@@ -11153,6 +12607,293 @@ class SoundboardApp:
             remove_source=True,
             open_config=True,
         )
+
+    def _current_window_geometry(self) -> str:
+        """Return the main window geometry string ("WxH+X+Y") for persistence."""
+        try:
+            return self.root.winfo_geometry()
+        except Exception:
+            return ""
+
+    def _restore_window_geometry(self, geo: str):
+        """Apply a saved geometry, clamped so the window can't open off-screen.
+
+        Parses Tk's ``WxH+X+Y`` form with a regex (X/Y may be negative on
+        multi-monitor setups). Size and position are clamped to the WHOLE
+        virtual desktop (all monitors), not just the primary screen — otherwise
+        a window saved on a secondary monitor gets yanked back to screen 1 on
+        the next launch.
+        """
+        try:
+            m = re.match(r"^\s*(\d+)x(\d+)(?:([+-]\d+)([+-]\d+))?\s*$", geo)
+            if not m:
+                return
+            w_i, h_i = int(m.group(1)), int(m.group(2))
+            vx, vy, vw, vh = self._virtual_screen_bounds()
+            w_i = max(480, min(w_i, vw))
+            h_i = max(360, min(h_i, vh))
+            new_geo = f"{w_i}x{h_i}"
+            if m.group(3) is not None and m.group(4) is not None:
+                px_i, py_i = int(m.group(3)), int(m.group(4))
+                # Keep a generous chunk (and the title bar) on-screen, anywhere
+                # across the virtual desktop span.
+                px_i = max(vx, min(px_i, vx + vw - 120))
+                py_i = max(vy, min(py_i, vy + vh - 80))
+                new_geo = f"{w_i}x{h_i}+{px_i}+{py_i}"
+            self.root.geometry(new_geo)
+        except Exception:
+            pass
+
+    def _virtual_screen_bounds(self):
+        """Return (x, y, w, h) of the whole virtual desktop (ALL monitors).
+
+        Used so dialog clamping doesn't yank a window back to the primary
+        monitor when the app lives on a secondary one.
+        """
+        try:
+            import ctypes
+
+            u = ctypes.windll.user32
+            # SM_XVIRTUALSCREEN=76, SM_YVIRTUALSCREEN=77, SM_CXVIRTUALSCREEN=78,
+            # SM_CYVIRTUALSCREEN=79
+            vw = u.GetSystemMetrics(78)
+            vh = u.GetSystemMetrics(79)
+            if vw > 0 and vh > 0:
+                return (u.GetSystemMetrics(76), u.GetSystemMetrics(77), vw, vh)
+        except Exception:
+            pass
+        return (0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight())
+
+    def _center_dialog_over_root(self, dialog, w: int, h: int):
+        """Position a Toplevel centered over the main window.
+
+        Keeps pop-up dialogs visually attached to the app instead of appearing
+        at a random screen corner — and, crucially, on the SAME monitor as the
+        app (clamping uses the full virtual desktop, not just the primary
+        screen, so a secondary-monitor app no longer flings dialogs back to
+        screen 1).
+        """
+        try:
+            self.root.update_idletasks()
+            rx = self.root.winfo_rootx()
+            ry = self.root.winfo_rooty()
+            rw = self.root.winfo_width()
+            rh = self.root.winfo_height()
+            if rw <= 1 or rh <= 1:  # not realized yet — fall back to screen center
+                rx, ry = 0, 0
+                rw, rh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+            x = rx + (rw - w) // 2
+            y = ry + (rh - h) // 3  # a touch above true-center reads better
+            vx, vy, vw, vh = self._virtual_screen_bounds()
+            x = max(vx, min(x, vx + vw - w))
+            y = max(vy, min(y, vy + vh - h))
+            dialog.geometry(f"{w}x{h}+{x}+{y}")
+        except Exception:
+            try:
+                dialog.geometry(f"{w}x{h}")
+            except Exception:
+                pass
+
+    def _scaffold_dialog(
+        self,
+        title: str,
+        width: int,
+        height: int,
+        *,
+        subtitle: Optional[str] = None,
+        accent: Optional[str] = None,
+        min_width: Optional[int] = None,
+        min_height: Optional[int] = None,
+        modal: bool = True,
+        on_close=None,
+    ):
+        """Create a standardized dialog and return ``(dialog, body, footer, accent_bar)``.
+
+        This is the single, robust scaffold every settings-style dialog should
+        use. It lays out three regions with a grid:
+
+        * **header** (row 0, fixed) — accent bar + title/subtitle + a ✕ close
+          button.
+        * **body**  (row 1, weight=1) — a :class:`CTkScrollableFrame` that grows
+          to fill spare space and *scrolls* when content exceeds the window.
+        * **footer** (row 2, fixed) — pinned to the bottom so action buttons are
+          **never** clipped, no matter how tall the body content gets.
+
+        Because the footer is pinned and the body scrolls, adding new fields in
+        the future can't push the Save/Cancel buttons off-screen (the exact bug
+        that made the old Edit-Tab window "hide parts" when small). Callers fill
+        ``body`` with cards and add buttons to ``footer``.
+
+        ``accent_bar`` is returned so callers can live-recolour the header strip
+        (e.g. when the colour picker changes).
+        """
+        dialog = ctk.CTkToplevel(self.root)
+        dialog.title(title)
+        dialog.configure(fg_color=COLORS["bg_dark"])
+        mw = min_width if min_width is not None else min(width, 400)
+        mh = min_height if min_height is not None else min(height, 360)
+        dialog.minsize(mw, mh)
+        dialog.transient(self.root)
+        if modal:
+            try:
+                dialog.grab_set()
+            except Exception:
+                pass
+        self._center_dialog_over_root(dialog, width, height)
+        dialog.after(10, lambda: dialog.focus_force())
+
+        close_cb = on_close or dialog.destroy
+
+        dialog.grid_rowconfigure(1, weight=1)
+        dialog.grid_columnconfigure(0, weight=1)
+
+        # ---- Header (fixed) ------------------------------------------------
+        header = ctk.CTkFrame(dialog, fg_color=COLORS["bg_medium"], corner_radius=0, height=60)
+        header.grid(row=0, column=0, sticky="ew")
+        header.grid_propagate(False)
+        header.grid_columnconfigure(1, weight=1)
+
+        accent_bar = ctk.CTkFrame(
+            header, fg_color=(accent or COLORS["blurple"]), corner_radius=3, width=6
+        )
+        accent_bar.grid(row=0, column=0, rowspan=2, sticky="ns", padx=(16, 12), pady=14)
+
+        title_font = ctk.CTkFont(family=FONTS["family"], size=FONTS["size_lg"], weight="bold")
+        title_lbl = ctk.CTkLabel(
+            header, text=title, font=title_font,
+            text_color=COLORS["text_primary"], anchor="w",
+        )
+        if subtitle:
+            title_lbl.grid(row=0, column=1, sticky="sw", pady=(11, 0))
+            ctk.CTkLabel(
+                header, text=subtitle, font=self._font_xs,
+                text_color=COLORS["text_muted"], anchor="w",
+            ).grid(row=1, column=1, sticky="nw", pady=(0, 11))
+        else:
+            title_lbl.grid(row=0, column=1, rowspan=2, sticky="w")
+
+        ctk.CTkButton(
+            header, text="✕", width=34, height=34, corner_radius=8,
+            command=close_cb, fg_color="transparent",
+            hover_color=COLORS["bg_light"], text_color=COLORS["text_muted"],
+            font=self._font_sm_bold,
+        ).grid(row=0, column=2, rowspan=2, padx=(8, 12))
+
+        # ---- Body (scrolls, grows) -----------------------------------------
+        body = ctk.CTkScrollableFrame(dialog, fg_color=COLORS["bg_dark"], corner_radius=0)
+        body.grid(row=1, column=0, sticky="nsew", padx=14, pady=(12, 8))
+        body.grid_columnconfigure(0, weight=1)
+
+        # ---- Footer (pinned) -----------------------------------------------
+        footer = ctk.CTkFrame(dialog, fg_color=COLORS["bg_medium"], corner_radius=0)
+        footer.grid(row=2, column=0, sticky="ew")
+
+        dialog.bind("<Escape>", lambda _e: close_cb())
+        return dialog, body, footer, accent_bar
+
+    def _attach_click_outside_close(self, dialog, on_close, ignore_widget=None):
+        """Auto-dismiss *dialog* when the user clicks the main window outside it.
+
+        Used by lightweight popups/dialogs the user expects to "just close" when
+        they click away (no X / Apply needed). The dialog must NOT be grab_set
+        (modal) for this to fire.
+
+        A SINGLE shared ``<Button-1>`` handler is installed on the root window
+        once and dispatches to whatever dialog is currently armed — this avoids
+        Tkinter's ``unbind(seq, funcid)`` quirk (which can clobber other
+        bindings) and binding accumulation across many dialog opens.
+
+        ``ignore_widget`` (e.g. the toggle button that opened the popup) is left
+        out so clicking it doesn't fight the button's own open/close command.
+        """
+        if not getattr(self, "_outside_click_bound", False):
+            try:
+                self.root.bind("<Button-1>", self._dispatch_outside_click, add="+")
+                self._outside_click_bound = True
+            except Exception:
+                pass
+
+        # Disarm during the click that's opening the dialog.
+        self._outside_click_target = None
+
+        def _clear(event=None):
+            # CRITICAL: <Destroy> bound on a Toplevel ALSO fires for every child
+            # widget that gets destroyed (e.g. the colour picker rebuilding its
+            # saved swatches). Only disarm when the DIALOG itself is destroyed,
+            # otherwise the click-outside silently stops working after any child
+            # teardown.
+            if event is not None and getattr(event, "widget", None) is not dialog:
+                return
+            tgt = getattr(self, "_outside_click_target", None)
+            if tgt is not None and tgt[0] is dialog:
+                self._outside_click_target = None
+
+        try:
+            dialog.bind("<Destroy>", _clear, add="+")
+        except Exception:
+            pass
+
+        def _arm():
+            try:
+                if dialog.winfo_exists():
+                    self._outside_click_target = (dialog, on_close, ignore_widget)
+            except Exception:
+                pass
+
+        dialog.after(250, _arm)
+
+    def _dispatch_outside_click(self, event=None):
+        """Shared root <Button-1> handler — close the armed click-outside dialog."""
+        tgt = getattr(self, "_outside_click_target", None)
+        if not tgt:
+            return
+        dialog, on_close, ignore_widget = tgt
+        try:
+            if not dialog.winfo_exists():
+                self._outside_click_target = None
+                return
+        except Exception:
+            self._outside_click_target = None
+            return
+        # Skip if the click landed on the widget that owns the dialog (its
+        # toggle button), so its own command can handle open/close.
+        if ignore_widget is not None and event is not None:
+            cur = getattr(event, "widget", None)
+            while cur is not None:
+                if cur is ignore_widget:
+                    return
+                try:
+                    cur = cur.master
+                except Exception:
+                    break
+        # The handler is bound on root, so any click reaching it is on the main
+        # window (outside the separate dialog/popup toplevel).
+        self._outside_click_target = None
+        try:
+            on_close()
+        except Exception:
+            pass
+
+    def _bind_window_geometry_autosave(self):
+        """Persist window size/position shortly after the user stops resizing."""
+        try:
+            self.root.bind("<Configure>", self._on_root_configure_geometry, add="+")
+        except Exception:
+            pass
+
+    def _on_root_configure_geometry(self, event=None):
+        """Debounced geometry save — only for top-level resize/move events."""
+        # <Configure> fires for child widgets too; ignore those.
+        if event is not None and getattr(event, "widget", None) is not self.root:
+            return
+        if not getattr(self, "root", None):
+            return
+        if getattr(self, "_geometry_save_after_id", None):
+            try:
+                self.root.after_cancel(self._geometry_save_after_id)
+            except Exception:
+                pass
+        self._geometry_save_after_id = self.root.after(700, self._save_config)
 
     def _save_config(self):
         """Debounced save. Actual disk I/O happens in `_save_config_now()`.
@@ -11186,6 +12927,12 @@ class SoundboardApp:
     def _save_config_now(self):
         """Write configuration to JSON file using atomic write to prevent corruption."""
         self._save_after_id = None
+        # DATA SAFETY: never overwrite the config if we didn't load it cleanly,
+        # and never write an empty tab list. Either would wipe the user's sounds.
+        if not getattr(self, "_config_loaded_ok", False):
+            return
+        if not getattr(self, "tabs", None):
+            return
         config = {
             "tabs": [t.to_dict() for t in self.tabs],
             "current_tab": self.current_tab_idx,
@@ -11211,6 +12958,8 @@ class SoundboardApp:
                 self.master_volume_var.get() if hasattr(self, "master_volume_var") else 100
             ),
             "custom_groups": self._custom_groups,
+            "custom_colors": list(getattr(self, "_custom_colors", []) or []),
+            "window_geometry": self._current_window_geometry(),
             "youtube_cookies_path": getattr(self, "_youtube_cookies_path", "") or "",
             "youtube_cookies_browser": getattr(self, "_youtube_cookies_browser", "") or "",
             "noise_suppression": (
@@ -11218,6 +12967,12 @@ class SoundboardApp:
             ),
             "noise_suppression_strength": (
                 self.ns_strength_var.get() if hasattr(self, "ns_strength_var") else 85
+            ),
+            # Live soundboard density (slots per row).
+            "grid_columns": int(self.grid_columns),
+            # Real-time mic voice changer (preset + per-effect params).
+            "voice_changer": (
+                self.voice_fx.to_dict() if hasattr(self, "voice_fx") else {}
             ),
             "recording_dir": (
                 self.recording_dir_var.get() if hasattr(self, "recording_dir_var") else ""
@@ -11237,6 +12992,14 @@ class SoundboardApp:
         # Atomic write: write to temp file first, then rename
         temp_file = CONFIG_FILE + ".tmp"
         try:
+            # Keep a one-version-old backup so the user can always recover the
+            # previous good config if something ever goes wrong.
+            if os.path.exists(CONFIG_FILE):
+                try:
+                    shutil.copy2(CONFIG_FILE, CONFIG_FILE + ".bak")
+                except Exception:
+                    pass
+
             with open(temp_file, "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
 
@@ -11255,6 +13018,8 @@ class SoundboardApp:
         if not os.path.exists(CONFIG_FILE):
             # Create default tab
             self.tabs = [SoundTab(name="Main", emoji="🎵")]
+            # Fresh install: safe to save the new default config.
+            self._config_loaded_ok = True
             # Defer the slot-grid build so the window can paint first.
             self.root.after(1, self._build_all_tab_widgets)
             self._refresh_tab_bar()
@@ -11344,6 +13109,25 @@ class SoundboardApp:
             if hasattr(self, "ns_strength_var"):
                 self.ns_strength_var.set(ns_strength)
 
+            # Load soundboard density (slots per row). Read BEFORE the deferred
+            # _build_all_tab_widgets runs, so the grid builds at the saved size.
+            try:
+                self.grid_columns = max(
+                    self.GRID_COLUMNS_MIN,
+                    min(self.GRID_COLUMNS_MAX, int(config.get("grid_columns", self.grid_columns))),
+                )
+            except Exception:
+                pass
+            self._update_grid_cols_label()
+
+            # Load voice changer settings into the GUI-side model, then sync the
+            # card controls to match. The model is applied to the mixer on start.
+            try:
+                self.voice_fx.load_dict(config.get("voice_changer", {}) or {})
+            except Exception:
+                pass
+            self._sync_voice_card_from_model()
+
             # Load Now Playing panel settings
             now_playing_visible = config.get("now_playing_visible", False)
 
@@ -11357,6 +13141,22 @@ class SoundboardApp:
             # Load custom groups
             self._custom_groups = config.get("custom_groups", [])
             self._refresh_group_combo()
+
+            # Load saved custom colors (hand-mixed colours kept for reuse).
+            saved_colors = config.get("custom_colors", []) or []
+            if isinstance(saved_colors, list):
+                self._custom_colors = [
+                    c for c in saved_colors if isinstance(c, str) and c.startswith("#")
+                ]
+
+            # Restore the saved window size/position. Deferred so it wins over
+            # the startup min-size pass, and validated so an off-screen saved
+            # position (e.g. a monitor that's now unplugged) can't hide the app.
+            saved_geo = config.get("window_geometry")
+            if isinstance(saved_geo, str) and "x" in saved_geo:
+                # after(80) so this runs AFTER _finalize_window_size (after 50),
+                # making the user's saved size the final word.
+                self.root.after(80, lambda g=saved_geo: self._restore_window_geometry(g))
 
             # Load YouTube downloader cookies path
             self._youtube_cookies_path = config.get("youtube_cookies_path", "") or ""
@@ -11399,6 +13199,9 @@ class SoundboardApp:
             self._register_hotkeys()
             self._register_hover_preview_binding()
 
+            # Config loaded successfully — saving is now safe.
+            self._config_loaded_ok = True
+
             # Auto-start the stream if enabled and devices are selected
             if auto_start and self.input_var.get() and self.output_var.get():
                 self.root.after(100, self._auto_start_stream)
@@ -11412,7 +13215,10 @@ class SoundboardApp:
 
         except Exception as e:
             print(f"Error loading config: {e}")
-            # Create default tab on error
+            # The config file EXISTS but failed to load. Keep _config_loaded_ok
+            # False so we never overwrite (and lose) it — show an empty default
+            # board this session, but leave the real file on disk intact.
+            self._config_loaded_ok = False
             self.tabs = [SoundTab(name="Main", emoji="🎵")]
             self.root.after(1, self._build_all_tab_widgets)
             self._refresh_tab_bar()
@@ -11426,28 +13232,54 @@ class SoundboardApp:
                 self.mixer.set_monitor_enabled(self.monitor_var.get())
 
     def _preload_sounds(self):
-        """Preload all configured sounds into memory cache in a background thread."""
-        sound_paths = []
+        """Warm the audio cache in the background — GENTLY.
+
+        Playback already lazy-loads any uncached sound on first trigger
+        (``AudioMixer.play_sound`` → ``get_sound_data`` → ``_load_into_cache``),
+        so this is purely a warm-up to remove the small first-play decode delay.
+        The old version loaded all sounds as fast as possible, which pegged a
+        core (decode + 48 kHz resample) for ~10s and janked startup. This one:
+
+        * skips LONG files (big to resample; fine to lazy-load on first play),
+        * paces itself with a tiny sleep between files so it releases the GIL and
+          never starves the UI thread, and
+        * is started ~2s after launch (see ``__init__``), once the UI is up.
+        """
+        paths = []
+        seen = set()
         for tab in self.tabs:
             for slot in tab.slots.values():
-                if slot.file_path:
-                    sound_paths.append(slot.file_path)
+                fp = slot.file_path
+                if fp and fp not in seen:
+                    seen.add(fp)
+                    paths.append(fp)
 
-        if sound_paths:
-            self.status_var.set(f"Loading {len(sound_paths)} sounds...")
-
-            def _do_preload():
-                self.sound_cache.preload_sounds(sound_paths)
-                try:
-                    self.root.after(
-                        0, lambda: self.status_var.set(f"Ready - {len(sound_paths)} sounds cached")
-                    )
-                except RuntimeError:
-                    pass  # Main loop not running (app closing or not started yet)
-
-            threading.Thread(target=_do_preload, daemon=True).start()
-        else:
+        if not paths:
             self.status_var.set("Ready")
+            return
+
+        def _warm():
+            done = 0
+            for fp in paths:
+                if getattr(self, "_shutting_down", False):
+                    return
+                try:
+                    if os.path.exists(fp) and not self._is_long_audio_file(fp):
+                        # Fill the cache without the extra copy get_sound_data makes.
+                        self.sound_cache._load_into_cache(fp)
+                        done += 1
+                except Exception:
+                    pass
+                # Yield so cache-warming never freezes the UI during/after startup.
+                time.sleep(0.012)
+            try:
+                self.root.after(
+                    0, lambda: self.status_var.set(f"Ready — {done} sounds cached")
+                )
+            except RuntimeError:
+                pass  # Main loop not running (app closing or not started yet)
+
+        threading.Thread(target=_warm, name="SoundWarmer", daemon=True).start()
 
     def _on_close(self):
         """Handle application close. BULLETPROOF - guarantees process termination.

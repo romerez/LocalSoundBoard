@@ -96,12 +96,14 @@ class SoundTab:
     name: str
     emoji: Optional[str] = None
     slots: Dict[int, SoundSlot] = field(default_factory=dict)
+    color: Optional[str] = None  # Custom tab accent color (hex), None = default
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
             "name": self.name,
             "emoji": self.emoji,
+            "color": self.color,
             "slots": {str(i): s.to_dict() for i, s in self.slots.items()},
         }
 
@@ -114,5 +116,6 @@ class SoundTab:
         return cls(
             name=data["name"],
             emoji=data.get("emoji"),
+            color=data.get("color"),
             slots=slots,
         )

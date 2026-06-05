@@ -8,6 +8,7 @@ pillow>=10.0.0
 pydub>=0.25.1
 imageio-ffmpeg>=0.6.0  # Bundled ffmpeg for pydub OGG/M4A/AAC support
 librosa>=0.10.0  # Time-stretching for pitch-preserving speed changes
+scipy>=1.10.0  # Biquad bandpass for the Voice Changer radio/megaphone effect (also a librosa dep)
 customtkinter>=5.2.0  # Modern UI widgets with rounded corners
 windnd>=0.0.7  # Windows drag-and-drop support for file imports
 emoji-data-python>=1.6.0  # Emoji data with categories for emoji picker

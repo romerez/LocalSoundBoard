@@ -90,14 +90,20 @@ def _render_pil(emoji: str, size: int) -> Optional["Image.Image"]:
 
     try:
         # Render at native size (much higher quality than scaling the font
-        # itself, since seguiemj's bitmaps live at this size).
-        big = Image.new("RGBA", (_NATIVE_SIZE + 16, _NATIVE_SIZE + 16), (0, 0, 0, 0))
+        # itself, since seguiemj's bitmaps live at this size). Use a generous
+        # margin on ALL sides: some color-emoji bitmaps (e.g. 🦉, 🏟️) extend
+        # well past the nominal em box, so a tight canvas clipped their tops /
+        # bottoms. The bbox crop below trims the slack back off, so the only
+        # cost of the extra padding is a few cheap transparent pixels.
+        _PAD = 48
+        canvas = _NATIVE_SIZE + _PAD * 2
+        big = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
         draw = ImageDraw.Draw(big)
         try:
-            draw.text((8, 0), emoji, font=font, embedded_color=True)
+            draw.text((_PAD, _PAD), emoji, font=font, embedded_color=True)
         except TypeError:
             # Older Pillow — fall back to monochrome.
-            draw.text((8, 0), emoji, font=font, fill=(255, 255, 255, 255))
+            draw.text((_PAD, _PAD), emoji, font=font, fill=(255, 255, 255, 255))
 
         # Crop tight to non-empty bbox so different emoji are visually centred.
         bbox = big.getbbox()
