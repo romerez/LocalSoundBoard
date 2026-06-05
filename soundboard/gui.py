@@ -2285,6 +2285,17 @@ class SoundboardApp:
         self._resize_active_until: float = 0.0
         self._ptt_stuck_since: Optional[float] = None  # PTT watchdog timestamp
         self._resize_sweep_after_id: Optional[str] = None
+        # ---- Grid virtualization (occlusion culling) ----------------------
+        # Only the slot rows in/near the scroll viewport are kept gridded; the
+        # rest are grid_remove()'d so Tk doesn't lay them out on every resize.
+        # Widgets are kept ALIVE (never destroyed), so every tab_slot_* ref,
+        # closure, playing-state hook and drag-drop target stays valid — culling
+        # only toggles visibility. Row heights are reserved (grid minsize) so the
+        # scroll height/position never collapses. Set False to fully disable and
+        # fall back to the old "all slots gridded" behaviour.
+        self._virtualize = True
+        self._slot_row_height = 0       # measured once from a live slot
+        self._cull_after_id: Optional[str] = None
         self.root.bind("<Configure>", self._on_root_configure, add="+")
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -2321,6 +2332,8 @@ class SoundboardApp:
         if time.time() < self._resize_active_until:
             self._resize_sweep_after_id = self.root.after(60, self._post_resize_sweep)
             return
+        # The viewport size changed — re-cull so the right rows are gridded.
+        self._schedule_cull(delay=30)
         dirty = (
             _SHARED_RESIZE_STATE.pop("dirty", None)
             if isinstance(_SHARED_RESIZE_STATE, dict)
@@ -2347,6 +2360,126 @@ class SoundboardApp:
         rest = widgets[end:]
         if rest:
             self.root.after(0, lambda: self._sweep_drain(rest, chunk))
+
+    # ------------------------------------------------------------------
+    # Grid virtualization (occlusion culling)
+    # ------------------------------------------------------------------
+    def _measure_slot_row_height(self) -> int:
+        """Measure one slot row's full pixel height (slot + footer + padding).
+
+        Slots are uniform, so we measure once from the live (current) tab and
+        cache it for culling every tab.
+        """
+        if self._slot_row_height > 0:
+            return self._slot_row_height
+        wrappers = self.tab_slot_wrappers.get(self.current_tab_idx, {})
+        if not wrappers:
+            return 0
+        try:
+            w0 = wrappers.get(0) or next(iter(wrappers.values()))
+            w0.update_idletasks()
+            h = w0.winfo_height()
+            if h > 20:
+                self._slot_row_height = h + UI["slot_padding"] * 2
+        except Exception:
+            pass
+        return self._slot_row_height
+
+    def _apply_row_minsizes(self, tab_idx: int):
+        """Reserve each slot row's height so culling can't collapse the scroll
+        height (which would make the scrollbar jump / hide rows)."""
+        grid = self.tab_grid_frames.get(tab_idx)
+        rh = self._measure_slot_row_height()
+        if grid is None or rh <= 0:
+            return
+        cols = max(1, int(self.grid_columns))
+        num = len(self.tab_slot_wrappers.get(tab_idx, {}))
+        num_rows = (num + cols - 1) // cols
+        for r in range(num_rows):
+            try:
+                grid.grid_rowconfigure(r, minsize=rh)
+            except Exception:
+                pass
+
+    def _visible_row_range(self):
+        """Return (first_row, last_row) of slot rows in/near the viewport, with
+        a buffer so small scroll/resize steps don't reveal un-gridded blanks."""
+        canvas = getattr(self.scrollable_grid, "_parent_canvas", None)
+        rh = self._slot_row_height
+        if canvas is None or rh <= 0:
+            return None
+        try:
+            top_frac, bottom_frac = canvas.yview()
+            box = canvas.bbox("all")
+            if not box:
+                return None
+            total_h = box[3] - box[1]
+            view_h = canvas.winfo_height()
+        except Exception:
+            return None
+        if total_h <= 0:
+            return None
+        top_y = top_frac * total_h
+        bottom_y = top_y + max(view_h, 1)
+        buf = 3  # rows of slack above & below the viewport
+        first = max(0, int(top_y // rh) - buf)
+        last = int(bottom_y // rh) + buf
+        return (first, last)
+
+    def _cull_slots(self, tab_idx: Optional[int] = None):
+        """Grid only the slot rows in/near the viewport; grid_remove the rest."""
+        if not self._virtualize:
+            return
+        if tab_idx is None:
+            tab_idx = self.current_tab_idx
+        # Never cull a tab that isn't the one on screen, or while a search/filter
+        # overlay is showing (that uses its own frame).
+        if tab_idx != self.current_tab_idx or self._search_results is not None:
+            return
+        wrappers = self.tab_slot_wrappers.get(tab_idx, {})
+        if not wrappers:
+            return
+        if self._slot_row_height <= 0:
+            self._measure_slot_row_height()
+        # Always (re)reserve row heights before culling so a tab built in the
+        # background (before the row height was known) can't collapse its scroll
+        # height when its off-screen rows are removed. Cheap + idempotent.
+        self._apply_row_minsizes(tab_idx)
+        rng = self._visible_row_range()
+        if rng is None:
+            return
+        first, last = rng
+        cols = max(1, int(self.grid_columns))
+        for i, wrapper in wrappers.items():
+            row = i // cols
+            should_show = first <= row <= last
+            try:
+                mapped = wrapper.winfo_ismapped()
+                if should_show and not mapped:
+                    wrapper.grid()
+                elif (not should_show) and mapped:
+                    wrapper.grid_remove()
+            except Exception:
+                pass
+
+    def _schedule_cull(self, delay: int = 60):
+        """Debounced cull — coalesces bursts of scroll/resize events."""
+        if not self._virtualize:
+            return
+        if self._cull_after_id is not None:
+            try:
+                self.root.after_cancel(self._cull_after_id)
+            except Exception:
+                pass
+
+        def _run():
+            self._cull_after_id = None
+            try:
+                self._cull_slots()
+            except Exception:
+                pass
+
+        self._cull_after_id = self.root.after(delay, _run)
 
     def _setup_styles(self):
         """Configure ttk styles for Discord-like appearance (legacy support)."""
@@ -4587,6 +4720,8 @@ class SoundboardApp:
         except Exception:
             pass
         self._currently_shown_tab = tab_idx
+        # Re-cull for the newly shown tab (its viewport/scroll just changed).
+        self._schedule_cull(delay=50)
 
     def _switch_tab(self, tab_idx: int):
         """Switch to a different tab using tkraise() for instant switching."""
@@ -5458,6 +5593,15 @@ class SoundboardApp:
                 canvas.bind_all("<MouseWheel>", self._on_soundboard_mousewheel, add="+")
             except Exception:
                 pass
+        # Re-cull when the user drags the scrollbar (the wheel path is handled in
+        # _on_soundboard_mousewheel). Covers virtualization for scrollbar scrolls.
+        scrollbar = getattr(self.scrollable_grid, "_scrollbar", None)
+        if scrollbar is not None:
+            try:
+                scrollbar.bind("<B1-Motion>", lambda _e: self._schedule_cull(40), add="+")
+                scrollbar.bind("<ButtonRelease-1>", lambda _e: self._schedule_cull(40), add="+")
+            except Exception:
+                pass
 
     def _on_soundboard_mousewheel(self, event):
         """Scroll the soundboard faster while the pointer is over it.
@@ -5510,6 +5654,8 @@ class SoundboardApp:
                 direction * notches * self._get_scroll_units_per_notch(),
                 "units",
             )
+            # Bring newly-revealed slot rows into existence (virtualization).
+            self._schedule_cull(delay=40)
             return "break"
         except Exception:
             return None
@@ -5802,6 +5948,13 @@ class SoundboardApp:
                 tab_grid.grid_remove()
             except Exception:
                 pass
+
+        # Virtualization: reserve row heights now, and cull the current tab once
+        # it's laid out (non-current tabs are culled when first shown).
+        if self._virtualize:
+            self._apply_row_minsizes(tab_idx)
+            if tab_idx == self.current_tab_idx:
+                self._schedule_cull(delay=40)
 
     def _show_slot_menu(self, tab_idx: int, slot_idx: int):
         """Show a popup menu with Preview and Edit options for a slot.
