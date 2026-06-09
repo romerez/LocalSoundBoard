@@ -90,6 +90,77 @@ def _migrate_groups(data: Dict[str, Any]) -> List[str]:
 
 
 @dataclass
+class PersonGroup:
+    """A named group of sounds inside a Person's mini-soundboard (e.g. "Hi",
+    "Bye", "lol"). Each sound is a full SoundSlot so it reuses the same
+    playback options + serialization as the main board."""
+
+    name: str
+    # Stable shared-group identity. Groups are shared across ALL people (every
+    # person has the same set of groups; only the SOUNDS inside differ), so a
+    # group's name/icon/colour and create/edit/delete/reorder are matched across
+    # people by this id (survives renames). Assigned during consolidation.
+    id: Optional[str] = None
+    color: Optional[str] = None  # Optional accent for the group header / chips
+    emoji: Optional[str] = None  # Optional icon glyph for the group header
+    collapsed: bool = False      # Collapsed (header only) to save space
+    sounds: List[SoundSlot] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "color": self.color,
+            "emoji": self.emoji,
+            "collapsed": self.collapsed,
+            "sounds": [s.to_dict() for s in self.sounds],
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "PersonGroup":
+        return cls(
+            name=data.get("name", "Group"),
+            id=data.get("id"),
+            color=data.get("color"),
+            emoji=data.get("emoji"),
+            collapsed=bool(data.get("collapsed", False)),
+            sounds=[SoundSlot.from_dict(s) for s in data.get("sounds", [])],
+        )
+
+
+@dataclass
+class Person:
+    """A person you keep a dedicated mini-soundboard for. Owns their own groups
+    of sounds, independent of the main tabs (sounds may be added from files or
+    copied in from existing main-board slots)."""
+
+    name: str
+    color: Optional[str] = None  # Accent colour for the person's header/avatar
+    emoji: Optional[str] = None  # Optional avatar glyph
+    image_path: Optional[str] = None  # Optional avatar picture (shown as a circle)
+    groups: List[PersonGroup] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "color": self.color,
+            "emoji": self.emoji,
+            "image_path": self.image_path,
+            "groups": [g.to_dict() for g in self.groups],
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Person":
+        return cls(
+            name=data.get("name", "Person"),
+            color=data.get("color"),
+            emoji=data.get("emoji"),
+            image_path=data.get("image_path"),
+            groups=[PersonGroup.from_dict(g) for g in data.get("groups", [])],
+        )
+
+
+@dataclass
 class SoundTab:
     """Represents a tab containing sound slots."""
 

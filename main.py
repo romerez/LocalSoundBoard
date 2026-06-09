@@ -62,6 +62,15 @@ logging.basicConfig(
 
 from soundboard import SoundboardApp
 
+# TEMPORARY profiling harness. Completely inert unless the env var LSB_PERF is
+# set (e.g. `set LSB_PERF=1` before launch). Remove this block + perf_probe.py
+# when profiling is done.
+try:
+    from soundboard import perf_probe
+    perf_probe.install()
+except Exception:
+    pass
+
 
 def main():
     app = SoundboardApp()

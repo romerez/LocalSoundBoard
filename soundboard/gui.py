@@ -20,7 +20,14 @@ import customtkinter as ctk
 import sounddevice as sd
 from PIL import Image, ImageDraw, ImageFont, ImageTk
 
-from .audio import AudioMixer, SoundCache, Recorder
+from .audio import (
+    AudioMixer,
+    SoundCache,
+    Recorder,
+    HUGE_AUDIO_SECONDS,
+    probe_duration,
+    decode_overview,
+)
 from .constants import (
     ALL_SLOT_COLORS,
     COLORS,
@@ -34,8 +41,10 @@ from .constants import (
     get_text_color_for_bg,
 )
 from .color_picker import SlickColorPicker
-from .editor import SoundEditor
-from .models import SoundSlot, SoundTab
+from .rtl import to_display as _rtl_to_display, is_rtl_dominant as _rtl_is_dominant
+from .editor import SoundEditor, LongAudioPicker
+from .person_board import PersonContext, PersonHub, PersonPopout
+from .models import SoundSlot, SoundTab, Person, PersonGroup
 from .voice_fx import VoiceChanger
 from .slot_widget import (
     ButtonProxy,
@@ -86,9 +95,16 @@ try:
                 self._current_width = new_w
                 self._current_height = new_h
                 if time.time() < _SHARED_RESIZE_STATE["until"]:
-                    # Defer the redraw: tag widget for later sweep.
-                    _SHARED_RESIZE_STATE.setdefault("dirty", set()).add(self)  # type: ignore[arg-type]
-                    return
+                    # Defer ONLY widgets in the main window. Its post-resize sweep
+                    # (_post_resize_sweep) is the only thing that repaints the
+                    # deferred set, and it runs for the main window alone — so
+                    # deferring a separate toplevel's widgets (the People hub /
+                    # pop-outs) would leave them PERMANENTLY blank ("stuck / design
+                    # breaking"). Those draw immediately instead.
+                    _main = _SHARED_RESIZE_STATE.get("root")
+                    if _main is None or self.winfo_toplevel() is _main:
+                        _SHARED_RESIZE_STATE.setdefault("dirty", set()).add(self)  # type: ignore[arg-type]
+                        return
                 self._draw(no_color_updates=True)
         except Exception:
             # Fall back to the original behavior on any unexpected issue
@@ -110,20 +126,19 @@ _RTL_PATTERN = re.compile(r"[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F]")
 
 def _is_rtl_dominant(text: str) -> bool:
     """Return True if the text is primarily RTL (more Hebrew/Arabic than Latin chars)."""
-    if not text:
-        return False
-    rtl_count = len(_RTL_PATTERN.findall(text))
-    ltr_count = len(re.findall(r"[a-zA-Z]", text))
-    return rtl_count > 0 and rtl_count >= ltr_count
+    return _rtl_is_dominant(text)
 
 
 def _fix_rtl_text(text: str) -> str:
     """
     Return text unchanged.
 
-    Previous code attempted to pre-reverse RTL text for Tkinter Canvas BiDi
-    behavior, but Hebrew slot labels are now displayed correctly without
-    special reversal. This helper remains for future RTL adjustments.
+    On this platform Tk renders RTL (Hebrew/Arabic) correctly in DISPLAY
+    widgets (Label / Button / Canvas) on its own — so reordering here would
+    DOUBLE-reverse and mirror text that was already right. Kept as a no-op
+    pass-through hook (all slot/label/tab call sites route through it) in case
+    a future platform needs adjustment. Editable Entry/Text widgets are the
+    ones Tk does NOT BiDi — those are handled in ``_bind_rtl_entry``.
     """
     return text
 
@@ -874,7 +889,7 @@ class NowPlayingPanel:
 
         name_label = ctk.CTkLabel(
             title_row,
-            text=display_name,
+            text=_fix_rtl_text(display_name),
             font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"], weight="bold"),
             text_color=COLORS["text_primary"],
             anchor="w",
@@ -2050,6 +2065,23 @@ class SoundboardApp:
         self.root.resizable(True, True)  # Allow resizing
         self.root.configure(fg_color=COLORS["bg_darkest"])
 
+        # Startup splash: shown immediately while we build (and hide) the main
+        # window, so launch feels instant/professional instead of a blank gap.
+        # Fully defensive — a splash failure must never block the app.
+        self._splash = None
+        self._splash_started = time.time()
+        try:
+            from .splash import SplashScreen
+
+            self.root.withdraw()  # hide the empty main window until it's ready
+            self._splash = SplashScreen(self.root, UI["window_title"], "Starting up…")
+        except Exception:
+            self._splash = None
+            try:
+                self.root.deiconify()
+            except Exception:
+                pass
+
         self.mixer: Optional[AudioMixer] = None
         self.sound_cache = SoundCache()  # Local sound storage with caching
         # Call recorder (WASAPI loopback). Lazy-created when user clicks Record.
@@ -2063,6 +2095,10 @@ class SoundboardApp:
         self._tray_hidden: bool = False
         self.tabs: List[SoundTab] = []  # List of all tabs
         self.current_tab_idx = 0  # Currently active tab index
+        # Per-person mini-soundboards (the "People" hub + pop-out windows).
+        self.persons: List[Person] = []
+        self._person_hub = None  # type: ignore[assignment]  # lazy PersonHub window
+        self._person_popouts: Dict[int, Any] = {}  # id(person) -> PersonPopout
 
         # Live, user-configurable soundboard density: how many sound slots
         # appear per row. Replaces the fixed UI["grid_columns"] constant so the
@@ -2248,7 +2284,9 @@ class SoundboardApp:
         # Ensure images directory exists
         Path(IMAGES_DIR).mkdir(exist_ok=True)
 
+        self._splash_status("Preparing interface…")
         self._setup_styles()
+        self._splash_status("Building soundboard…")
         self._create_ui()
 
         # Force the chrome (window frame, tab sidebar, action bar, status bar)
@@ -2262,7 +2300,9 @@ class SoundboardApp:
         except Exception:
             pass
 
+        self._splash_status("Loading your sounds…")
         self._load_config()
+        self._splash_status("Almost ready…")
         # Warm the audio cache LATER and gently. Playback lazy-loads any
         # uncached sound on first trigger, so this is only a warm-up — starting
         # it immediately used to peg a CPU core for ~10s and made the whole app
@@ -2272,6 +2312,11 @@ class SoundboardApp:
 
         # Let window size itself based on content, then set minimum size
         self.root.after(50, self._finalize_window_size)
+        # The splash is normally dismissed the moment the visible tab's grid is
+        # built (see _build_all_tab_widgets) so it covers the real load. This is
+        # only a SAFETY-NET fallback in case that never runs (e.g. no tabs) — the
+        # window must never stay hidden behind a stuck splash.
+        self.root.after(6000, self._dismiss_splash)
         # Persist size/position when the user resizes or moves the window.
         self._bind_window_geometry_autosave()
 
@@ -2297,6 +2342,13 @@ class SoundboardApp:
         self._slot_row_height = 0       # measured once from a live slot
         self._cull_after_id: Optional[str] = None
         self.root.bind("<Configure>", self._on_root_configure, add="+")
+        # Tell the CTk resize-defer patch which toplevel is the main window, so it
+        # only ever defers the heavy main grid — never the People hub / pop-outs
+        # (separate toplevels that this window's sweep does not repaint).
+        try:
+            _SHARED_RESIZE_STATE["root"] = self.root
+        except Exception:
+            pass
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -2489,6 +2541,57 @@ class SoundboardApp:
         style.configure("TLabel", background=COLORS["bg_dark"], foreground=COLORS["text_primary"])
         style.configure("TButton", background=COLORS["blurple"], foreground=COLORS["text_primary"])
 
+    def _splash_status(self, text: str) -> None:
+        """Update the startup splash status line and pump one animation frame.
+
+        No-op (and never raises) once the splash is gone — safe to call from
+        anywhere during construction.
+        """
+        sp = getattr(self, "_splash", None)
+        if sp is None:
+            return
+        try:
+            sp.set_status(text)
+            sp.pump()
+        except Exception:
+            pass
+
+    def _dismiss_splash(self) -> None:
+        """Reveal the main window and fade out the splash (after a minimum show)."""
+        sp = getattr(self, "_splash", None)
+        if sp is None:
+            # Splash already gone — but still guarantee the window is shown.
+            try:
+                self.root.deiconify()
+            except Exception:
+                pass
+            return
+        # Keep the splash up for a brief, deliberate minimum so it reads as
+        # intentional polish rather than a flash.
+        elapsed = time.time() - getattr(self, "_splash_started", 0.0)
+        if elapsed < 0.9:
+            try:
+                self.root.after(int((0.9 - elapsed) * 1000) + 10, self._dismiss_splash)
+            except Exception:
+                pass
+            return
+        # Reveal the (now fully built) window, then immediately re-cull so the
+        # slot grid — which was virtualized against a 1px viewport while hidden —
+        # populates for the real size BEFORE the splash fades. Without this the
+        # first frame after reveal looks empty/broken.
+        try:
+            self.root.deiconify()
+            self.root.lift()
+            self.root.update_idletasks()
+            self._cull_slots()
+        except Exception:
+            pass
+        try:
+            sp.close()
+        except Exception:
+            pass
+        self._splash = None
+
     def _finalize_window_size(self):
         """Set window size to a comfortable default that fits the layout."""
         self.root.update_idletasks()
@@ -2582,16 +2685,23 @@ class SoundboardApp:
         self.root.bind_all("<MouseWheel>", self._on_global_mousewheel, add="+")
 
     def _get_scroll_speed_multiplier(self) -> int:
-        """Return the current app-wide wheel speed multiplier."""
+        """Return the current app-wide wheel speed multiplier (slider value 1-50)."""
         try:
             value = int(self.scroll_speed_var.get())
         except Exception:
             value = 10
-        return max(1, min(30, value))
+        return max(1, min(50, value))
 
     def _get_scroll_units_per_notch(self) -> int:
-        """Translate the user-facing scroll speed into stronger Tk scroll units."""
-        return self._get_scroll_speed_multiplier() * 5
+        """Translate the user-facing scroll speed into Tk scroll units per notch.
+
+        QUADRATIC so the slider spans a huge range: 1 → 1 unit (a crawl), the
+        default 10 → 100, and 50 → 2500 (a whole page per notch — ridiculously
+        fast). A linear ``×5`` capped the top at a still-slow 150, which is why
+        even max felt sluggish.
+        """
+        m = self._get_scroll_speed_multiplier()
+        return max(1, m * m)
 
     def _update_scroll_speed_label(self, _value=None, save: bool = True):
         """Refresh the scroll speed label and persist the setting."""
@@ -3600,6 +3710,18 @@ class SoundboardApp:
             width=110,
         ).pack(side=tk.LEFT, padx=(6, 0))
 
+        ctk.CTkButton(
+            rec_path_row,
+            text="✎ Edit a recording",
+            command=self._edit_a_recording,
+            fg_color=COLORS["blurple"],
+            hover_color=COLORS["blurple_hover"],
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"], weight="bold"),
+            corner_radius=UI["button_corner_radius"],
+            height=28,
+            width=150,
+        ).pack(side=tk.LEFT, padx=(6, 0))
+
         # ============================================================
         # AFK Mode state vars (UI lives in the action-bar popup, not here)
         # ============================================================
@@ -3672,8 +3794,8 @@ class SoundboardApp:
         self.scroll_speed_slider = ctk.CTkSlider(
             scroll_row,
             from_=1,
-            to=30,
-            number_of_steps=29,
+            to=50,
+            number_of_steps=49,
             variable=self.scroll_speed_var,
             command=self._update_scroll_speed_label,
             height=16,
@@ -4362,7 +4484,13 @@ class SoundboardApp:
         Optimization: If the number of tabs hasn't changed, just update existing
         button properties instead of destroying and recreating all buttons.
         This significantly reduces lag when switching tabs.
-        """        # Lazy import — avoids touching PIL on platforms without color emoji.
+        """
+        # Keep the search "Tab" filter dropdown in sync with current tabs.
+        try:
+            self._refresh_tab_filter_combo()
+        except Exception:
+            pass
+        # Lazy import — avoids touching PIL on platforms without color emoji.
         from . import emoji_render as _er
         from PIL import Image as _PILImage
 
@@ -4469,9 +4597,10 @@ class SoundboardApp:
                 name_lbl._is_truncated = (new_text != full)  # type: ignore[attr-defined]
                 # Don't fight the marquee — it owns the text while hovering.
                 if getattr(name_lbl, "_marquee_after", None) is None:
-                    if name_lbl.cget("text") != new_text:
+                    disp = _fix_rtl_text(new_text)  # visual order for Hebrew/Arabic
+                    if name_lbl.cget("text") != disp:
                         try:
-                            name_lbl.configure(text=new_text)
+                            name_lbl.configure(text=disp)
                         except Exception:
                             pass
 
@@ -4502,7 +4631,7 @@ class SoundboardApp:
                     s = state["src"][state["offset"]:]
                     visible = _ellipsize_to_width(s, fnt, avail)
                     try:
-                        name_lbl.configure(text=visible)
+                        name_lbl.configure(text=_fix_rtl_text(visible))
                     except Exception:
                         return
                     state["offset"] = (state["offset"] + 1) % state["full_len"]
@@ -4523,7 +4652,7 @@ class SoundboardApp:
                 trunc = getattr(name_lbl, "_truncated_text", None)
                 if trunc is not None:
                     try:
-                        name_lbl.configure(text=trunc)
+                        name_lbl.configure(text=_fix_rtl_text(trunc))
                     except Exception:
                         pass
 
@@ -4548,7 +4677,7 @@ class SoundboardApp:
                 # sitting inside the rounded chip).
                 name_lbl.configure(
                     font=self._font_tab_bold if is_active else self._font_tab,
-                    fg_color="transparent",
+                    fg_color=bg,  # keep opaque-matching so reorder never ghosts
                     text_color=text_c,
                 )
             except Exception:
@@ -4560,12 +4689,12 @@ class SoundboardApp:
                     reflow()
                 except Exception:
                     try:
-                        name_lbl.configure(text=full)
+                        name_lbl.configure(text=_fix_rtl_text(full))
                     except Exception:
                         pass
             emoji_img = _tab_emoji_image(tab.emoji)
             try:
-                emoji_lbl.configure(image=emoji_img, fg_color="transparent")
+                emoji_lbl.configure(image=emoji_img, fg_color=bg)
                 emoji_lbl._emoji_image_ref = emoji_img  # type: ignore[attr-defined]
             except Exception:
                 pass
@@ -4615,10 +4744,17 @@ class SoundboardApp:
 
                 name_lbl = ctk.CTkLabel(
                     tab_frame,
-                    text=tab.name or "",
+                    text=_fix_rtl_text(tab.name or ""),
                     font=self._font_tab_bold if is_active else self._font_tab,
                     text_color=text_c,
-                    fg_color="transparent",
+                    # Opaque, matching the frame fill (NOT "transparent"): a
+                    # transparent CTkLabel caches a snapshot of the background it
+                    # sits on, so when the row reflows during tab-reorder it keeps
+                    # painting the OLD background — the neighbouring tab's text
+                    # ghosts through (the doubled labels in reorder mode). An
+                    # opaque label that matches the chip colour redraws cleanly on
+                    # move and shows no box-in-box because the colours are equal.
+                    fg_color=bg,
                     anchor="w",
                     justify="left",
                 )
@@ -4632,7 +4768,7 @@ class SoundboardApp:
                     tab_frame,
                     text="",
                     image=emoji_img,
-                    fg_color="transparent",
+                    fg_color=bg,  # opaque-matching (see name_lbl note above)
                     width=EMOJI_COL_W,
                 )
                 emoji_lbl._emoji_image_ref = emoji_img  # type: ignore[attr-defined]
@@ -5438,6 +5574,20 @@ class SoundboardApp:
         )
         header_label.pack(side=tk.LEFT)
 
+        # "People" hub — per-person mini-soundboards (pop-out windows).
+        ctk.CTkButton(
+            header_frame,
+            text="👥 People",
+            width=92,
+            height=26,
+            command=self._open_person_hub,
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_lighter"],
+            text_color=COLORS["text_primary"],
+            font=self._font_sm_bold,
+            corner_radius=8,
+        ).pack(side=tk.LEFT, padx=(12, 0))
+
         # Live grid-density control (how many slots appear per row). Lets the
         # user make the board denser (more, smaller slots) or roomier (fewer,
         # bigger slots) on the fly. Rebuilds the grid + persists the choice.
@@ -5525,6 +5675,28 @@ class SoundboardApp:
             command=self._on_filter_changed,
         )
         self._group_combo.pack(side=tk.LEFT, padx=(0, 6))
+
+        # Tab filter — restrict search results to a single tab.
+        self._filter_tab = None
+        self._filter_tab_var = tk.StringVar(value="All Tabs")
+        self._tab_filter_combo = ctk.CTkComboBox(
+            search_bar,
+            variable=self._filter_tab_var,
+            values=["All Tabs"],
+            width=130,
+            height=30,
+            fg_color=COLORS["bg_medium"],
+            border_color=COLORS["border"],
+            button_color=COLORS["bg_light"],
+            button_hover_color=COLORS["bg_lighter"],
+            dropdown_fg_color=COLORS["bg_medium"],
+            dropdown_hover_color=COLORS["bg_light"],
+            font=self._font_xs,
+            corner_radius=6,
+            state="readonly",
+            command=self._on_tab_filter_changed,
+        )
+        self._tab_filter_combo.pack(side=tk.LEFT, padx=(0, 6))
 
         self._clear_search_btn = ctk.CTkButton(
             search_bar,
@@ -6174,6 +6346,12 @@ class SoundboardApp:
         self._show_tab_only(self.current_tab_idx)
         self._update_current_tab_aliases()
 
+        # The visible tab's grid now exists — this is the real "content ready"
+        # moment, so dismiss the startup splash here (not on a blind timer).
+        # Idempotent + has its own minimum-show time, so calling it on every
+        # _build_all_tab_widgets is fine.
+        self._dismiss_splash()
+
         # Build remaining tabs in background.
         # Use after(15ms) instead of after_idle so the queue actually drains
         # in a few hundred ms — after_idle can stall indefinitely if the user
@@ -6662,6 +6840,21 @@ class SoundboardApp:
         self._filter_group = None if selected == "All Groups" else selected
         self._run_search()
 
+    def _on_tab_filter_changed(self, _value: str = ""):
+        """Called when the tab filter combobox changes."""
+        selected = self._filter_tab_var.get()
+        self._filter_tab = None if selected == "All Tabs" else selected
+        self._run_search()
+
+    def _refresh_tab_filter_combo(self):
+        """Keep the tab filter dropdown in sync with the current tabs."""
+        if hasattr(self, "_tab_filter_combo"):
+            values = ["All Tabs"] + [t.name for t in self.tabs]
+            self._tab_filter_combo.configure(values=values)
+            if self._filter_tab_var.get() not in values:
+                self._filter_tab_var.set("All Tabs")
+                self._filter_tab = None
+
     def _filter_by_group(self, group: str):
         """Apply a group filter and show the search overlay.
 
@@ -6694,17 +6887,20 @@ class SoundboardApp:
             return
         menu = tk.Menu(self.root, tearoff=0)
         for g in groups:
-            menu.add_command(label=g, command=lambda gg=g: self._filter_by_group(gg))
+            menu.add_command(label=_fix_rtl_text(g), command=lambda gg=g: self._filter_by_group(gg))
         try:
             menu.tk_popup(event.x_root, event.y_root)
         finally:
             menu.grab_release()
 
     def _clear_search(self):
-        """Clear search query and group filter, return to normal view."""
+        """Clear search query and filters, return to normal view."""
         self._search_var.set("")
         self._filter_group_var.set("All Groups")
         self._filter_group = None
+        if hasattr(self, "_filter_tab_var"):
+            self._filter_tab_var.set("All Tabs")
+        self._filter_tab = None
         self._search_query = ""
         self._hide_search_results()
 
@@ -6712,14 +6908,17 @@ class SoundboardApp:
         """Execute search across all tabs and show results."""
         query = self._search_query
         group = self._filter_group
+        tab_filter = getattr(self, "_filter_tab", None)
 
-        # If both empty, hide results and show normal grid
-        if not query and not group:
+        # If everything empty, hide results and show normal grid
+        if not query and not group and not tab_filter:
             self._hide_search_results()
             return
 
         results: List[Dict] = []
         for tab_idx, tab in enumerate(self.tabs):
+            if tab_filter and tab.name != tab_filter:
+                continue
             for slot_idx, slot in tab.slots.items():
                 # Match query against name, hotkey, emoji, groups
                 if query:
@@ -6982,7 +7181,7 @@ class SoundboardApp:
                 group_text = "  •  (no groups)"
             footer = ctk.CTkLabel(
                 wrapper,
-                text=f"{tab_info}{group_text}",
+                text=_fix_rtl_text(f"{tab_info}{group_text}"),
                 font=ctk.CTkFont(family=FONTS["family"], size=11),
                 text_color=COLORS["text_primary"],
                 fg_color=COLORS["bg_medium"],
@@ -8234,6 +8433,38 @@ class SoundboardApp:
         tab = self.tabs[tab_idx]
         if slot_idx not in tab.slots:
             return
+
+        # Cross-window drop: did the slot land on a Person group (hub/pop-out)?
+        pctx = getattr(self, "_person_ctx", None)
+        if pctx is not None:
+            try:
+                drop_widget = self.root.winfo_containing(x_root, y_root)
+            except Exception:
+                drop_widget = None
+            hit = pctx.find_drop_target(drop_widget) if drop_widget is not None else None
+            if hit is not None:
+                person, group = hit
+                slot = tab.slots[slot_idx]
+                group.sounds.append(SoundSlot.from_dict(slot.to_dict()))
+                pctx.changed(person)
+                # Offer to move (not just copy): remove the original slot but KEEP
+                # the audio file on disk, since the person's copy now references it.
+                if messagebox.askyesno(
+                    "Move sound",
+                    f"Added “{slot.name}” to {person.name} / {group.name}.\n\n"
+                    f"Also remove it from the original soundboard?",
+                    parent=self.root,
+                ):
+                    try:
+                        del tab.slots[slot_idx]
+                        self._update_slot_button_for_tab(tab_idx, slot_idx)
+                        self._register_hotkeys()
+                    except Exception:
+                        pass
+                self._save_config()
+                self.status_var.set(f"Added {slot.name} → {person.name}/{group.name}")
+                return
+
         panel = getattr(self, "now_playing_panel", None)
         if panel is None or panel.frame is None:
             return
@@ -9302,6 +9533,19 @@ class SoundboardApp:
             return
         if self._is_quick_popup_open():
             return
+        # The People hub / pop-outs are OUR windows too, so `_app_is_active`
+        # (PID-based) is True while they're focused. Without this, middle-
+        # clicking a person's sound also fires the global hover-preview on the
+        # main board behind it (the "clicks go through" bug). Only preview when
+        # the pointer is genuinely over the MAIN window.
+        try:
+            under = self.root.winfo_containing(
+                self.root.winfo_pointerx(), self.root.winfo_pointery()
+            )
+            if under is not None and under.winfo_toplevel() is not self.root:
+                return
+        except Exception:
+            pass
 
         now = time.time()
         if now - self._hover_preview_last_at < 0.15:
@@ -9812,7 +10056,7 @@ class SoundboardApp:
         # Header with slot name
         header = ctk.CTkLabel(
             main_frame,
-            text=slot.name[:20] + "…" if len(slot.name) > 20 else slot.name,
+            text=_fix_rtl_text(slot.name[:20] + "…" if len(slot.name) > 20 else slot.name),
             text_color=COLORS["text_primary"],
             font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
         )
@@ -11447,6 +11691,431 @@ class SoundboardApp:
         except Exception as e:
             messagebox.showerror("Editor Error", f"Failed to open sound editor:\n{e}")
 
+    # ------------------------------------------------------------------
+    # People — per-person mini-soundboards (hub + floating pop-outs)
+    # ------------------------------------------------------------------
+    def _person_context(self) -> PersonContext:
+        """Lazily build the shared PersonContext (so hub + pop-outs cooperate)."""
+        ctx = getattr(self, "_person_ctx", None)
+        if ctx is None:
+            ctx = PersonContext(
+                root=self.root,
+                persons=self.persons,
+                play=self._play_person_sound,
+                is_running=lambda: bool(self.mixer and self.mixer.running),
+                get_main_sounds=self._get_main_sounds_for_person,
+                persist=self._save_config,
+                choose_color=self._choose_person_color,
+                stop=self._stop_person_sound,
+                preview=self._preview_person_sound,
+                stop_preview=self._stop_person_preview,
+                scroll_units=self._get_scroll_units_per_notch,
+                get_geometry=self._get_person_window_geometry,
+                set_geometry=self._set_person_window_geometry,
+            )
+            self._person_ctx = ctx
+        return ctx
+
+    def _get_person_window_geometry(self, key: str):
+        """Saved Tk geometry for a People window (key 'hub'/'popout'), or None."""
+        return (getattr(self, "_person_window_geometry", {}) or {}).get(key)
+
+    def _set_person_window_geometry(self, key: str, geom: str):
+        """Remember a People window's size/position; persisted with the config."""
+        if not hasattr(self, "_person_window_geometry") or self._person_window_geometry is None:
+            self._person_window_geometry = {}
+        if self._person_window_geometry.get(key) == geom:
+            return  # unchanged — skip the (debounced) write
+        self._person_window_geometry[key] = geom
+        self._save_config()  # debounced
+
+    def _choose_person_color(self, parent, initial, on_pick):
+        """Modal colour dialog (the gradient studio) for people/groups/sounds."""
+        dlg = ctk.CTkToplevel(parent)
+        dlg.title("Pick a colour")
+        dlg.configure(fg_color=COLORS["bg_dark"])
+        dlg.transient(parent)
+        dlg.resizable(False, False)
+        picker = SlickColorPicker(
+            dlg, self, initial=initial, allow_none=True, default_hex=COLORS["bg_medium"]
+        )
+        picker.pack(fill="both", expand=True, padx=12, pady=12)
+        row = ctk.CTkFrame(dlg, fg_color="transparent")
+        row.pack(pady=(0, 12))
+
+        def use():
+            try:
+                on_pick(picker.get())
+            finally:
+                dlg.destroy()
+
+        ctk.CTkButton(row, text="Cancel", command=dlg.destroy, width=90,
+                      fg_color=COLORS["bg_light"], hover_color=COLORS["bg_lighter"]).pack(
+            side=tk.LEFT, padx=(0, 8))
+        ctk.CTkButton(row, text="Use colour", command=use, width=110,
+                      fg_color=COLORS["blurple"], hover_color=COLORS["blurple_hover"]).pack(
+            side=tk.LEFT)
+        try:
+            dlg.update_idletasks()
+            px, py = parent.winfo_rootx(), parent.winfo_rooty()
+            pw, ph = parent.winfo_width(), parent.winfo_height()
+            ww, wh = dlg.winfo_width(), dlg.winfo_height()
+            dlg.geometry(f"+{px + (pw - ww) // 2}+{py + max(0, (ph - wh) // 3)}")
+        except Exception:
+            pass
+        dlg.grab_set()
+
+    def _play_person_sound(self, slot: SoundSlot) -> float:
+        """Play one person-board sound through the live mixer (to Discord)."""
+        if not (self.mixer and self.mixer.running):
+            self.status_var.set("Start the audio stream first!")
+            return 0.0
+        sound_id = f"person_{id(slot)}"
+        duration = self.mixer.play_sound(
+            slot.file_path,
+            slot.volume,
+            slot.speed,
+            slot.preserve_pitch,
+            sound_id,
+            loop=slot.loop,
+            loop_count=slot.loop_count,
+            loop_delay=slot.loop_delay,
+        )
+        if duration and duration > 0:
+            self.status_var.set(f"Playing: {slot.name}")
+        return float(duration or 0.0)
+
+    def _stop_person_sound(self, slot: SoundSlot):
+        """Stop a person-board sound that's playing to Discord."""
+        try:
+            if self.mixer:
+                self.mixer.stop_sound(f"person_{id(slot)}")
+            self.status_var.set(f"Stopped: {slot.name}")
+        except Exception:
+            pass
+
+    def _preview_person_sound(self, slot: SoundSlot) -> float:
+        """Preview a person-board sound through local speakers (not Discord).
+
+        Applies the SAME gain Discord actually receives — slot volume * master
+        volume (the live mix multiplies by both; see audio._output_callback) —
+        plus a matching soft-clip, so the preview represents the call loudness
+        instead of being louder/quieter than what people hear.
+        """
+        try:
+            data = self.sound_cache.get_sound_data(slot.file_path)
+            if data is None:
+                self.status_var.set("Failed to load sound for preview")
+                return 0.0
+            try:
+                master = float(self.master_volume_var.get()) / 100.0
+            except Exception:
+                master = 1.0
+            out = data * (slot.volume * master)
+            # Mirror the mixer's soft-clip so loud sounds don't preview hotter
+            # than Discord (which clips the mix). Use the ndarray's own .clip()
+            # (numpy isn't imported in this module) so the fallback can't raise —
+            # this path runs when the stream isn't started yet (mixer is None).
+            try:
+                if self.mixer is not None:
+                    out = self.mixer._soft_clip(out)
+                else:
+                    out = out.clip(-1.0, 1.0)
+            except Exception:
+                try:
+                    out = out.clip(-1.0, 1.0)
+                except Exception:
+                    pass
+            sd.stop()
+            sd.play(out, samplerate=self.sound_cache.sample_rate, device=None)
+            self.status_var.set(f"Preview: {slot.name}")
+            return len(data) / self.sound_cache.sample_rate
+        except Exception as e:
+            self.status_var.set(f"Preview error: {e}")
+            return 0.0
+
+    def _stop_person_preview(self):
+        try:
+            sd.stop()
+        except Exception:
+            pass
+
+    def _get_main_sounds_for_person(self) -> List[tuple]:
+        """Flat list of (label, SoundSlot) for the 'add from main board' picker."""
+        out: List[tuple] = []
+        for tab in self.tabs:
+            for _idx, slot in sorted(tab.slots.items()):
+                out.append((f"{tab.name} • {slot.name}", slot))
+        return out
+
+    def _open_person_hub(self):
+        """Open (or focus) the People hub window."""
+        hub = getattr(self, "_person_hub", None)
+        try:
+            if hub is not None and hub.winfo_exists():
+                hub.deiconify()
+                hub.lift()
+                hub.focus_force()
+                return
+        except Exception:
+            pass
+        self._person_hub = PersonHub(
+            self.root, self._person_context(), on_popout=self._open_person_popout
+        )
+        # Bring it to the FRONT — otherwise it can open behind the main window.
+        try:
+            hub = self._person_hub
+            hub.lift()
+            hub.focus_force()
+            hub.attributes("-topmost", True)
+            hub.after(300, lambda: hub.winfo_exists() and hub.attributes("-topmost", False))
+        except Exception:
+            pass
+
+    def _open_person_popout(self, person: Person):
+        """Open (or focus) a floating pop-out window for a single person."""
+        key = id(person)
+        existing = self._person_popouts.get(key)
+        try:
+            if existing is not None and existing.winfo_exists():
+                existing.deiconify()
+                existing.lift()
+                existing.focus_force()
+                return
+        except Exception:
+            pass
+        self._person_popouts[key] = PersonPopout(self.root, person, self._person_context())
+
+    # ------------------------------------------------------------------
+    # Edit a recording — browse a recording, trim/cut it, optionally tag
+    # each cut to a person (cuts go to that person's "Cuts" group).
+    # ------------------------------------------------------------------
+    def _edit_a_recording(self):
+        rec_dir = ""
+        try:
+            rec_dir = self.recording_dir_var.get().strip()
+        except Exception:
+            rec_dir = ""
+        initial = rec_dir if rec_dir and os.path.isdir(rec_dir) else os.path.expanduser("~")
+        types = [("Audio", " ".join(SUPPORTED_FORMATS)), ("All files", "*.*")]
+        path = filedialog.askopenfilename(
+            parent=self.root, title="Edit a recording", initialdir=initial, filetypes=types
+        )
+        if path:
+            self._open_recording_editor(path)
+
+    def _open_recording_editor(self, file_path: str):
+        """Open the editor for a recording, routing huge/long files through the
+        section picker / off-thread decode just like the slot editor does."""
+        person_names = [p.name for p in self.persons]
+
+        def launch(preloaded):
+            try:
+                editor = SoundEditor(
+                    self.root, file_path, output_device=None,
+                    preloaded_audio=preloaded, person_names=person_names,
+                )
+                editor.show()
+                self._finish_recording_edit(editor, file_path)
+            except Exception as e:
+                messagebox.showerror("Editor Error", f"Failed to edit recording:\n{e}")
+
+        try:
+            duration = probe_duration(file_path)
+        except Exception:
+            duration = 0.0
+
+        # Huge → scan overview off-thread, then the section picker.
+        if duration > HUGE_AUDIO_SECONDS:
+            self.status_var.set("Scanning recording...")
+
+            def _scan():
+                peaks = low = None
+                err = None
+                try:
+                    peaks, low, _dur = decode_overview(file_path, duration=duration)
+                except Exception as exc:
+                    err = exc
+
+                def _done():
+                    self.status_var.set("")
+                    if err is not None or peaks is None:
+                        messagebox.showerror("Editor Error", f"Could not scan:\n{err}")
+                        return
+                    section = LongAudioPicker(
+                        self.root, file_path, duration, peaks, low, output_device=None
+                    ).show()
+                    if section is not None:
+                        launch(section)
+
+                self.root.after(0, _done)
+
+            threading.Thread(target=_scan, name="RecEditOverview", daemon=True).start()
+            return
+
+        # Long (but not huge) → decode off the UI thread.
+        if self._is_long_audio_file(file_path):
+            self.status_var.set("Preparing audio...")
+
+            def _prep():
+                prepared = None
+                err = None
+                try:
+                    prepared = SoundEditor.prepare_audio(file_path)
+                except Exception as exc:
+                    err = exc
+
+                def _done():
+                    self.status_var.set("")
+                    if err is not None or prepared is None:
+                        messagebox.showerror("Editor Error", f"Failed to prepare:\n{err}")
+                        return
+                    launch(prepared)
+
+                self.root.after(0, _done)
+
+            threading.Thread(target=_prep, name="RecEditPrepare", daemon=True).start()
+            return
+
+        launch(None)
+
+    def _finish_recording_edit(self, editor, file_path: str):
+        """Save every cut the editor produced. Cuts tagged with a person go to
+        that person's 'Cuts' group; untagged cuts become slots on the current tab."""
+        base = Path(file_path).stem
+        produced = []  # (audio, sr, title, person_name_or_None)
+
+        multi = getattr(editor, "multi_results", None) or []
+        if multi:
+            for i, item in enumerate(multi, start=1):
+                audio, sr, title = _unpack_multicut_result(item, f"{base} {i}")
+                person = item[3] if len(item) >= 4 else None
+                produced.append((audio, sr, title, person))
+        elif editor.result is not None:
+            audio, sr = editor.result
+            title = getattr(editor, "result_title", None) or base
+            produced.append((audio, sr, title, getattr(editor, "result_person", None)))
+
+        if not produced:
+            return
+
+        to_people = 0
+        to_board = 0
+        for audio, sr, title, person_name in produced:
+            try:
+                new_path = self.sound_cache.add_sound_data(audio, sr, f"{title}.wav")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to save '{title}':\n{e}")
+                continue
+            slot = SoundSlot(name=title, file_path=new_path)
+            if person_name:
+                self._add_sound_to_person(person_name, slot)
+                to_people += 1
+            else:
+                self._add_slot_to_current_tab(slot)
+                to_board += 1
+
+        self._save_config()
+        ctx = getattr(self, "_person_ctx", None)
+        if ctx is not None and to_people:
+            try:
+                ctx.changed()  # refresh any open hub / pop-out
+            except Exception:
+                pass
+        self.status_var.set(
+            f"Recording: {to_people} sent to people, {to_board} added to board"
+        )
+
+    def _add_sound_to_person(self, person_name: str, slot: SoundSlot):
+        person = next((p for p in self.persons if p.name == person_name), None)
+        if person is None:
+            person = Person(name=person_name)
+            self.persons.append(person)
+        group = next((g for g in person.groups if g.name == "Cuts"), None)
+        if group is None:
+            group = PersonGroup(name="Cuts")
+            person.groups.append(group)
+        group.sounds.append(slot)
+
+    def _add_slot_to_current_tab(self, slot: SoundSlot):
+        tab = self._get_current_tab()
+        idx = 0
+        while idx in tab.slots:
+            idx += 1
+        tab.slots[idx] = slot
+        try:
+            self._ensure_slots_for_tab(self.current_tab_idx)
+            self._update_slot_button_for_tab(self.current_tab_idx, idx)
+        except Exception:
+            pass
+
+    def _open_long_audio_picker(
+        self,
+        file_path: str,
+        edited_audio_data: dict,
+        status_var: tk.StringVar,
+        parent_dialog: tk.Toplevel,
+        name_var: Optional[tk.StringVar],
+        duration: float,
+    ):
+        """Decode a low-rate overview off the UI thread, then let the user pick a
+        section out of a huge recording. The chosen window is decoded at full
+        quality and handed to the normal editor (precise trim + multi-cut)."""
+        job_key = os.path.abspath(file_path)
+        if job_key in self._editor_prepare_jobs:
+            status_var.set("Preparing audio...")
+            return
+        self._editor_prepare_jobs.add(job_key)
+        status_var.set("Scanning recording...")
+
+        def _worker():
+            peaks = low_sr = None
+            error: Optional[Exception] = None
+            try:
+                peaks, low_sr, dur = decode_overview(file_path, duration=duration)
+            except Exception as exc:
+                error = exc
+
+            def _done():
+                self._editor_prepare_jobs.discard(job_key)
+                try:
+                    if not parent_dialog.winfo_exists():
+                        return
+                except Exception:
+                    return
+                if error is not None or peaks is None:
+                    status_var.set("")
+                    messagebox.showerror(
+                        "Editor Error",
+                        f"Could not scan the recording:\n{error}",
+                    )
+                    return
+                status_var.set("")
+                try:
+                    picker = LongAudioPicker(
+                        self.root, file_path, duration, peaks, low_sr,
+                        output_device=None,
+                    )
+                    section = picker.show()
+                except Exception as exc:
+                    messagebox.showerror("Editor Error", f"Section picker failed:\n{exc}")
+                    return
+                if section is None:
+                    status_var.set("")
+                    return
+                # Reuse the standard prepared-editor path (fine trim + multi-cut).
+                self._open_prepared_sound_editor(
+                    file_path, edited_audio_data, status_var, parent_dialog,
+                    name_var, section,
+                )
+
+            try:
+                self.root.after(0, _done)
+            except Exception:
+                pass
+
+        threading.Thread(target=_worker, name="LongAudioOverview", daemon=True).start()
+
     def _open_sound_editor(
         self,
         file_path: str,
@@ -11456,7 +12125,21 @@ class SoundboardApp:
         name_var: Optional[tk.StringVar] = None,
     ):
         """Open the sound editor dialog for a file."""
+        # Huge recordings (e.g. a multi-hour call) would decode to gigabytes if
+        # loaded whole. Route them through the section picker, which only ever
+        # holds a tiny overview + the chosen window in memory.
         if self._is_long_audio_file(file_path):
+            try:
+                duration = probe_duration(file_path)
+            except Exception:
+                duration = 0.0
+            if duration > HUGE_AUDIO_SECONDS:
+                self._open_long_audio_picker(
+                    file_path, edited_audio_data, status_var, parent_dialog,
+                    name_var, duration,
+                )
+                return
+
             job_key = os.path.abspath(file_path)
             if job_key in self._editor_prepare_jobs:
                 status_var.set("Preparing audio...")
@@ -11565,15 +12248,43 @@ class SoundboardApp:
             messagebox.showerror("Editor Error", f"Failed to open sound editor:\n{e}")
 
     def _load_slot_image(self, image_path: str, size: tuple = (70, 55)) -> Optional[ctk.CTkImage]:
-        """Load and resize an image for a slot button using CTkImage."""
+        """Load and resize an image for a slot button using CTkImage.
+
+        The expensive part (Image.open + LANCZOS thumbnail) is cached by
+        (path, mtime, size) so the SAME image never re-decodes across tabs,
+        search-overlay rebuilds, or column-density rebuilds. Only the cheap
+        CTkImage wrapper is rebuilt per call (we never share a CTkImage between
+        widgets). Cache invalidates automatically when the file's mtime changes.
+        """
         if not PIL_AVAILABLE:
             return None
 
         try:
-            img = Image.open(image_path)
-            img.thumbnail(size, Image.Resampling.LANCZOS)
+            mtime = os.path.getmtime(image_path)
+        except OSError:
+            return None
+
+        cache = getattr(self, "_img_pil_cache", None)
+        if cache is None:
+            cache = self._img_pil_cache = {}
+
+        key = (image_path, mtime, size)
+        pil = cache.get(key)
+        if pil is None:
+            try:
+                img = Image.open(image_path)
+                img.thumbnail(size, Image.Resampling.LANCZOS)
+                img.load()  # force the decode now, while we own the file handle
+            except Exception:
+                return None
+            # Bound the cache so a huge board can't grow it without limit.
+            if len(cache) > 512:
+                cache.clear()
+            cache[key] = pil = img
+
+        try:
             # Use CTkImage for proper scaling on HighDPI displays
-            return ctk.CTkImage(light_image=img, dark_image=img, size=size)
+            return ctk.CTkImage(light_image=pil, dark_image=pil, size=size)
         except Exception:
             return None
 
@@ -12433,7 +13144,7 @@ class SoundboardApp:
                 title = f"{title}  ({m}:{s:02d})"
             cb = ctk.CTkCheckBox(
                 list_frame,
-                text=f"{idx + 1}. {title}",
+                text=_fix_rtl_text(f"{idx + 1}. {title}"),
                 variable=check_vars[idx],
                 font=self._font_sm,
                 text_color=COLORS["text_primary"],
@@ -13086,8 +13797,31 @@ class SoundboardApp:
             return
         if not getattr(self, "tabs", None):
             return
+
+        # DATA SAFETY (people): the persons block is serialized below. If
+        # self.persons is somehow empty in memory — a transient load error or a
+        # crash mid-session — NEVER let that empty list overwrite a config that
+        # still has people on disk. That is exactly how the persons block got
+        # wiped before. Real edits (N people -> fewer) still save normally; only
+        # an all-the-way-to-ZERO state while disk still has people is treated as
+        # a bug, and the on-disk people are preserved instead.
+        persons_out = [p.to_dict() for p in getattr(self, "persons", [])]
+        if not persons_out:
+            try:
+                with open(CONFIG_FILE, encoding="utf-8") as _pf:
+                    _disk_persons = json.load(_pf).get("persons") or []
+                if _disk_persons:
+                    persons_out = _disk_persons
+                    print(
+                        f"[data-safety] persons empty in memory; preserved "
+                        f"{len(_disk_persons)} people from disk to prevent loss."
+                    )
+            except Exception:
+                pass
+
         config = {
             "tabs": [t.to_dict() for t in self.tabs],
+            "persons": persons_out,
             "current_tab": self.current_tab_idx,
             "ptt_enabled": self.ptt_enabled_var.get(),
             "ptt_key": self.ptt_key_var.get().strip() if self.ptt_key_var.get().strip() else None,
@@ -13113,6 +13847,8 @@ class SoundboardApp:
             "custom_groups": self._custom_groups,
             "custom_colors": list(getattr(self, "_custom_colors", []) or []),
             "window_geometry": self._current_window_geometry(),
+            # People hub / pop-out sizes & positions, so they reopen as left.
+            "person_windows": dict(getattr(self, "_person_window_geometry", {}) or {}),
             "youtube_cookies_path": getattr(self, "_youtube_cookies_path", "") or "",
             "youtube_cookies_browser": getattr(self, "_youtube_cookies_browser", "") or "",
             "noise_suppression": (
@@ -13197,6 +13933,12 @@ class SoundboardApp:
                 self.tabs = [default_tab]
                 self.current_tab_idx = 0
 
+            # Load per-person mini-soundboards (safe: absent in older configs).
+            try:
+                self.persons = [Person.from_dict(p) for p in config.get("persons", [])]
+            except Exception:
+                self.persons = []
+
             # Ensure at least one tab exists
             if not self.tabs:
                 self.tabs = [SoundTab(name="Main", emoji="🎵")]
@@ -13222,7 +13964,7 @@ class SoundboardApp:
 
             try:
                 self.scroll_speed_var.set(
-                    max(1, min(30, int(config.get("scroll_speed_multiplier", 10))))
+                    max(1, min(50, int(config.get("scroll_speed_multiplier", 10))))
                 )
             except Exception:
                 self.scroll_speed_var.set(10)
@@ -13290,6 +14032,10 @@ class SoundboardApp:
                 self.master_volume_var.set(master_volume)
                 if hasattr(self, "master_volume_label"):
                     self.master_volume_label.configure(text=f"{int(master_volume)}%")
+
+            # Remembered People hub / pop-out sizes & positions.
+            pw = config.get("person_windows", {})
+            self._person_window_geometry = dict(pw) if isinstance(pw, dict) else {}
 
             # Load custom groups
             self._custom_groups = config.get("custom_groups", [])
@@ -13411,28 +14157,59 @@ class SoundboardApp:
             self.status_var.set("Ready")
             return
 
+        # Live progress: the worker thread bumps these counters; an animated
+        # spinner on the Tk thread reflects them in the status bar so warming
+        # reads as active work, not a frozen "Ready".
+        self._warm_total = len(paths)
+        self._warm_done = 0
+        self._warm_cached = 0
+        self._warm_active = True
+        self._warm_spinner_frame = 0
+        self._animate_warm_status()
+
         def _warm():
-            done = 0
             for fp in paths:
                 if getattr(self, "_shutting_down", False):
+                    self._warm_active = False
                     return
                 try:
                     if os.path.exists(fp) and not self._is_long_audio_file(fp):
                         # Fill the cache without the extra copy get_sound_data makes.
                         self.sound_cache._load_into_cache(fp)
-                        done += 1
+                        self._warm_cached += 1
                 except Exception:
                     pass
+                self._warm_done += 1
                 # Yield so cache-warming never freezes the UI during/after startup.
                 time.sleep(0.012)
-            try:
-                self.root.after(
-                    0, lambda: self.status_var.set(f"Ready — {done} sounds cached")
-                )
-            except RuntimeError:
-                pass  # Main loop not running (app closing or not started yet)
+            self._warm_active = False  # spinner sees this and prints the final line
 
         threading.Thread(target=_warm, name="SoundWarmer", daemon=True).start()
+
+    def _animate_warm_status(self) -> None:
+        """Spinner + count in the status bar while the audio cache warms up."""
+        if getattr(self, "_shutting_down", False):
+            return
+        if not getattr(self, "_warm_active", False):
+            cached = getattr(self, "_warm_cached", 0)
+            try:
+                self.status_var.set(f"Ready — {cached} sounds cached")
+            except Exception:
+                pass
+            return
+        frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        self._warm_spinner_frame = (getattr(self, "_warm_spinner_frame", 0) + 1) % len(frames)
+        spin = frames[self._warm_spinner_frame]
+        done = getattr(self, "_warm_done", 0)
+        total = getattr(self, "_warm_total", 0)
+        try:
+            self.status_var.set(f"{spin}  Warming sounds…  {done}/{total}")
+        except Exception:
+            pass
+        try:
+            self.root.after(90, self._animate_warm_status)
+        except Exception:
+            pass
 
     def _on_close(self):
         """Handle application close. BULLETPROOF - guarantees process termination.

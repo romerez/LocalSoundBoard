@@ -17,7 +17,9 @@ import hashlib
 import io
 import logging
 import queue
+import re
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -105,6 +107,13 @@ class NoiseSuppressor:
         self._in_buf = np.zeros(0, dtype=np.float32)
         # Float32 output ring (denoised samples waiting to be returned).
         self._out_buf = np.zeros(0, dtype=np.float32)
+        # Whether the output ring has been primed with one frame of latency.
+        # The audio block size (e.g. 1024) is NOT a multiple of the 480-sample
+        # RNNoise frame, so without a one-frame backlog the ring underflows on
+        # EVERY block and the old fallback spliced ~64 raw samples in at a
+        # timeline discontinuity → a constant ~47 Hz buzz + partly-undenoised
+        # voice. Priming once keeps every steady-state read clean and in order.
+        self._primed = False
 
     def _ensure_state(self) -> bool:
         if not RNNOISE_AVAILABLE or _rnn_create is None:
@@ -126,6 +135,7 @@ class NoiseSuppressor:
         """Reset internal state (e.g. when stream restarts)."""
         self._in_buf = np.zeros(0, dtype=np.float32)
         self._out_buf = np.zeros(0, dtype=np.float32)
+        self._primed = False
         if self._state is not None and _rnn_destroy is not None:
             try:
                 for s in self._state:
@@ -158,6 +168,15 @@ class NoiseSuppressor:
             if state is None:  # paranoia after _ensure_state
                 return mic_block
             mic_f32 = np.ascontiguousarray(mic_block, dtype=np.float32).reshape(-1)
+            # Prime the output ring with ONE frame of latency the first time we
+            # run after enable/reset. The block size isn't a multiple of the
+            # 480-sample frame, so without this slack the ring underflows every
+            # block and we'd splice raw samples in at a discontinuity (the old
+            # "constant buzz / partly-undenoised" bug). ~10 ms of leading silence
+            # is imperceptible and is the only added latency.
+            if not self._primed:
+                self._out_buf = np.zeros(self._frame_size, dtype=np.float32)
+                self._primed = True
             # Append new samples to the input ring.
             self._in_buf = (
                 np.concatenate((self._in_buf, mic_f32))
@@ -181,31 +200,28 @@ class NoiseSuppressor:
                     denoised_chunks.append(out_frame.reshape(-1))
                 denoised_i16 = np.concatenate(denoised_chunks)
                 denoised_f32 = denoised_i16.astype(np.float32) / 32767.0
-                # Wet/dry mix vs original samples that produced these frames.
+                # Wet/dry mix vs original samples that produced these frames
+                # (time-aligned: both are delayed together by the output ring).
                 if self.strength < 1.0:
                     orig = self._in_buf[:consumed]
                     denoised_f32 = self.strength * denoised_f32 + (1.0 - self.strength) * orig
                 # Keep leftover samples for next call.
                 self._in_buf = self._in_buf[consumed:].copy()
                 # Append to output ring.
-                self._out_buf = (
-                    np.concatenate((self._out_buf, denoised_f32))
-                    if self._out_buf.size
-                    else denoised_f32
-                )
-            # Return n samples from the output ring. If we don't yet have
-            # enough (cold start), pad the head with the original input —
-            # this only happens for the first ~10 ms of a stream.
+                self._out_buf = np.concatenate((self._out_buf, denoised_f32))
+            # Steady state: the primed backlog guarantees >= n samples here, so
+            # this returns clean, in-order denoised audio.
             if self._out_buf.size >= n:
                 out = self._out_buf[:n].copy()
-                self._out_buf = self._out_buf[n:].copy()
+                self._out_buf = self._out_buf[n:]
                 return out
-            else:
-                deficit = n - self._out_buf.size
-                head = mic_f32[:deficit]
-                tail = self._out_buf
-                self._out_buf = np.zeros(0, dtype=np.float32)
-                return np.concatenate((head, tail))
+            # Safety net only (shouldn't fire after priming): not enough yet —
+            # drain what we have and pad the TAIL with the freshest raw input so
+            # at least the timeline stays monotonic.
+            deficit = n - self._out_buf.size
+            out = np.concatenate((self._out_buf, mic_f32[-deficit:]))
+            self._out_buf = np.zeros(0, dtype=np.float32)
+            return out
         except Exception as e:
             # Never let noise suppression break the audio callback - fall
             # back to passthrough on any failure.
@@ -483,13 +499,137 @@ def read_audio_file(file_path: str) -> Tuple[np.ndarray, int]:
             return samples, sr
         except Exception as e:
             raise RuntimeError(
-                f"Failed to load audio file '{file_path}'. " f"Format may require ffmpeg: {e}"
+                f"Failed to load '{os.path.basename(file_path)}': "
+                f"{clean_ffmpeg_error(str(e))}"
             )
     else:
         raise RuntimeError(
             f"Cannot load '{ext}' files. Install pydub and ffmpeg for extended format support: "
             f"pip install pydub"
         )
+
+
+# ---------------------------------------------------------------------------
+# Large / long-file decoding (ffmpeg, bounded memory)
+#
+# A soundboard clip is normally a few seconds. Fully decoding a long recording
+# (e.g. a 2h50m call ≈ 2 GB as float32) into RAM is what crashed the loader.
+# These helpers let the GUI work with huge files WITHOUT ever holding the whole
+# thing: probe the duration instantly, decode a tiny low-rate overview just for
+# the waveform, and decode only the user-selected time range at full quality.
+# All of them invoke ffmpeg on the seekable file path (never a stdin pipe), so
+# the "mp3 detected only with low score / two consecutive frames" misdetection
+# that pydub's pipe path can hit cannot happen here.
+# ---------------------------------------------------------------------------
+
+# Files longer than this many seconds are routed through the overview / range
+# decoders instead of read_audio_file (which would materialise the whole thing).
+HUGE_AUDIO_SECONDS = 600  # 10 minutes (~115 MB stereo float32) — above this, stream it
+
+
+def _ffmpeg_exe() -> str:
+    """Path to the ffmpeg binary (bundled imageio build if present)."""
+    return FFMPEG_PATH or "ffmpeg"
+
+
+def _ffmpeg_run_kwargs() -> dict:
+    """subprocess kwargs that keep ffmpeg from flashing a console window."""
+    kwargs: dict = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+    return kwargs
+
+
+def clean_ffmpeg_error(stderr) -> str:
+    """Turn ffmpeg's verbose stderr (or a pydub CouldntDecodeError message) into
+    a short, human-readable reason — never the multi-screen version banner."""
+    if isinstance(stderr, (bytes, bytearray)):
+        text = stderr.decode("utf-8", "replace")
+    else:
+        text = str(stderr)
+    skip = ("ffmpeg version", "built with", "configuration:", "lib", "Output from")
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    meaningful = [ln for ln in lines if not ln.startswith(skip)]
+    tail = (meaningful or lines)[-3:]
+    return " / ".join(tail) if tail else "ffmpeg failed"
+
+
+def probe_duration(file_path: str) -> float:
+    """Audio duration in seconds (0.0 if unknown). Cheap — no full decode."""
+    # soundfile is instant and exact for the formats it understands.
+    try:
+        info = sf.info(file_path)
+        if info.frames and info.samplerate:
+            return info.frames / float(info.samplerate)
+    except Exception:
+        pass
+    # Otherwise parse ffmpeg's "Duration: HH:MM:SS.xx" header line.
+    try:
+        proc = subprocess.run([_ffmpeg_exe(), "-i", file_path], **_ffmpeg_run_kwargs())
+        text = proc.stderr.decode("utf-8", "replace")
+        m = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", text)
+        if m:
+            h, mn, s = m.groups()
+            return int(h) * 3600 + int(mn) * 60 + float(s)
+    except Exception:
+        pass
+    return 0.0
+
+
+def decode_audio_range(
+    file_path: str,
+    start_s: float,
+    dur_s: float,
+    target_sr: int,
+    channels: int = 2,
+) -> Tuple[np.ndarray, int]:
+    """Decode only ``[start_s, start_s+dur_s)`` from a (possibly huge) file at
+    full quality. Bounded memory — ffmpeg seeks on the file, we read just that
+    window. Returns (samples, sample_rate); shape (n,) for mono else (n, ch)."""
+    cmd = [_ffmpeg_exe(), "-nostdin", "-v", "error"]
+    if start_s and start_s > 0:
+        cmd += ["-ss", f"{start_s:.6f}"]
+    cmd += ["-i", file_path]
+    if dur_s and dur_s > 0:
+        cmd += ["-t", f"{dur_s:.6f}"]
+    cmd += [
+        "-vn", "-map", "a:0",
+        "-ac", str(channels), "-ar", str(target_sr),
+        "-f", "f32le", "-acodec", "pcm_f32le", "-",
+    ]
+    proc = subprocess.run(cmd, **_ffmpeg_run_kwargs())
+    if proc.returncode != 0 or not proc.stdout:
+        raise RuntimeError(clean_ffmpeg_error(proc.stderr))
+    arr = np.frombuffer(proc.stdout, dtype=np.float32).copy()  # copy → writable
+    if channels > 1:
+        usable = (len(arr) // channels) * channels
+        arr = arr[:usable].reshape(-1, channels)
+    return arr, target_sr
+
+
+def decode_overview(
+    file_path: str,
+    max_points: int = 8000,
+    duration: Optional[float] = None,
+) -> Tuple[np.ndarray, int, float]:
+    """Decode the whole file at a very low sample rate, purely to draw a
+    coarse waveform overview for navigation. Memory ≈ a few hundred KB even for
+    a multi-hour file. Returns (mono samples, low_sr, duration_seconds)."""
+    if duration is None:
+        duration = probe_duration(file_path)
+    if duration <= 0:
+        duration = 1.0
+    low_sr = int(max(20, min(1000, round(max_points / duration))))
+    cmd = [
+        _ffmpeg_exe(), "-nostdin", "-v", "error", "-i", file_path,
+        "-vn", "-map", "a:0", "-ac", "1", "-ar", str(low_sr),
+        "-f", "f32le", "-acodec", "pcm_f32le", "-",
+    ]
+    proc = subprocess.run(cmd, **_ffmpeg_run_kwargs())
+    if proc.returncode != 0 or not proc.stdout:
+        raise RuntimeError(clean_ffmpeg_error(proc.stderr))
+    peaks = np.frombuffer(proc.stdout, dtype=np.float32).copy()
+    return peaks, low_sr, duration
 
 
 def _resample_audio(data: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:

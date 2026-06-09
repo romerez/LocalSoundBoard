@@ -13,7 +13,7 @@ import numpy as np
 import sounddevice as sd
 import soundfile as sf
 
-from .audio import read_audio_file, _resample_audio
+from .audio import read_audio_file, _resample_audio, decode_audio_range
 from .constants import AUDIO, COLORS
 
 
@@ -38,11 +38,19 @@ class SoundEditor:
         on_save: Optional[Callable[[np.ndarray, int], None]] = None,
         output_device: Optional[int] = None,
         preloaded_audio: Optional[Tuple[np.ndarray, int]] = None,
+        person_names: Optional[list] = None,
     ):
         self.parent = parent
         self.file_path = file_path
         self.on_save = on_save
         self.output_device = output_device
+        # When editing a recording, the caller can pass the list of person names
+        # so each cut can be tagged to a person ("— none —" leaves it untagged).
+        # The chosen person travels with each multi-cut result (4th tuple slot)
+        # and as ``result_person`` for a single save.
+        self.person_names: list = list(person_names) if person_names else []
+        self.result_person: Optional[str] = None
+        self.result_title: Optional[str] = None
 
         # Audio data
         self.audio_data: Optional[np.ndarray] = None
@@ -200,14 +208,22 @@ class SoundEditor:
         # Info bar
         self._create_info_bar(main_frame)
 
-        # Waveform canvas
+        # Bottom section — timeline, transport controls and the Save/Cancel
+        # buttons — is pinned to the BOTTOM *before* the canvas is packed. With
+        # the waveform canvas taking expand=True, all shrinking is absorbed by
+        # the canvas, so these controls (especially Save & Use) can never be
+        # pushed off-screen / clipped when the window isn't opened all the way.
+        bottom = tk.Frame(main_frame, bg=COLORS["bg_dark"])
+        bottom.pack(side=tk.BOTTOM, fill=tk.X)
+
+        # Waveform canvas fills the remaining middle space.
         self._create_waveform_canvas(main_frame)
 
-        # Timeline
-        self._create_timeline(main_frame)
+        # Timeline (just under the waveform)
+        self._create_timeline(bottom)
 
         # Controls container (zoom + playback in one row)
-        controls_frame = tk.Frame(main_frame, bg=COLORS["bg_dark"])
+        controls_frame = tk.Frame(bottom, bg=COLORS["bg_dark"])
         controls_frame.pack(fill=tk.X, pady=10)
 
         # Zoom controls on left
@@ -216,8 +232,8 @@ class SoundEditor:
         # Playback controls on right
         self._create_playback_controls(controls_frame)
 
-        # Action buttons at bottom
-        self._create_action_buttons(main_frame)
+        # Action buttons at the very bottom (always visible)
+        self._create_action_buttons(bottom)
 
         # Initial draw
         self._draw_waveform()
@@ -419,8 +435,8 @@ class SoundEditor:
         separator.pack(fill=tk.X, pady=(15, 12))
 
         # Multi-cut status banner (hidden until multi-cut mode is active).
-        # Shows progress like "📑 Multi-Cut: capturing 2 of 5" plus a hint,
-        # and lets the user bump the total cut count up/down on the fly.
+        # In open-ended multi-cut you keep capturing segments until you click
+        # Done — so this just shows a running count + a hint, no fixed total.
         self._multi_banner = tk.Frame(parent, bg="#5865F2", padx=12, pady=6)
         self._multi_banner_label = tk.Label(
             self._multi_banner,
@@ -430,46 +446,6 @@ class SoundEditor:
             font=("Segoe UI", 10, "bold"),
         )
         self._multi_banner_label.pack(side=tk.LEFT)
-
-        # Live ± controls on the right side of the banner.
-        self._multi_minus_btn = tk.Button(
-            self._multi_banner,
-            text="➖",
-            command=lambda: self._adjust_multi_total(-1),
-            bg="#4752C4",
-            fg="white",
-            activebackground="#3C45A5",
-            activeforeground="white",
-            font=("Segoe UI", 10, "bold"),
-            width=3,
-            relief="flat",
-            cursor="hand2",
-            bd=0,
-        )
-        self._multi_minus_btn.pack(side=tk.RIGHT, padx=(8, 0))
-        self._multi_plus_btn = tk.Button(
-            self._multi_banner,
-            text="➕",
-            command=lambda: self._adjust_multi_total(+1),
-            bg="#4752C4",
-            fg="white",
-            activebackground="#3C45A5",
-            activeforeground="white",
-            font=("Segoe UI", 10, "bold"),
-            width=3,
-            relief="flat",
-            cursor="hand2",
-            bd=0,
-        )
-        self._multi_plus_btn.pack(side=tk.RIGHT, padx=(8, 0))
-        self._multi_total_label = tk.Label(
-            self._multi_banner,
-            text="",
-            bg="#5865F2",
-            fg="white",
-            font=("Segoe UI", 10, "bold"),
-        )
-        self._multi_total_label.pack(side=tk.RIGHT, padx=(12, 0))
         # Banner is NOT packed yet — shown only in multi-cut mode.
 
         btn_frame = tk.Frame(parent, bg=COLORS["bg_dark"])
@@ -541,8 +517,8 @@ class SoundEditor:
         )
         self._save_btn.pack(side=tk.RIGHT)
 
-        # Capture button — only visible during multi-cut mode. Replaces the
-        # role of "Save & Use" while capturing segments.
+        # Capture button — only visible during multi-cut mode. Grabs the current
+        # selection as one segment; you can capture as many as you like.
         self._capture_btn = tk.Button(
             btn_frame,
             text="",
@@ -553,6 +529,24 @@ class SoundEditor:
             activeforeground="white",
             font=("Segoe UI", 10, "bold"),
             width=18,
+            relief="flat",
+            cursor="hand2",
+            pady=5,
+        )
+
+        # Done button — only visible during multi-cut mode. Finishes capturing
+        # and turns every captured segment into a sound. The user decides when
+        # they're done instead of committing to a count up front.
+        self._done_btn = tk.Button(
+            btn_frame,
+            text="✅ Done",
+            command=self._finish_multi_cut,
+            bg=COLORS["blurple"],
+            fg="white",
+            activebackground=COLORS.get("blurple_hover", "#4752C4"),
+            activeforeground="white",
+            font=("Segoe UI", 10, "bold"),
+            width=10,
             relief="flat",
             cursor="hand2",
             pady=5,
@@ -1142,171 +1136,64 @@ class SoundEditor:
     # ------------------------------------------------------------------
 
     def _start_multi_cut(self):
-        """Prompt for the number of cuts, then enter multi-cut mode."""
+        """Enter open-ended multi-cut mode immediately (no count to pick)."""
         if self.audio_data is None:
             return
+        self._enter_multi_cut_mode()
 
-        # Build a tiny modal that uses an integer Spinbox (arrow up/down) so the
-        # UX matches what the user described.
-        prompt = tk.Toplevel(self.dialog)
-        prompt.title("Multi-Cut")
-        prompt.configure(bg=COLORS["bg_dark"])
-        prompt.transient(self.dialog)
-        prompt.grab_set()
-        prompt.resizable(False, False)
+    def _enter_multi_cut_mode(self):
+        """Switch the editor into open-ended multi-cut mode.
 
-        tk.Label(
-            prompt,
-            text="How many cuts do you want to make?",
-            bg=COLORS["bg_dark"],
-            fg=COLORS["text_primary"],
-            font=("Segoe UI", 11, "bold"),
-            padx=20,
-            pady=12,
-        ).pack()
-
-        count_var = tk.IntVar(value=2)
-        spin = tk.Spinbox(
-            prompt,
-            from_=2,
-            to=50,
-            textvariable=count_var,
-            width=6,
-            font=("Segoe UI", 14, "bold"),
-            justify="center",
-            bg=COLORS["bg_medium"],
-            fg="white",
-            insertbackground="white",
-            relief="flat",
-            buttonbackground=COLORS["bg_light"],
-        )
-        spin.pack(pady=(0, 12))
-
-        btn_row = tk.Frame(prompt, bg=COLORS["bg_dark"])
-        btn_row.pack(pady=(0, 12), padx=20)
-
-        def cancel():
-            prompt.destroy()
-
-        def ok():
-            try:
-                n = int(count_var.get())
-            except (tk.TclError, ValueError):
-                n = 0
-            if n < 2:
-                messagebox.showwarning("Multi-Cut", "Pick at least 2 cuts.", parent=prompt)
-                return
-            prompt.destroy()
-            self._enter_multi_cut_mode(n)
-
-        tk.Button(
-            btn_row,
-            text="Cancel",
-            command=cancel,
-            bg=COLORS["bg_medium"],
-            fg="white",
-            font=("Segoe UI", 10),
-            width=10,
-            relief="flat",
-            cursor="hand2",
-        ).pack(side=tk.LEFT, padx=5)
-
-        tk.Button(
-            btn_row,
-            text="Start",
-            command=ok,
-            bg=COLORS["blurple"],
-            fg="white",
-            font=("Segoe UI", 10, "bold"),
-            width=10,
-            relief="flat",
-            cursor="hand2",
-        ).pack(side=tk.LEFT, padx=5)
-
-        # Center prompt over editor dialog
-        prompt.update_idletasks()
-        ex = self.dialog.winfo_rootx()
-        ey = self.dialog.winfo_rooty()
-        ew = self.dialog.winfo_width()
-        eh = self.dialog.winfo_height()
-        pw = prompt.winfo_width()
-        ph = prompt.winfo_height()
-        prompt.geometry(f"+{ex + (ew - pw) // 2}+{ey + (eh - ph) // 3}")
-
-        spin.focus_set()
-        try:
-            spin.selection_range(0, "end")  # type: ignore[arg-type]
-        except Exception:
-            pass
-        prompt.bind("<Return>", lambda e: ok())
-        prompt.bind("<Escape>", lambda e: cancel())
-
-    def _enter_multi_cut_mode(self, total: int):
-        """Switch the editor into multi-cut mode for `total` segments."""
+        The user captures as many segments as they want and clicks Done when
+        finished — no need to commit to a number up front.
+        """
         self.multi_mode = True
-        self.multi_total = total
+        self.multi_total = 0  # open-ended; kept only for legacy references
         self.multi_current = 1
         self.multi_results = []
 
-        # Reset the selection so the user starts clean for cut 1.
+        # Start with the whole clip selected so the END marker sits at the very
+        # end of the audio; the user drags the markers inward to define a cut.
         self.trim_start = 0
-        self.trim_end = min(len(self.waveform_data), self.sample_rate)  # default 1s window
+        self.trim_end = len(self.waveform_data)
 
-        # Hide the normal Save button, show Capture button + banner.
+        # Hide the normal Save / Multi-Cut buttons; show Capture + Done + banner.
         self._save_btn.pack_forget()
         self._multi_btn.pack_forget()
-        self._capture_btn.pack(side=tk.RIGHT)
+        self._done_btn.pack(side=tk.RIGHT)
+        self._capture_btn.pack(side=tk.RIGHT, padx=(0, 8))
         self._multi_banner.pack(fill=tk.X, pady=(0, 10), before=self._capture_btn.master)
 
         self._update_multi_banner()
         self._draw_waveform()
 
     def _update_multi_banner(self):
-        """Refresh the multi-cut banner + capture button label."""
+        """Refresh the multi-cut banner + capture/done button labels."""
         if not self.multi_mode:
             return
+        captured = len(self.multi_results)
         self._multi_banner_label.config(
             text=(
-                f"📑 Multi-Cut: capturing cut {self.multi_current} of {self.multi_total}  "
-                f"— left-click to set START, right-click to set END, "
-                f"SPACE to preview, then click ✓ Capture"
+                f"📑 Multi-Cut: {captured} captured  "
+                f"— left-click sets START, right-click sets END, "
+                f"SPACE previews, ✓ Capture grabs it. Click Done when finished."
             )
         )
-        self._capture_btn.config(
-            text=f"✓ Capture cut {self.multi_current}/{self.multi_total}"
-        )
-        # Update ± controls. Minus is disabled when reducing further would
-        # drop below the current cut (or below the 2-cut minimum).
+        self._capture_btn.config(text=f"✓ Capture (#{captured + 1})")
         try:
-            self._multi_total_label.config(text=f"Total: {self.multi_total}")
-            min_total = max(2, self.multi_current)
-            self._multi_minus_btn.config(
-                state=(tk.NORMAL if self.multi_total > min_total else tk.DISABLED)
-            )
-            self._multi_plus_btn.config(
-                state=(tk.NORMAL if self.multi_total < 50 else tk.DISABLED)
+            self._done_btn.config(
+                text=("✅ Done" if captured == 0 else f"✅ Done ({captured})")
             )
         except (AttributeError, tk.TclError):
             pass
 
-    def _adjust_multi_total(self, delta: int):
-        """Bump `multi_total` by +/- 1 while in multi-cut mode.
+    _NO_PERSON = "— none —"
 
-        Lower bound: `max(2, multi_current)` so the user can't drop below
-        the cut they're currently working on. Upper bound: 50 to match the
-        Spinbox prompt limit.
+    def _prompt_multi_cut_title(self):
+        """Prompt for a cut's title (and person, when person tagging is enabled).
+
+        Returns a ``(title, person_or_None)`` tuple; ``(None, None)`` if cancelled.
         """
-        if not self.multi_mode:
-            return
-        new_total = self.multi_total + delta
-        min_total = max(2, self.multi_current)
-        if new_total < min_total or new_total > 50:
-            return
-        self.multi_total = new_total
-        self._update_multi_banner()
-
-    def _prompt_multi_cut_title(self) -> Optional[str]:
-        """Prompt for the current multi-cut title. Returns None if cancelled."""
         prompt = tk.Toplevel(self.dialog)
         prompt.title("Cut Title")
         prompt.configure(bg=COLORS["bg_dark"])
@@ -1315,12 +1202,14 @@ class SoundEditor:
         prompt.resizable(False, False)
 
         result: list[Optional[str]] = [None]
-        default_title = f"{Path(self.file_path).stem} {self.multi_current}"
+        person_result: list[Optional[str]] = [None]
+        cut_no = len(self.multi_results) + 1
+        default_title = f"{Path(self.file_path).stem} {cut_no}"
         title_var = tk.StringVar(value=default_title)
 
         tk.Label(
             prompt,
-            text=f"Title for cut {self.multi_current}:",
+            text=f"Title for cut {cut_no}:",
             bg=COLORS["bg_dark"],
             fg=COLORS["text_primary"],
             font=("Segoe UI", 11, "bold"),
@@ -1340,6 +1229,22 @@ class SoundEditor:
         )
         entry.pack(fill=tk.X, padx=20, pady=(0, 12))
 
+        # Per-cut person tagging (only when the caller is editing a recording).
+        person_var = tk.StringVar(value=self._NO_PERSON)
+        if self.person_names:
+            tk.Label(
+                prompt, text="Assign to person:", bg=COLORS["bg_dark"],
+                fg=COLORS["text_primary"], font=("Segoe UI", 11, "bold"),
+                padx=20,
+            ).pack(anchor="w")
+            options = [self._NO_PERSON] + list(self.person_names)
+            om = tk.OptionMenu(prompt, person_var, *options)
+            om.configure(bg=COLORS["bg_medium"], fg="white", activebackground=COLORS["bg_light"],
+                         activeforeground="white", relief="flat", highlightthickness=0,
+                         font=("Segoe UI", 11))
+            om["menu"].configure(bg=COLORS["bg_medium"], fg="white")
+            om.pack(fill=tk.X, padx=20, pady=(0, 12))
+
         btn_row = tk.Frame(prompt, bg=COLORS["bg_dark"])
         btn_row.pack(pady=(0, 12), padx=20, anchor="e")
 
@@ -1357,6 +1262,8 @@ class SoundEditor:
                 )
                 return
             result[0] = title
+            chosen = person_var.get()
+            person_result[0] = None if chosen == self._NO_PERSON else chosen
             prompt.destroy()
 
         tk.Button(
@@ -1402,10 +1309,14 @@ class SoundEditor:
             pass
 
         self.dialog.wait_window(prompt)
-        return result[0]
+        return result[0], person_result[0]
 
     def _capture_multi_segment(self):
-        """Capture the current selection as the next multi-cut segment."""
+        """Capture the current selection as another multi-cut segment.
+
+        Open-ended: this never finishes the session \u2014 the user keeps capturing
+        and clicks Done when they're satisfied.
+        """
         if not self.multi_mode or self.audio_data is None:
             return
 
@@ -1417,7 +1328,7 @@ class SoundEditor:
             )
             return
 
-        title = self._prompt_multi_cut_title()
+        title, person = self._prompt_multi_cut_title()
         if title is None:
             return
 
@@ -1427,29 +1338,35 @@ class SoundEditor:
         segment = np.ascontiguousarray(
             self.audio_data[self.trim_start : self.trim_end].copy()
         )
-        self.multi_results.append((segment, self.sample_rate, title))
+        self.multi_results.append((segment, self.sample_rate, title, person))
 
-        # Advance or finish.
-        if self.multi_current >= self.multi_total:
-            # All segments captured \u2014 set single result to the FIRST cut for
-            # backward compatibility, then close.
-            if self.multi_results:
-                first_audio, first_sr = self.multi_results[0][:2]
-                self.result = (first_audio, first_sr)
-                if self.on_save:
-                    try:
-                        self.on_save(first_audio, first_sr)
-                    except Exception:
-                        pass
+        # Reset to the whole clip so the END marker is back at the end of the
+        # audio, ready for the next cut.
+        self.trim_start = 0
+        self.trim_end = len(self.waveform_data)
+        self._update_multi_banner()
+        self._draw_waveform()
+
+    def _finish_multi_cut(self):
+        """Finish open-ended multi-cut: turn every captured segment into a sound."""
+        self._stop_playback()
+
+        if not self.multi_results:
+            # Nothing captured \u2014 treat Done as a cancel of the cut session.
+            self.result = None
             self.dialog.destroy()
             return
 
-        self.multi_current += 1
-        # Reset selection for the next cut so the user starts fresh.
-        self.trim_start = 0
-        self.trim_end = min(len(self.waveform_data), self.sample_rate)
-        self._update_multi_banner()
-        self._draw_waveform()
+        # The FIRST cut becomes this editor's single result (so the normal
+        # caller flow handles it); the rest are returned via multi_results.
+        first_audio, first_sr = self.multi_results[0][:2]
+        self.result = (first_audio, first_sr)
+        if self.on_save:
+            try:
+                self.on_save(first_audio, first_sr)
+            except Exception:
+                pass
+        self.dialog.destroy()
 
     def _on_save(self):
         """Save the trimmed audio and close."""
@@ -1459,6 +1376,14 @@ class SoundEditor:
             self.result = None
             self.dialog.destroy()
             return
+
+        # When editing a recording, let a single Save also tag a person.
+        if self.person_names:
+            title, person = self._prompt_multi_cut_title()
+            if title is None:
+                return  # cancelled the save
+            self.result_title = title
+            self.result_person = person
 
         trimmed_audio = self.audio_data[self.trim_start : self.trim_end]
 
@@ -1477,6 +1402,377 @@ class SoundEditor:
 
     def show(self) -> Optional[Tuple[np.ndarray, int]]:
         """Show the dialog and wait for result."""
+        self.dialog.wait_window()
+        return self.result
+
+
+class LongAudioPicker:
+    """Coarse section picker for very long recordings.
+
+    Shows a lightweight overview waveform of the WHOLE file (decoded at a tiny
+    sample rate — a few hundred KB even for hours of audio) and lets the user
+    drag a window over the part they want. Only that window is then decoded at
+    full quality, so a multi-hour recording never has to be held in RAM. The
+    decoded section is handed to the normal SoundEditor for precise trimming.
+
+    Returns ``(audio, sample_rate)`` from ``show()`` (None if cancelled).
+    """
+
+    # Pull up to a 45-minute section out of a long recording in one go. The
+    # selected window is decoded at full quality (≈ 1 GB for the full 45 min at
+    # 48 kHz stereo) and handed to the editor for multi-cutting.
+    MAX_WINDOW_SECONDS = 45 * 60.0
+    # Quick-length presets, in seconds. Long recordings (calls, streams) need
+    # minute-scale chunks, so these are minutes — plus a couple of short ones.
+    QUICK_LENGTHS = (30, 60, 5 * 60, 15 * 60, 30 * 60, 45 * 60)
+    PREVIEW_CAP_SECONDS = 20.0  # preview only the first chunk so it stays snappy
+
+    def __init__(
+        self,
+        parent: tk.Tk,
+        file_path: str,
+        duration: float,
+        peaks: np.ndarray,
+        low_sr: int,
+        sample_rate: int = AUDIO["sample_rate"],
+        output_device: Optional[int] = None,
+    ):
+        self.parent = parent
+        self.file_path = file_path
+        self.duration = max(0.01, float(duration))
+        self.peaks = peaks if peaks is not None else np.zeros(1, dtype=np.float32)
+        self.low_sr = max(1, int(low_sr))
+        self.sample_rate = sample_rate
+        self.output_device = output_device
+
+        self.sel_start = 0.0
+        # Default to a 5-minute window (long recordings want minute-scale chunks).
+        self.sel_end = float(min(self.MAX_WINDOW_SECONDS, self.duration, 5 * 60.0))
+        self.dragging: Optional[str] = None  # "start" | "end" | "move"
+        self._move_anchor = 0.0  # selection-relative grab offset for "move"
+        self.result: Optional[Tuple[np.ndarray, int]] = None
+
+        self.canvas_width = 860
+        self.canvas_height = 170
+        self._col_cache: Optional[np.ndarray] = None  # per-pixel peak heights
+
+        m = float(np.abs(self.peaks).max()) if len(self.peaks) else 0.0
+        self._gain = (1.0 / m) if m > 1e-4 else 1.0
+
+        self._preview_playing = False
+
+        self._create_dialog()
+
+    # ------------------------------------------------------------------ utils
+    def _t2x(self, t: float) -> int:
+        return int(t / self.duration * self.canvas_width)
+
+    def _x2t(self, x: float) -> float:
+        return max(0.0, min(self.duration, x / max(1, self.canvas_width) * self.duration))
+
+    @staticmethod
+    def _fmt(t: float) -> str:
+        t = max(0, int(round(t)))
+        h, m, s = t // 3600, (t % 3600) // 60, t % 60
+        return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+    # ----------------------------------------------------------------- dialog
+    def _create_dialog(self):
+        self.dialog = tk.Toplevel(self.parent)
+        self.dialog.title(f"Pick a section — {Path(self.file_path).name}")
+        self.dialog.configure(bg=COLORS["bg_dark"])
+        self.dialog.transient(self.parent)
+        self.dialog.grab_set()
+        self.dialog.minsize(720, 360)
+        self.dialog.protocol("WM_DELETE_WINDOW", self._on_cancel)
+        self.dialog.bind("<space>", self._on_space_key)
+        self.dialog.bind("<Escape>", lambda _e: self._on_cancel())
+
+        w, h = 920, 430
+        self.dialog.geometry(f"{w}x{h}")
+        # Center over the app window (keeps it on the app's monitor).
+        self.dialog.update_idletasks()
+        px, py = self.parent.winfo_rootx(), self.parent.winfo_rooty()
+        pw, ph = self.parent.winfo_width(), self.parent.winfo_height()
+        self.dialog.geometry(f"{w}x{h}+{px + (pw - w) // 2}+{py + (ph - h) // 3}")
+
+        main = tk.Frame(self.dialog, bg=COLORS["bg_dark"], padx=18, pady=14)
+        main.pack(fill=tk.BOTH, expand=True)
+
+        tk.Label(
+            main,
+            text=f"🎬 This recording is {self._fmt(self.duration)} long.",
+            bg=COLORS["bg_dark"],
+            fg=COLORS["text_primary"],
+            font=("Segoe UI", 13, "bold"),
+        ).pack(anchor="w")
+        tk.Label(
+            main,
+            text="Drag across the overview to pick the part you want, then load it for fine trimming.",
+            bg=COLORS["bg_dark"],
+            fg=COLORS["text_muted"],
+            font=("Segoe UI", 9),
+        ).pack(anchor="w", pady=(0, 10))
+
+        canvas_box = tk.Frame(main, bg=COLORS["bg_light"], padx=2, pady=2)
+        canvas_box.pack(fill=tk.BOTH, expand=True)
+        self.canvas = tk.Canvas(
+            canvas_box,
+            width=self.canvas_width,
+            height=self.canvas_height,
+            bg="#12141a",
+            highlightthickness=0,
+        )
+        self.canvas.pack(fill=tk.BOTH, expand=True)
+        self.canvas.bind("<Button-1>", self._on_press)
+        self.canvas.bind("<B1-Motion>", self._on_drag)
+        self.canvas.bind("<ButtonRelease-1>", self._on_release)
+        self.canvas.bind("<Configure>", self._on_canvas_resize)
+
+        # Quick-length row
+        ql = tk.Frame(main, bg=COLORS["bg_dark"])
+        ql.pack(fill=tk.X, pady=(10, 4))
+        tk.Label(
+            ql, text="Length:", bg=COLORS["bg_dark"], fg=COLORS["text_primary"],
+            font=("Segoe UI", 10),
+        ).pack(side=tk.LEFT, padx=(0, 6))
+        for secs in self.QUICK_LENGTHS:
+            if secs > self.duration:
+                continue
+            label = f"{secs}s" if secs < 60 else f"{secs // 60}m"
+            tk.Button(
+                ql, text=label, command=lambda s=secs: self._set_length(s),
+                bg=COLORS["bg_medium"], fg="white", activebackground=COLORS["bg_light"],
+                activeforeground="white", font=("Segoe UI", 9), width=5,
+                relief="flat", cursor="hand2",
+            ).pack(side=tk.LEFT, padx=3)
+
+        self.play_btn = tk.Button(
+            ql, text="▶ Preview", command=self._toggle_preview,
+            bg=COLORS["green"], fg="white", activebackground="#1E8E4D",
+            activeforeground="white", font=("Segoe UI", 9, "bold"), width=10,
+            relief="flat", cursor="hand2",
+        )
+        self.play_btn.pack(side=tk.RIGHT)
+
+        self.sel_label = tk.Label(
+            main, text="", bg=COLORS["bg_dark"], fg=COLORS["text_primary"],
+            font=("Segoe UI", 11, "bold"),
+        )
+        self.sel_label.pack(anchor="w", pady=(6, 0))
+
+        # Footer actions
+        sep = tk.Frame(main, bg=COLORS["bg_light"], height=1)
+        sep.pack(fill=tk.X, pady=(12, 10))
+        footer = tk.Frame(main, bg=COLORS["bg_dark"])
+        footer.pack(fill=tk.X)
+        tk.Button(
+            footer, text="Cancel", command=self._on_cancel,
+            bg=COLORS["bg_medium"], fg="white", activebackground=COLORS["bg_light"],
+            activeforeground="white", font=("Segoe UI", 10), width=10,
+            relief="flat", cursor="hand2", pady=5,
+        ).pack(side=tk.RIGHT, padx=(8, 0))
+        tk.Button(
+            footer, text="Load section →", command=self._on_load,
+            bg=COLORS["blurple"], fg="white",
+            activebackground=COLORS.get("blurple_hover", "#4752C4"),
+            activeforeground="white", font=("Segoe UI", 10, "bold"), width=16,
+            relief="flat", cursor="hand2", pady=5,
+        ).pack(side=tk.RIGHT)
+
+        self._update_labels()
+        self._draw()
+
+    # ------------------------------------------------------------------ draw
+    def _build_columns(self):
+        """Per-pixel peak heights for the overview (recomputed on resize)."""
+        w = self.canvas_width
+        n = len(self.peaks)
+        cols = np.zeros(w, dtype=np.float32)
+        if n > 0:
+            # Map each pixel column to a slice of the low-rate peak array.
+            edges = (np.linspace(0, n, w + 1)).astype(np.int64)
+            for i in range(w):
+                a, b = edges[i], edges[i + 1]
+                if b > a:
+                    cols[i] = np.abs(self.peaks[a:b]).max()
+        self._col_cache = cols
+
+    def _draw(self):
+        c = self.canvas
+        c.delete("all")
+        self.canvas_width = c.winfo_width() or self.canvas_width
+        self.canvas_height = c.winfo_height() or self.canvas_height
+        if self._col_cache is None or len(self._col_cache) != self.canvas_width:
+            self._build_columns()
+
+        h = self.canvas_height
+        mid = h // 2
+        x0, x1 = self._t2x(self.sel_start), self._t2x(self.sel_end)
+
+        # selection band (drawn first, under the waveform)
+        c.create_rectangle(x0, 0, x1, h, fill="#26304d", outline="", width=0)
+
+        # waveform
+        gain = self._gain * (mid - 8)
+        cols = self._col_cache
+        for x in range(min(self.canvas_width, len(cols))):
+            bar = int(cols[x] * gain)
+            if bar <= 0:
+                continue
+            in_sel = x0 <= x <= x1
+            c.create_line(x, mid - bar, x, mid + bar,
+                          fill=(COLORS["blurple"] if in_sel else "#454a52"), width=1)
+
+        c.create_line(0, mid, self.canvas_width, mid, fill="#3a3d41", width=1)
+
+        # selection handles
+        for x, col in ((x0, COLORS["green"]), (x1, COLORS["red"])):
+            c.create_line(x, 0, x, h, fill=col, width=2)
+            c.create_polygon(x - 7, 0, x + 7, 0, x, 13, fill=col)
+
+        # time ticks every ~1/8 of the file
+        for k in range(1, 8):
+            t = self.duration * k / 8
+            x = self._t2x(t)
+            c.create_line(x, h - 14, x, h, fill="#2a2d31", width=1)
+            c.create_text(x, h - 7, text=self._fmt(t), fill=COLORS["text_muted"],
+                          font=("Segoe UI", 7), anchor="s")
+
+    def _on_canvas_resize(self, event):
+        self.canvas_width = event.width
+        self.canvas_height = event.height
+        self._col_cache = None
+        self._draw()
+
+    # ------------------------------------------------------------- selection
+    def _clamp_selection(self):
+        self.sel_start = max(0.0, min(self.sel_start, self.duration - 0.05))
+        self.sel_end = max(self.sel_start + 0.05, min(self.sel_end, self.duration))
+        if self.sel_end - self.sel_start > self.MAX_WINDOW_SECONDS:
+            self.sel_end = self.sel_start + self.MAX_WINDOW_SECONDS
+
+    def _set_length(self, secs: float):
+        secs = min(secs, self.MAX_WINDOW_SECONDS, self.duration)
+        self.sel_end = self.sel_start + secs
+        if self.sel_end > self.duration:
+            self.sel_end = self.duration
+            self.sel_start = max(0.0, self.sel_end - secs)
+        self._clamp_selection()
+        self._update_labels()
+        self._draw()
+
+    def _on_press(self, event):
+        x0, x1 = self._t2x(self.sel_start), self._t2x(self.sel_end)
+        if abs(event.x - x0) <= 8:
+            self.dragging = "start"
+        elif abs(event.x - x1) <= 8:
+            self.dragging = "end"
+        elif x0 < event.x < x1:
+            self.dragging = "move"
+            self._move_anchor = self._x2t(event.x) - self.sel_start
+        else:
+            # Start a fresh selection at the click point.
+            self.dragging = "end"
+            self.sel_start = self._x2t(event.x)
+            self.sel_end = self.sel_start + 0.05
+        self._on_drag(event)
+
+    def _on_drag(self, event):
+        if not self.dragging:
+            return
+        t = self._x2t(event.x)
+        if self.dragging == "start":
+            self.sel_start = min(t, self.sel_end - 0.05)
+        elif self.dragging == "end":
+            self.sel_end = max(t, self.sel_start + 0.05)
+        elif self.dragging == "move":
+            length = self.sel_end - self.sel_start
+            self.sel_start = t - self._move_anchor
+            self.sel_end = self.sel_start + length
+        self._clamp_selection()
+        self._update_labels()
+        self._draw()
+
+    def _on_release(self, event):
+        self.dragging = None
+
+    def _update_labels(self):
+        length = self.sel_end - self.sel_start
+        self.sel_label.config(
+            text=f"📍 {self._fmt(self.sel_start)} → {self._fmt(self.sel_end)}   "
+                 f"({length:.1f}s selected)"
+        )
+
+    # -------------------------------------------------------------- preview
+    def _on_space_key(self, event):
+        self._toggle_preview()
+        return "break"
+
+    def _toggle_preview(self):
+        if self._preview_playing:
+            self._stop_preview()
+            return
+        try:
+            # Preview only the first chunk from the start handle so a long
+            # selection (up to 45 min) still previews instantly.
+            length = min(self.sel_end - self.sel_start, self.PREVIEW_CAP_SECONDS)
+            audio, sr = decode_audio_range(
+                self.file_path, self.sel_start, length, self.sample_rate, channels=2
+            )
+            if len(audio) == 0:
+                return
+            sd.play(audio, sr, device=self.output_device)
+            self._preview_playing = True
+            self.play_btn.config(text="⏹ Stop", bg=COLORS["red"])
+            # Auto-reset the button when playback finishes.
+            ms = int(min(length, len(audio) / sr) * 1000) + 150
+            self.dialog.after(ms, self._reset_preview_btn)
+        except Exception as e:
+            messagebox.showerror("Preview", f"Could not preview:\n{e}", parent=self.dialog)
+
+    def _stop_preview(self):
+        try:
+            sd.stop()
+        except Exception:
+            pass
+        self._reset_preview_btn()
+
+    def _reset_preview_btn(self):
+        self._preview_playing = False
+        try:
+            if self.play_btn.winfo_exists():
+                self.play_btn.config(text="▶ Preview", bg=COLORS["green"])
+        except Exception:
+            pass
+
+    # ---------------------------------------------------------------- result
+    def _on_load(self):
+        self._stop_preview()
+        try:
+            length = self.sel_end - self.sel_start
+            audio, sr = decode_audio_range(
+                self.file_path, self.sel_start, length, self.sample_rate, channels=2
+            )
+            if len(audio) == 0:
+                messagebox.showwarning(
+                    "Empty selection",
+                    "That section decoded to no audio. Pick a different part.",
+                    parent=self.dialog,
+                )
+                return
+            self.result = (audio, sr)
+        except Exception as e:
+            messagebox.showerror("Load failed", f"Could not load section:\n{e}", parent=self.dialog)
+            return
+        self.dialog.destroy()
+
+    def _on_cancel(self):
+        self._stop_preview()
+        self.result = None
+        self.dialog.destroy()
+
+    def show(self) -> Optional[Tuple[np.ndarray, int]]:
         self.dialog.wait_window()
         return self.result
 
