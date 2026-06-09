@@ -1440,9 +1440,36 @@ class PersonPanel(ctk.CTkFrame):
                 cols = max(1, entry["chip_cols"])
                 for c in range(cols):
                     holder.grid_columnconfigure(c, weight=1, uniform="chip")
-                for i, slot in enumerate(sounds):
-                    self._build_chip(holder, group, slot).grid(
-                        row=i // cols, column=i % cols, padx=3, pady=3, sticky="ew")
+                # Build chips in small chunks across event-loop ticks so a group
+                # with many sounds can't freeze the UI thread. A frozen UI thread
+                # also stalls the app's global keyboard hook -> system-wide key
+                # lag (this is what made Shift stop working while a person was
+                # open). A generation token + liveness check cancel an in-flight
+                # build if the panel rebuilds or the holder is destroyed. Masonry
+                # placement is COUNT-based (see rebuild), so async chip arrival
+                # does not disturb the column layout.
+                gen = entry.get("_chip_gen", 0) + 1
+                entry["_chip_gen"] = gen
+                _CHUNK = 6
+
+                def _build_chunk(start, _gen=gen):
+                    if entry.get("_chip_gen") != _gen or not _alive(holder):
+                        return
+                    end = min(start + _CHUNK, len(sounds))
+                    for i in range(start, end):
+                        try:
+                            self._build_chip(holder, group, sounds[i]).grid(
+                                row=i // cols, column=i % cols,
+                                padx=3, pady=3, sticky="ew")
+                        except Exception:
+                            pass
+                    if end < len(sounds):
+                        try:
+                            self.after(1, lambda: _build_chunk(end))
+                        except Exception:
+                            pass
+
+                _build_chunk(0)   # first few synchronously for instant feedback
             entry["built"] = True
         try:
             if not holder.winfo_ismapped():
