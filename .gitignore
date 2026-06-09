@@ -40,6 +40,9 @@ build_fresh/
 config_backups/
 _recovery/
 
+# Decoded-PCM audio cache (rebuilt automatically from sounds/)
+audio_cache/
+
 # Runtime logs / profiling artifacts (not source)
 debug.log
 perf.log

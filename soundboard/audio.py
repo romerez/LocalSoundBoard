@@ -701,6 +701,11 @@ class SoundCache:
         self.sounds_dir = Path(SOUNDS_DIR)
         self._cache: Dict[str, np.ndarray] = {}  # filepath -> resampled audio data
         self._lock = threading.Lock()
+        # On-disk cache of fully-decoded + resampled PCM. Decoding (esp. the
+        # ffmpeg subprocess for OGG/MP3) and the 48 kHz resample are the slow
+        # part of warming; persisting the finished float32 array lets later
+        # launches skip ALL of it and just np.load the result.
+        self._audio_cache_dir = Path("audio_cache")
 
         # Ensure sounds directory exists
         self.sounds_dir.mkdir(exist_ok=True)
@@ -772,21 +777,69 @@ class SoundCache:
                 hasher.update(chunk)
         return hasher.hexdigest()
 
+    def _disk_cache_path(self, file_path: str):
+        """Path of the on-disk decoded-PCM cache for ``file_path`` (or None).
+
+        Keyed by absolute path + mtime + target sample rate, so editing or
+        replacing a sound automatically invalidates its cache (new key).
+        """
+        try:
+            p = Path(file_path)
+            mtime = int(p.stat().st_mtime)
+            key = hashlib.md5(
+                f"{p.resolve()}|{mtime}|{self.sample_rate}".encode("utf-8")
+            ).hexdigest()
+            return self._audio_cache_dir / f"{key}.npy"
+        except Exception:
+            return None
+
     def _load_into_cache(self, file_path: str) -> np.ndarray:
-        """Load and resample audio file, caching the result."""
+        """Load + resample an audio file, caching the result in RAM and on disk.
+
+        Fast path: if a decoded-PCM cache file exists on disk, np.load it (no
+        decode, no ffmpeg, no resample). Slow path: decode + resample, then
+        persist the result so the NEXT launch is fast. Always falls back to
+        decoding if the cache is missing/corrupt — so it can never break audio.
+        """
         with self._lock:
             if file_path in self._cache:
                 return self._cache[file_path]
 
+        # ---- fast path: pre-decoded PCM on disk -------------------------
+        dc = self._disk_cache_path(file_path)
+        if dc is not None and dc.exists():
+            try:
+                data = np.load(str(dc))
+                with self._lock:
+                    self._cache[file_path] = data
+                return data
+            except Exception:
+                try:
+                    dc.unlink()  # corrupt entry — drop and re-decode
+                except OSError:
+                    pass
+
+        # ---- slow path: decode + resample, then persist ----------------
         try:
             data, sr = self._read_audio_file(file_path)
 
             # Resample if needed (do this once, not on every play)
             if sr != self.sample_rate:
                 data = _resample_audio(data, sr, self.sample_rate)
+            data = np.ascontiguousarray(data, dtype=np.float32)
 
             with self._lock:
                 self._cache[file_path] = data
+
+            if dc is not None:
+                try:
+                    self._audio_cache_dir.mkdir(exist_ok=True)
+                    tmp = dc.parent / (dc.name + ".tmp")
+                    with open(tmp, "wb") as fh:
+                        np.save(fh, data)          # write to handle => exact name
+                    os.replace(str(tmp), str(dc))  # atomic publish
+                except Exception:
+                    pass
 
             return data
         except Exception as e:
