@@ -1,6 +1,6 @@
 # Copilot Instructions - Discord Soundboard Project
 
-> **Last Updated:** 2026-06-01 (weighted scroll speed, scroll isolation, hover volume control)
+> **Last Updated:** 2026-06-09 (data recovery + save-path safety, decoded-audio disk cache, startup-freeze fix, HiDPI window-size fix, People-hub hang fix)
 > **Status:** Active Development
 > **Language:** Python 3.x
 ALWAYS EDIT THIS FILE FIRST when adding features or making changes. This is the source of truth for the project and helps maintain consistency.
@@ -300,6 +300,11 @@ Persistent (NOT reset per-click):
 - [x] **Real-time mic Voice Changer** — modulates your LIVE microphone before it hits the virtual cable, so the Discord call hears the effect. Pure-numpy DSP chain (`soundboard/voice_fx.py` → `VoiceChanger`) applied in `AudioMixer._output_callback` right where the mic is scaled, after RNNoise and before the soft-clip. Effects: pitch shift (deep↔chipmunk, crossfading delay-line shifter), drive/distortion, bitcrush (lo-fi/8-bit), ring-mod (robot/metallic), bandpass (radio/megaphone/telephone) via `scipy.signal` biquad, chorus/vibrato (modulated delay), echo (feedback delay), reverb (Schroeder comb bank), tremolo, output gain. Lock-free (GUI sets attrs, audio thread reads), crash-proof (`process()` never raises, always returns len(input)), cheap (vectorised, well under one 1024-block).
 - [x] **17 one-tap voice presets** — Clean, Deep, Demon, Chipmunk, Helium, Robot, Cylon, Radio, Megaphone, Telephone, Alien, Underwater, Cave, Ghost, Drunk, 8-Bit, Stadium. Voice Changer card in Audio Options (after Mic Processing): master Enable, preset grid, collapsible ⚙ Advanced drawer (pitch slider −12..+12 st, per-effect on/off toggles, output level). Persisted in config under `voice_changer`; applied to the mixer on stream start and mirrored live while streaming.
 - [x] **Dynamic grid density** — live ⊞ Columns −/+ control in the soundboard header lets the user pick how many sound slots appear per row (2–12). Replaces the fixed `UI["grid_columns"]` constant with `self.grid_columns`; changing it rebuilds every tab's grid (`_rebuild_all_tab_grids` via `_cleanup_tab_widgets` + `_build_all_tab_widgets`) and persists under `grid_columns`. Denser = more, smaller slots; roomier = fewer, larger.
+- [x] **Persistent decoded-audio cache** — decoded + 48 kHz-resampled PCM is saved to `audio_cache/*.npy` and reloaded on later launches, so warming skips decode/ffmpeg/resample (`SoundCache._load_into_cache`). Keyed by path+mtime+sr; auto-invalidates on edit; safe fallback to decode.
+- [x] **Data-safety: persons save-guard + rotating backups** — an empty in-memory persons list can't overwrite people on disk; every launch snapshots the good config to `config_backups/` (keeps 20).
+- [x] **HiDPI window-size persistence fixed** — window restores at its saved size instead of growing ~1.5× each launch (restore via raw `wm_geometry`).
+- [x] **Faster startup** — removed the per-tab synchronous layout-flush warm-up; first tab paints, others lazily on switch.
+- [x] **People-hub smoothness** — pop-out chips build incrementally (`after()`-chunked) so a sound-heavy person never freezes the UI; per-person avatar render cached.
 
 ---
 
@@ -371,12 +376,15 @@ Manages local sound storage and in-memory caching.
 - Copies sounds to `sounds/` folder for persistence
 - Pre-loads audio data at target sample rate (48kHz)
 - Provides O(1) lookup for cached audio
+- **Persistent decoded-PCM disk cache (`audio_cache/`):** the decoded + resampled float32 PCM is also saved to `audio_cache/<key>.npy` and reloaded on later launches, so warming/first-play skips decode + ffmpeg + resample. Key = `md5(abspath|mtime|sample_rate)`, so editing/replacing a file auto-invalidates it. Falls back to decoding if the cache is missing/corrupt — never breaks playback. The sound editor reads source files directly (not this cache), so edit/clone/trim are unaffected.
 
 **Key Methods:**
 - `add_sound(source_path)` - Copy sound to local storage, cache it, return local path
 - `get_sound_data(file_path)` - Get pre-loaded audio data (fast)
 - `preload_sounds(paths)` - Pre-load multiple sounds at startup
 - `remove_sound(file_path)` - Remove from cache and optionally delete file
+- `_load_into_cache(file_path)` - Decode+resample (or `np.load` from `audio_cache/`), store in RAM + persist to disk
+- `_disk_cache_path(file_path)` - Resolve the `audio_cache/<key>.npy` path for a sound (key = abspath+mtime+sr)
 
 #### `SoundboardApp`
 Main GUI application.
@@ -481,6 +489,28 @@ python main.py
 
 ## Change Log
 
+### Version 1.3.0 (Performance, Data-Safety & Window-Size — 2026-06-09)
+
+**Data recovery & safety (after a people-data wipe):**
+- **Root cause found & fixed:** `_save_config_now()` guarded *tabs* against being wiped but **not persons** — so when `self.persons` went empty in memory (a transient state after the pop-out crash below), the auto-save wrote `persons: []`, and because each save copies the live file over `.bak` first, a second save destroyed the only backup too. Added a **persons data-safety guard**: an empty in-memory persons list can no longer overwrite people that still exist on disk (it preserves the on-disk people instead).
+- **Rotating config backups:** `_snapshot_good_config()` runs once at startup right after a successful load and copies the known-good config to `config_backups/` (keeps the last 20). Unlike `.bak` (overwritten every save), this folder is write-once per launch, so a session can never destroy the only good copy again.
+- **Recovered 8 people / 83 person-sounds** from git's object store (dangling blobs) + a deep per-person merge across all backups, and surfaced **80 orphaned audio files** (lost slot-sounds still on disk) as a **"♻ Recovered" tab** for re-filing.
+- **Pop-out crash fix:** `PersonPanel._cleanup()` now cancels every pending `after()` timer (preview-progress tick, reset, reflow, nudge) on close, so a callback can't fire on a destroyed window (`TclError: invalid command name`).
+
+**Performance:**
+- **Decoded-audio disk cache (`audio_cache/`):** `SoundCache._load_into_cache()` saves the fully decoded + 48 kHz-resampled float32 PCM to `audio_cache/<key>.npy` and loads it back on later launches, **skipping decode/ffmpeg/resample entirely** (warming hundreds of sounds becomes `np.load` instead of re-decoding every launch). Keyed by abspath + mtime + sample-rate so an edited/replaced sound auto-invalidates; falls back to decoding if a cache file is missing/corrupt, so it can never break playback. The sound editor reads source files directly, so **edit / clone / trim are unaffected**.
+- **Startup freeze removed:** dropped the per-tab synchronous `update_idletasks()` warm-up in `_build_tab_widgets` — it forced a full-window layout+paint flush for **every** background tab at startup (18–19 blocking flushes on a large config). Virtualization already repaints a tab on first show, so it was redundant; first switch now lays out lazily.
+- **People-hub hang fixed:** `PersonPanel._expand_group_inplace()` now builds chips in **chunks of 6 across event-loop ticks** instead of all at once, so a sound-heavy person no longer freezes the UI thread. (A frozen UI thread also stalls the app's global keyboard hook → system-wide key lag, which is what made Shift stop working while a person window was open.)
+- **Image caches:** slot-image decode cached by `(path, mtime, size)` (reused across tabs/search/density rebuilds); person-hub avatar decode/crop/mask cached the same way.
+
+**Window / HiDPI:**
+- **Window no longer grows huge each launch:** restore geometry via `wm_geometry()` (raw Tk) instead of CustomTkinter's `geometry()`. We save `winfo_geometry()` in physical px, but CTk's `geometry()` setter re-multiplies the size by the window scaling, so at 150 % DPI the window grew ~1.5× every launch. `wm_geometry()` round-trips `winfo_geometry()` identically.
+
+**Housekeeping / docs:**
+- gitignore + untrack `debug.log` / `perf.log` / `importtime.txt`; gitignore `config_backups/`, `audio_cache/`, `_recovery/`.
+- Added `docs/PERFORMANCE_PLAN.md` (full bottom-to-top perf audit + 3-plan roadmap) and `docs/SESSION_BACKLOG.md` (open items + perf backlog).
+- Added `stop_soundboard.bat` (force-close orphaned app processes) and `soundboard/perf_probe.py` (opt-in `LSB_PERF=1` timing harness; inert otherwise).
+
 ### Version 1.2.0 (Voice Changer & Dynamic Grid - 2026-06-03)
 - **Real-time mic Voice Changer** (`soundboard/voice_fx.py` → `VoiceChanger`): pure-numpy effect chain applied to the live mic inside `AudioMixer._output_callback` (after RNNoise, before soft-clip → virtual cable), so the Discord call hears the effect. Effects: pitch shift (crossfading delay-line shifter), drive, bitcrush, ring-mod (robot), `scipy.signal` bandpass (radio/megaphone/telephone), chorus/vibrato, echo, Schroeder-comb reverb, tremolo, output gain. Lock-free reads in the audio thread; `process()` never raises and always returns len(input).
 - **17 one-tap presets** + Voice Changer card in Audio Options (master Enable, preset grid, collapsible ⚙ Advanced drawer with pitch slider / per-effect toggles / output level). Persisted under `voice_changer`; applied on stream start and mirrored live.
@@ -571,6 +601,16 @@ When asked to add a feature:
 ## Known Gotchas & Lessons Learned
 
 > **IMPORTANT:** Add to this section whenever you encounter a bug or learn something the hard way. This prevents repeating mistakes.
+
+### CRITICAL Lessons — 2026-06-09 (data loss, DPI, freeze→keyboard)
+
+| Issue | Cause | Fix / Rule |
+|-------|-------|-----|
+| **Entire `persons` list silently wiped** | `_save_config_now()` guarded `tabs` against an empty-overwrite but **not `persons`**; a transient empty `self.persons` (after the pop-out crash) was auto-saved as `persons: []`, and the next save copied that over `.bak` too — destroying the only backup. | Guard EVERY critical config section against an empty-overwrite (now: if in-memory persons is empty but disk has people, preserve the disk people). Keep **rotating, write-once-per-launch backups** (`config_backups/`, via `_snapshot_good_config()`), never just a single `.bak` that the app overwrites. Recovery: decoded-PCM and slot files survive in `sounds/`; old configs survive as git dangling blobs (`git cat-file --batch-all-objects` + parse for `persons`). |
+| **Window grows ~1.5× bigger every launch (HiDPI)** | We SAVE geometry via `winfo_geometry()` (PHYSICAL px) but RESTORE via CustomTkinter's `geometry()`, which **re-multiplies** size by the window scaling. At 150 % DPI the window balloons each launch. | Restore with **`self.root.wm_geometry(geo)`** (raw Tk, no CTk scaling) so it round-trips `winfo_geometry()` exactly. NEVER restore a `winfo_geometry()` value through CTk's `geometry()`. |
+| **Shift / keyboard stops working system-wide** | The app holds a global `keyboard` hook; when the UI thread **freezes** (e.g. the People-hub built all chips synchronously), the hook stalls → Windows blocks keyboard input app-wide. Force-killing the app clears it; a stuck modifier is released by re-sending key-up. | Never let the UI thread freeze — build heavy widget sets **incrementally** (`after()`-chunked). If a kill leaves a modifier stuck, inject key-up via `keybd_event`. |
+| **Startup "stuck" for ~2 min** | Two synchronous costs: per-tab `update_idletasks()` warm-up flush for all 18–19 tabs, AND re-decoding ~500+ sounds every launch (OGG/MP3 each spawn ffmpeg). Re-launching during the wait spawned **6 app instances** ("3 windows"). | Removed the per-tab warm-up flush; added the **decoded-audio disk cache** (`audio_cache/`). (Backlog: a single-instance guard so re-launching can't stack instances.) |
+| **Decoded-audio cache & editing** | — | `audio_cache/<key>.npy` is keyed by abspath+mtime+sr, so editing/replacing a sound auto-invalidates it; the editor reads source files directly (never the cache); a missing/corrupt entry falls back to decoding. Safe with edit/clone/trim/record. |
 
 ### Config & File Handling
 

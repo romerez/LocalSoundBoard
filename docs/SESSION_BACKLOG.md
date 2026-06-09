@@ -5,13 +5,25 @@
 
 ---
 
-## Status snapshot (what is SAFE right now)
+## Status snapshot — DONE & committed (2026-06-09)
 
-- ✅ **People data recovered & committed.** 8 people / 83 person-sounds restored from git's object store, deep-merged across all backups, applied to `soundboard_config.json` + `.bak`. Commits: `f713d46` (77-sound floor) and `923c67b` (83-sound merge). Frozen copy at `_recovery/GOOD_config_8people.json`.
-- ✅ **Save path hardened** — an empty in-memory persons list can no longer overwrite people that exist on disk ([gui.py `_save_config_now`](../soundboard/gui.py)).
-- ✅ **Pop-up crash fixed** — `PersonPanel._cleanup()` now cancels pending `after()` timers so a preview/reflow callback can't fire on a destroyed window.
-- ✅ **Perf quick wins landed** — slot-image decode cache (#3) + person-hub avatar cache (#38).
-- ✅ **Shift key** — was a side effect of the frozen app stalling the global keyboard hook; resolved on app shutdown.
+- ✅ **People data recovered & committed.** 8 people / 83 person-sounds restored from git's object store, deep-merged across all backups. Commits `f713d46` (77-sound floor), `923c67b` (83-sound merge). Frozen copy at `_recovery/GOOD_config_8people.json`.
+- ✅ **80 orphaned sounds recovered** into a "♻ Recovered" tab (`8ccec74`) — includes Yair's lost sounds; re-file them onto people once you've confirmed.
+- ✅ **Save path hardened** — an empty in-memory persons list can no longer overwrite people that exist on disk (`_save_config_now`).
+- ✅ **Rotating config backups** — `config_backups/` snapshot at every launch (keeps 20), so `.bak` getting overwritten can't cause total loss again.
+- ✅ **Pop-up crash fixed** — `PersonPanel._cleanup()` cancels pending `after()` timers.
+- ✅ **People-hub HANG fixed** (`9995bcb`) — chips build incrementally (`after()`-chunked); no UI freeze, no keyboard-stall.
+- ✅ **Window-size growth fixed** (`6368aa2`) — restore via raw `wm_geometry` (HiDPI no longer balloons the window).
+- ✅ **Startup freeze fixed** (`b14f9a7`) — dropped the per-tab layout-flush warm-up.
+- ✅ **Decoded-audio disk cache** (`26faff8`) — `audio_cache/`; decode once, `np.load` thereafter. Edit/clone safe.
+- ✅ **Image caches** — slot-image (#3) + avatar (#38) decode cached.
+- ✅ **Shift key** — was the frozen app stalling the global keyboard hook; resolved + the hang that caused it is fixed.
+
+### Still open
+- ⏳ **Single-instance guard** — slow startup once led to 6 stacked instances ("3 windows"); add a guard so re-launching focuses the existing window.
+- ⏳ **People windows polish** — search debounce (#37), true chip virtualization (#36), panel-cache eviction (#39). *(in progress)*
+- ⏳ **Re-file Yair's sounds** from the ♻ Recovered tab once verified.
+- ⏳ **Perf backlog** — #42 editor off-thread, C1 canvas-per-tab; re-run profiler for real numbers.
 
 ---
 
