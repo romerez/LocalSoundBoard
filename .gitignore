@@ -35,3 +35,12 @@ build/
 *.egg-info/
 dist_fresh/
 build_fresh/
+
+# Local config safety backups + recovery scratch (not source)
+config_backups/
+_recovery/
+
+# Runtime logs / profiling artifacts (not source)
+debug.log
+perf.log
+importtime.txt

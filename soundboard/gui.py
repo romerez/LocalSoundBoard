@@ -13902,6 +13902,43 @@ class SoundboardApp:
                 except Exception:
                     pass
 
+    def _snapshot_good_config(self, keep: int = 20):
+        """Save a timestamped copy of the just-loaded (known-good) config to
+        config_backups/, keeping the most recent ``keep`` copies.
+
+        Runs once at startup right after a successful load, so a session can
+        NEVER destroy the only good copy of the data. (The .bak file is
+        overwritten on every save — that is exactly how a people-wipe destroyed
+        the only backup once. This rotating folder is write-once per launch and
+        is never overwritten by the running app.)
+        """
+        try:
+            import datetime
+            if not os.path.exists(CONFIG_FILE):
+                return
+            backup_dir = "config_backups"
+            os.makedirs(backup_dir, exist_ok=True)
+            stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            dest = os.path.join(backup_dir, f"soundboard_config_{stamp}.json")
+            if not os.path.exists(dest):
+                shutil.copy2(CONFIG_FILE, dest)
+            backups = sorted(
+                (
+                    os.path.join(backup_dir, f)
+                    for f in os.listdir(backup_dir)
+                    if f.startswith("soundboard_config_") and f.endswith(".json")
+                ),
+                key=os.path.getmtime,
+                reverse=True,
+            )
+            for old in backups[keep:]:
+                try:
+                    os.remove(old)
+                except OSError:
+                    pass
+        except Exception as e:
+            print(f"[backup] config snapshot skipped: {e}")
+
     def _load_config(self):
         """Load configuration from JSON file."""
         if not os.path.exists(CONFIG_FILE):
@@ -14100,6 +14137,10 @@ class SoundboardApp:
 
             # Config loaded successfully — saving is now safe.
             self._config_loaded_ok = True
+            # DATA SAFETY: snapshot this known-good config to config_backups/
+            # immediately, before the session can mutate it — so a wipe can
+            # never leave us with no good copy again.
+            self._snapshot_good_config()
 
             # Auto-start the stream if enabled and devices are selected
             if auto_start and self.input_var.get() and self.output_var.get():
