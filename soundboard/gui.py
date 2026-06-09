@@ -13504,7 +13504,12 @@ class SoundboardApp:
                 px_i = max(vx, min(px_i, vx + vw - 120))
                 py_i = max(vy, min(py_i, vy + vh - 80))
                 new_geo = f"{w_i}x{h_i}+{px_i}+{py_i}"
-            self.root.geometry(new_geo)
+            # Use wm_geometry (raw Tk), NOT CTk's geometry(). We SAVE via
+            # winfo_geometry() (physical px), but CTk's geometry() setter
+            # RE-multiplies the size by the window scaling — so on a 150% HiDPI
+            # display the window grew ~1.5x every launch ("size changing to
+            # huge"). wm_geometry round-trips winfo_geometry() identically.
+            self.root.wm_geometry(new_geo)
         except Exception:
             pass
 

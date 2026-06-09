@@ -7757,402 +7757,1282 @@
         "0": {
           "name": "היידה",
           "file_path": "sounds\\היידה_50403435.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "1": {
           "name": "פאק",
           "file_path": "sounds\\פאק_50403432.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "2": {
           "name": "מה זה לא המילה",
           "file_path": "sounds\\מה זה לא המילה_50403430.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "3": {
           "name": "איזה מטומטם אני",
           "file_path": "sounds\\איזה מטומטם אני_50403427.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "4": {
           "name": "צחוק",
           "file_path": "sounds\\צחוק_50402618.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "5": {
           "name": "קצת קרינג'",
           "file_path": "sounds\\קצת קרינג'_50402610.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "6": {
           "name": "איכס יא מגעיל",
           "file_path": "sounds\\איכס יא מגעיל_50401879.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "7": {
           "name": "צחוק",
           "file_path": "sounds\\צחוק_50401876.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "8": {
           "name": "מה יש לך",
           "file_path": "sounds\\מה יש לך_50401868.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "9": {
           "name": "טל מרגיז אותך הסאונדבורדים",
           "file_path": "sounds\\טל מרגיז אותך הסאונדבורדים_50401101.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "10": {
           "name": "לא זה לא",
           "file_path": "sounds\\לא זה לא_50401098.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "11": {
           "name": "כמה אתה משלם",
           "file_path": "sounds\\כמה אתה משלם_50401096.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "12": {
           "name": "אתה מעביר קורסים",
           "file_path": "sounds\\אתה מעביר קורסים_50401093.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "13": {
           "name": "סליחה שאני לא מקצוען כמוך",
           "file_path": "sounds\\סליחה שאני לא מקצוען כמוך_50401091.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "14": {
           "name": "אהה יו דודה שלך",
           "file_path": "sounds\\אהה יו דודה שלך_50400272.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "15": {
           "name": "טל",
           "file_path": "sounds\\טל_50400197.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "16": {
           "name": "זה מ tww",
           "file_path": "sounds\\זה מ TWW_50400194.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "17": {
           "name": "איך המאונט",
           "file_path": "sounds\\איך המאונט_50400191.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "18": {
           "name": "איכס",
           "file_path": "sounds\\איכס_50400184.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "19": {
           "name": "אני כבר משתף איתך מסך",
           "file_path": "sounds\\אני כבר משתף איתך מסך_50399511.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "20": {
           "name": "אני רוצה להראות לך משהו",
           "file_path": "sounds\\אני רוצה להראות לך משהו_50399508.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "21": {
           "name": "אחי",
           "file_path": "sounds\\אחי_50399505.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "22": {
           "name": "למה",
           "file_path": "sounds\\למה_50399061.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "23": {
           "name": "למה אתה מתנתק",
           "file_path": "sounds\\למה אתה מתנתק_50399057.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "24": {
           "name": "לפני שאני מתנתק",
           "file_path": "sounds\\לפני שאני מתנתק_50399052.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "25": {
           "name": "בסדר",
           "file_path": "sounds\\בסדר_50399047.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "26": {
           "name": "מה המצב יאירוס",
           "file_path": "sounds\\מה המצב יאירוס_50399043.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "27": {
           "name": "מה _ למה",
           "file_path": "sounds\\מה _ למה_50399040.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "28": {
           "name": "אני יכול להגיד לך",
           "file_path": "sounds\\אני יכול להגיד לך_50399031.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "29": {
           "name": "מה למה _ למה",
           "file_path": "sounds\\מה למה _ למה_50399023.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "30": {
           "name": "כולם ברחו",
           "file_path": "sounds\\כולם ברחו_35761932.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "31": {
           "name": "אני הולך לעשות הליכה בים",
           "file_path": "sounds\\אני הולך לעשות הליכה בים_35760865.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "32": {
           "name": "יאיר שקט שנייה",
           "file_path": "sounds\\יאיר שקט שנייה_35759079.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "33": {
           "name": "רועי_ בוא נראה מה אומר החוק",
           "file_path": "sounds\\רועי_ בוא נראה מה אומר החוק_52161455.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "34": {
           "name": "זה יהודי או גוי",
           "file_path": "sounds\\זה יהודי או גוי_86371309.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "35": {
           "name": "זה לא שאני לא רוצה לעבוד",
           "file_path": "sounds\\זה לא שאני לא רוצה לעבוד_85763518.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "36": {
           "name": "no-god-please-no-noooooooooo-1",
           "file_path": "sounds\\no-god-please-no-noooooooooo-1_3a5af6ec.mp3",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "37": {
           "name": "sitcom-laughing-1",
           "file_path": "sounds\\sitcom-laughing-1_ce23f4a4.mp3",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "38": {
           "name": "sad-meow-song",
           "file_path": "sounds\\sad-meow-song_0f73ff17.mp3",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "39": {
           "name": "why-are",
           "file_path": "sounds\\why-are_fdfc5efa.mp3",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "40": {
           "name": "רועי קרוייז_ מה קורה",
           "file_path": "sounds\\רועי קרוייז_ מה קורה_95407902.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "41": {
           "name": "רועי קרוייז_ וואלה סוכר",
           "file_path": "sounds\\רועי קרוייז_ וואלה סוכר_95378618.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "42": {
           "name": "קרן_ יש ריח של פיצה",
           "file_path": "sounds\\קרן_ יש ריח של פיצה_10191658.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "43": {
           "name": "קרן_ טל",
           "file_path": "sounds\\קרן_ טל_78532228.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "44": {
           "name": "רועי_ יש מפתח טל",
           "file_path": "sounds\\רועי_ יש מפתח טל_41424857_42793838.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "45": {
           "name": "גל__זה אני בכלל שונא שעושים",
           "file_path": "sounds\\גל__זה אני בכלל שונא שעושים_42036102.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "46": {
           "name": "גל _לאן אתה הולך",
           "file_path": "sounds\\גל _לאן אתה הולך_42010198.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "47": {
           "name": "יקיר_ מה קורה",
           "file_path": "sounds\\יקיר_ מה קורה_41849685.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "48": {
           "name": "יקיר_ מה קורה",
           "file_path": "sounds\\יקיר_ מה קורה_41811652.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "49": {
           "name": "רועי_ יש מפתח טל",
           "file_path": "sounds\\רועי_ יש מפתח טל_41424857.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "50": {
           "name": "טל_אני כמה דקות בא, שיחת טלפון",
           "file_path": "sounds\\טל_אני כמה דקות בא, שיחת טלפון_41424718.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "51": {
           "name": "bruh-sound-effect_wstdzdm",
           "file_path": "sounds\\bruh-sound-effect_WstdzdM_4decc52e.mp3",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "52": {
           "name": "daddyy-chill",
           "file_path": "sounds\\daddyy-chill_50a76673.mp3",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "53": {
           "name": "אני רוצה לזיין (רמיקס באורך מלא) [cjqd_ez7dws] (add vocal) (1)",
           "file_path": "sounds\\אני רוצה לזיין (רמיקס באורך מלא) [cJQd_EZ7Dws] (Add Vocal) (1)_352fc0af.mp3",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "54": {
           "name": "אני רוצה לזיין (רמיקס באורך מלא) [cjqd_ez7dws] (add vocal)",
           "file_path": "sounds\\אני רוצה לזיין (רמיקס באורך מלא) [cJQd_EZ7Dws] (Add Vocal)_bd82d7c6.mp3",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "55": {
           "name": "processed_vocal",
           "file_path": "sounds\\processed_vocal_1776607156147_87869305.mp3",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "56": {
           "name": "בןבןבןןבבבןבבבןבןבןבןבן זונה",
           "file_path": "sounds\\בןבןבןןבבבןבבבןבןבןבןבן זונה_17c57bbc.mp3",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "57": {
           "name": "משפחת שווץ _ פרק 3 - דוכן מיצים",
           "file_path": "sounds\\משפחת שווץ _ פרק 3 - דוכן מיצים_17491424.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "58": {
           "name": "דיבוב מצחיק לתכנית דת 10",
           "file_path": "sounds\\דיבוב מצחיק לתכנית דת 10_2fff1ceb.mp3",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "59": {
           "name": "אמא שלך זונההההה (רמיקס)",
           "file_path": "sounds\\אמא שלך זונההההה (רמיקס)_38345260.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "60": {
           "name": "1172111309941252220",
           "file_path": "sounds\\1172111309941252220_38273760.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "61": {
           "name": "1274108855424647350",
           "file_path": "sounds\\1274108855424647350_37738879.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "62": {
           "name": "1172111309941252220",
           "file_path": "sounds\\1172111309941252220_6ce80e56.ogg",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "63": {
           "name": "fbdownloader.to_aqpllv4drz9fm6berkgj9ermxbw3ddcdvoeuhwhtpn3riwsmtod0prf3mq4eugk2e2omsqd7djrh9fqfw8vxf7aw_360p_(sd)",
           "file_path": "sounds\\FBDownloader.to_AQPLlv4DRz9fm6bErkgJ9ermxBW3dDcdvoeuhWhTPn3RiWsmTod0PRf3mQ4EUGk2e2oMSQD7DJrH9fqFW8vxf7aW_360p_(SD)_36492802.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "64": {
           "name": "1293318199827365918",
           "file_path": "sounds\\1293318199827365918_96728926.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "65": {
           "name": "1389877451005366413",
           "file_path": "sounds\\1389877451005366413_96709220.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "66": {
           "name": "1412742981240361031",
           "file_path": "sounds\\1412742981240361031_96680185.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "67": {
           "name": "1412742981240361031",
           "file_path": "sounds\\1412742981240361031_434b5442.ogg",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "68": {
           "name": "1293318199827365918",
           "file_path": "sounds\\1293318199827365918_3e2a6a59.ogg",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "69": {
           "name": "1291763421511028861",
           "file_path": "sounds\\1291763421511028861_fe6d5ab9.ogg",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "70": {
           "name": "הזמנה ביד #שאולי הזמנה לחתונה#מצחיק #בדיחות #שאולי וראובן# (1)",
           "file_path": "sounds\\הזמנה ביד #שאולי הזמנה לחתונה#מצחיק #בדיחות #שאולי וראובן# (1)_21410659.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "71": {
           "name": "הפרלמנט - נטיל מטבע  #הפרלמנט",
           "file_path": "sounds\\הפרלמנט - נטיל מטבע  #הפרלמנט_13768713.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "72": {
           "name": "pinkydoll-icecream",
           "file_path": "sounds\\pinkydoll-icecream_90063370.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "73": {
           "name": "[appsgolem.com][00-03-40][00-03-45]__ (1)",
           "file_path": "sounds\\[appsgolem.com][00-03-40][00-03-45]__ (1)_78640441.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "74": {
           "name": "tmp9xpmw1q_",
           "file_path": "sounds\\tmp9xpmw1q__95a37189.ogg",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "75": {
           "name": "1248650479676952596",
           "file_path": "sounds\\1248650479676952596_95a37189.ogg",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "76": {
           "name": "(שיחת טלפון עם המשטרה) אתם על הזין שלי (רמיקס) [ ezmp3.cc ]",
           "file_path": "sounds\\(שיחת טלפון עם המשטרה) אתם על הזין שלי (רמיקס) [ ezmp3.cc ]_00584692.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "77": {
           "name": "(שיחת טלפון עם המשטרה) אתם על הזין שלי (רמיקס) [ ezmp3.cc ]",
           "file_path": "sounds\\(שיחת טלפון עם המשטרה) אתם על הזין שלי (רמיקס) [ ezmp3.cc ]_00584692_04acf89f.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "78": {
           "name": "gotcha-bitch_1",
           "file_path": "sounds\\gotcha-bitch_1_99498771.wav",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         },
         "79": {
           "name": "zv katbam (1)",
           "file_path": "sounds\\zv katbam (1)_df64add0.ogg",
-          "volume": 1.0
+          "hotkey": null,
+          "volume": 1.0,
+          "emoji": null,
+          "image_path": null,
+          "color": null,
+          "speed": 1.0,
+          "preserve_pitch": true,
+          "loop": false,
+          "loop_count": 0,
+          "loop_delay": 0.0,
+          "groups": [],
+          "source_file_path": null
         }
       }
     }
@@ -8165,9 +9045,10 @@
       "image_path": "C:/Users/User/Documents/ShareX/Screenshots/2026-06/chrome_LKSGN7V8MR.png",
       "groups": [
         {
+          "id": "4b1a4f4c",
           "name": "HI",
           "color": null,
-          "emoji": null,
+          "emoji": "👋",
           "collapsed": false,
           "sounds": [
             {
@@ -8209,6 +9090,7 @@
           ]
         },
         {
+          "id": "99439530",
           "name": "מפתח",
           "color": "#c8f700",
           "emoji": "🔑",
@@ -8253,6 +9135,7 @@
           ]
         },
         {
+          "id": "e33fa756",
           "name": "bye",
           "color": null,
           "emoji": null,
@@ -8279,6 +9162,7 @@
           ]
         },
         {
+          "id": "c4832e9e",
           "name": "צחוק",
           "color": null,
           "emoji": null,
@@ -8341,9 +9225,10 @@
           ]
         },
         {
+          "id": "af2cb661",
           "name": "טלפון",
           "color": null,
-          "emoji": null,
+          "emoji": "📞",
           "collapsed": false,
           "sounds": [
             {
@@ -8367,6 +9252,7 @@
           ]
         },
         {
+          "id": "65ac1bc0",
           "name": "brb",
           "color": null,
           "emoji": null,
@@ -8391,6 +9277,7 @@
           ]
         },
         {
+          "id": "5777e269",
           "name": "שאלות",
           "color": null,
           "emoji": null,
@@ -8415,6 +9302,7 @@
           ]
         },
         {
+          "id": "d8db566f",
           "name": "חיובי",
           "color": null,
           "emoji": "👌",
@@ -8439,20 +9327,7 @@
           ]
         },
         {
-          "name": "Hi",
-          "color": null,
-          "emoji": null,
-          "collapsed": false,
-          "sounds": []
-        },
-        {
-          "name": "hi",
-          "color": null,
-          "emoji": null,
-          "collapsed": false,
-          "sounds": []
-        },
-        {
+          "id": "4c0e3746",
           "name": "aa",
           "color": "#0d1a3c",
           "emoji": "🥸",
@@ -8460,6 +9335,7 @@
           "sounds": []
         },
         {
+          "id": "c6c91c2e",
           "name": "E2E_NEWGROUP",
           "color": null,
           "emoji": null,
@@ -8569,14 +9445,6 @@
           "emoji": null,
           "collapsed": false,
           "sounds": []
-        },
-        {
-          "id": "e909372f",
-          "name": "Bye",
-          "color": null,
-          "emoji": null,
-          "collapsed": false,
-          "sounds": []
         }
       ]
     },
@@ -8587,49 +9455,8 @@
       "image_path": "C:/Users/User/Documents/ShareX/Screenshots/2026-06/Discord_xJsCthsEBR.png",
       "groups": [
         {
-          "name": "שלילה",
-          "color": null,
-          "emoji": "👎",
-          "collapsed": false,
-          "sounds": [
-            {
-              "name": "לא מה הקשר",
-              "file_path": "sounds\\רועי_ לא מה הקשר_42422971.wav",
-              "hotkey": null,
-              "volume": 1.0,
-              "emoji": null,
-              "image_path": null,
-              "color": "#23a559",
-              "speed": 1.0,
-              "preserve_pitch": true,
-              "loop": false,
-              "loop_count": 0,
-              "loop_delay": 0.0,
-              "groups": [
-                "לא/שלילה"
-              ],
-              "source_file_path": null
-            },
-            {
-              "name": "רועי\" שמע אתה מגעיל\"",
-              "file_path": "sounds\\רועי_ שמע אתה מגעיל_41811995.wav",
-              "hotkey": null,
-              "volume": 1.0,
-              "emoji": null,
-              "image_path": null,
-              "color": "#23A559",
-              "speed": 1.0,
-              "preserve_pitch": true,
-              "loop": false,
-              "loop_count": 0,
-              "loop_delay": 0.0,
-              "groups": [],
-              "source_file_path": null
-            }
-          ]
-        },
-        {
-          "name": "Hi",
+          "id": "4b1a4f4c",
+          "name": "HI",
           "color": null,
           "emoji": "👋",
           "collapsed": false,
@@ -8651,39 +9478,50 @@
                 "הלו?"
               ],
               "source_file_path": null
+            },
+            {
+              "name": "הלוהה",
+              "file_path": "sounds\\discord_20260531_093816_47638664.wav",
+              "hotkey": null,
+              "volume": 1.0,
+              "emoji": null,
+              "image_path": null,
+              "color": "#23a559",
+              "speed": 1.0,
+              "preserve_pitch": true,
+              "loop": false,
+              "loop_count": 0,
+              "loop_delay": 0.0,
+              "groups": [
+                "הלו?"
+              ],
+              "source_file_path": null
             }
           ]
         },
         {
-          "name": "Name Calling",
+          "id": "99439530",
+          "name": "מפתח",
+          "color": "#c8f700",
+          "emoji": "🔑",
+          "collapsed": false,
+          "sounds": []
+        },
+        {
+          "id": "e33fa756",
+          "name": "bye",
           "color": null,
           "emoji": null,
           "collapsed": false,
           "sounds": [
             {
-              "name": "יקיר",
-              "file_path": "sounds\\רועי__יקיר_41812456.wav",
+              "name": "רועי: הנה אבא שלי הגיע חברים אני אדבר אתכם",
+              "file_path": "sounds\\רועי_ הנה אבא שלי הגיע חברים אני אדבר אתכם_52161595.wav",
               "hotkey": null,
               "volume": 1.0,
               "emoji": null,
               "image_path": null,
-              "color": "#23A559",
-              "speed": 1.0,
-              "preserve_pitch": true,
-              "loop": false,
-              "loop_count": 0,
-              "loop_delay": 0.0,
-              "groups": [],
-              "source_file_path": null
-            },
-            {
-              "name": "טל",
-              "file_path": "sounds\\discord_20260531_093816_47639641.wav",
-              "hotkey": null,
-              "volume": 0.7999999999999998,
-              "emoji": null,
-              "image_path": null,
-              "color": "#23A559",
+              "color": null,
               "speed": 1.0,
               "preserve_pitch": true,
               "loop": false,
@@ -8695,6 +9533,15 @@
           ]
         },
         {
+          "id": "c4832e9e",
+          "name": "צחוק",
+          "color": null,
+          "emoji": null,
+          "collapsed": false,
+          "sounds": []
+        },
+        {
+          "id": "af2cb661",
           "name": "טלפון",
           "color": null,
           "emoji": "📞",
@@ -8721,32 +9568,23 @@
           ]
         },
         {
-          "name": "מפתחות",
+          "id": "65ac1bc0",
+          "name": "brb",
           "color": null,
-          "emoji": "🗝️",
+          "emoji": null,
           "collapsed": false,
-          "sounds": [
-            {
-              "name": "רועי\" יש מפתח טל?",
-              "file_path": "sounds\\רועי_ יש מפתח טל_41424857_81798563.wav",
-              "hotkey": null,
-              "volume": 1.0,
-              "emoji": null,
-              "image_path": null,
-              "color": "#23a559",
-              "speed": 1.0,
-              "preserve_pitch": true,
-              "loop": false,
-              "loop_count": 0,
-              "loop_delay": 0.0,
-              "groups": [
-                "מפתח/key"
-              ],
-              "source_file_path": null
-            }
-          ]
+          "sounds": []
         },
         {
+          "id": "5777e269",
+          "name": "שאלות",
+          "color": null,
+          "emoji": null,
+          "collapsed": false,
+          "sounds": []
+        },
+        {
+          "id": "d8db566f",
           "name": "חיובי",
           "color": null,
           "emoji": "👌",
@@ -8805,6 +9643,134 @@
           ]
         },
         {
+          "id": "4c0e3746",
+          "name": "aa",
+          "color": "#0d1a3c",
+          "emoji": "🥸",
+          "collapsed": false,
+          "sounds": []
+        },
+        {
+          "id": "c6c91c2e",
+          "name": "E2E_NEWGROUP",
+          "color": null,
+          "emoji": null,
+          "collapsed": false,
+          "sounds": []
+        },
+        {
+          "id": "223d5a0f",
+          "name": "שלילה",
+          "color": null,
+          "emoji": "👎",
+          "collapsed": false,
+          "sounds": [
+            {
+              "name": "לא מה הקשר",
+              "file_path": "sounds\\רועי_ לא מה הקשר_42422971.wav",
+              "hotkey": null,
+              "volume": 1.0,
+              "emoji": null,
+              "image_path": null,
+              "color": "#23a559",
+              "speed": 1.0,
+              "preserve_pitch": true,
+              "loop": false,
+              "loop_count": 0,
+              "loop_delay": 0.0,
+              "groups": [
+                "לא/שלילה"
+              ],
+              "source_file_path": null
+            },
+            {
+              "name": "רועי\" שמע אתה מגעיל\"",
+              "file_path": "sounds\\רועי_ שמע אתה מגעיל_41811995.wav",
+              "hotkey": null,
+              "volume": 1.0,
+              "emoji": null,
+              "image_path": null,
+              "color": "#23A559",
+              "speed": 1.0,
+              "preserve_pitch": true,
+              "loop": false,
+              "loop_count": 0,
+              "loop_delay": 0.0,
+              "groups": [],
+              "source_file_path": null
+            }
+          ]
+        },
+        {
+          "id": "befcb2c9",
+          "name": "Name Calling",
+          "color": null,
+          "emoji": null,
+          "collapsed": false,
+          "sounds": [
+            {
+              "name": "יקיר",
+              "file_path": "sounds\\רועי__יקיר_41812456.wav",
+              "hotkey": null,
+              "volume": 1.0,
+              "emoji": null,
+              "image_path": null,
+              "color": "#23A559",
+              "speed": 1.0,
+              "preserve_pitch": true,
+              "loop": false,
+              "loop_count": 0,
+              "loop_delay": 0.0,
+              "groups": [],
+              "source_file_path": null
+            },
+            {
+              "name": "טל",
+              "file_path": "sounds\\discord_20260531_093816_47639641.wav",
+              "hotkey": null,
+              "volume": 0.7999999999999998,
+              "emoji": null,
+              "image_path": null,
+              "color": "#23A559",
+              "speed": 1.0,
+              "preserve_pitch": true,
+              "loop": false,
+              "loop_count": 0,
+              "loop_delay": 0.0,
+              "groups": [],
+              "source_file_path": null
+            }
+          ]
+        },
+        {
+          "id": "f3a3b5cf",
+          "name": "מפתחות",
+          "color": null,
+          "emoji": "🗝️",
+          "collapsed": false,
+          "sounds": [
+            {
+              "name": "רועי\" יש מפתח טל?",
+              "file_path": "sounds\\רועי_ יש מפתח טל_41424857_81798563.wav",
+              "hotkey": null,
+              "volume": 1.0,
+              "emoji": null,
+              "image_path": null,
+              "color": "#23a559",
+              "speed": 1.0,
+              "preserve_pitch": true,
+              "loop": false,
+              "loop_count": 0,
+              "loop_delay": 0.0,
+              "groups": [
+                "מפתח/key"
+              ],
+              "source_file_path": null
+            }
+          ]
+        },
+        {
+          "id": "cd421c2c",
           "name": "Random",
           "color": null,
           "emoji": "🎲",
@@ -8829,6 +9795,7 @@
           ]
         },
         {
+          "id": "546ee844",
           "name": "Time",
           "color": null,
           "emoji": "⏲️",
@@ -8851,89 +9818,6 @@
               "source_file_path": null
             }
           ]
-        },
-        {
-          "name": "bye",
-          "color": null,
-          "emoji": null,
-          "collapsed": false,
-          "sounds": [
-            {
-              "name": "רועי: הנה אבא שלי הגיע חברים אני אדבר אתכם",
-              "file_path": "sounds\\רועי_ הנה אבא שלי הגיע חברים אני אדבר אתכם_52161595.wav",
-              "hotkey": null,
-              "volume": 1.0,
-              "emoji": null,
-              "image_path": null,
-              "color": null,
-              "speed": 1.0,
-              "preserve_pitch": true,
-              "loop": false,
-              "loop_count": 0,
-              "loop_delay": 0.0,
-              "groups": [],
-              "source_file_path": null
-            }
-          ]
-        },
-        {
-          "id": "5cc9b7f2",
-          "name": "HI",
-          "color": null,
-          "emoji": "👋",
-          "collapsed": false,
-          "sounds": [
-            {
-              "name": "הלוהה",
-              "file_path": "sounds\\discord_20260531_093816_47638664.wav",
-              "hotkey": null,
-              "volume": 1.0,
-              "emoji": null,
-              "image_path": null,
-              "color": "#23a559",
-              "speed": 1.0,
-              "preserve_pitch": true,
-              "loop": false,
-              "loop_count": 0,
-              "loop_delay": 0.0,
-              "groups": [
-                "הלו?"
-              ],
-              "source_file_path": null
-            }
-          ]
-        },
-        {
-          "id": "2e71e8b2",
-          "name": "מפתח",
-          "color": "#c8f700",
-          "emoji": "🔑",
-          "collapsed": false,
-          "sounds": []
-        },
-        {
-          "id": "38217570",
-          "name": "צחוק",
-          "color": null,
-          "emoji": null,
-          "collapsed": false,
-          "sounds": []
-        },
-        {
-          "id": "74b7a73f",
-          "name": "brb",
-          "color": null,
-          "emoji": null,
-          "collapsed": false,
-          "sounds": []
-        },
-        {
-          "id": "5407e2a1",
-          "name": "שאלות",
-          "color": null,
-          "emoji": null,
-          "collapsed": false,
-          "sounds": []
         },
         {
           "id": "2e6936db",
@@ -8998,14 +9882,6 @@
           "emoji": null,
           "collapsed": false,
           "sounds": []
-        },
-        {
-          "id": "e909372f",
-          "name": "Bye",
-          "color": null,
-          "emoji": null,
-          "collapsed": false,
-          "sounds": []
         }
       ]
     },
@@ -9016,102 +9892,7 @@
       "image_path": null,
       "groups": [
         {
-          "name": "Hi",
-          "color": null,
-          "emoji": null,
-          "collapsed": false,
-          "sounds": [
-            {
-              "name": "יקיר\" מה קורה?\"",
-              "file_path": "sounds\\discord_20260601_124839_2eb90829_42068826.wav",
-              "hotkey": null,
-              "volume": 1.0,
-              "emoji": null,
-              "image_path": null,
-              "color": "#da373c",
-              "speed": 1.0,
-              "preserve_pitch": true,
-              "loop": false,
-              "loop_count": 0,
-              "loop_delay": 0.0,
-              "groups": [
-                "היי/hi",
-                "הלו?"
-              ],
-              "source_file_path": null
-            },
-            {
-              "name": "יקיר \"מה קורה\"",
-              "file_path": "sounds\\יקיר _מה קורה_41811656.wav",
-              "hotkey": null,
-              "volume": 1.0,
-              "emoji": null,
-              "image_path": null,
-              "color": "#da373c",
-              "speed": 1.0,
-              "preserve_pitch": true,
-              "loop": false,
-              "loop_count": 0,
-              "loop_delay": 0.0,
-              "groups": [
-                "הלו?"
-              ],
-              "source_file_path": null
-            }
-          ]
-        },
-        {
-          "name": "חיוב",
-          "color": null,
-          "emoji": null,
-          "collapsed": false,
-          "sounds": [
-            {
-              "name": "יקיר\" כהה\"",
-              "file_path": "sounds\\יקיר_ כהה_41812200.wav",
-              "hotkey": null,
-              "volume": 1.0,
-              "emoji": null,
-              "image_path": null,
-              "color": "#da373c",
-              "speed": 1.0,
-              "preserve_pitch": true,
-              "loop": false,
-              "loop_count": 0,
-              "loop_delay": 0.0,
-              "groups": [
-                "הסכמה/כן"
-              ],
-              "source_file_path": null
-            }
-          ]
-        },
-        {
-          "name": "שלילי",
-          "color": null,
-          "emoji": null,
-          "collapsed": false,
-          "sounds": [
-            {
-              "name": "יקיר:\"ילד חרא\"",
-              "file_path": "sounds\\יקיר__ילד חרא_41811809.wav",
-              "hotkey": null,
-              "volume": 1.0,
-              "emoji": null,
-              "image_path": null,
-              "color": "#DA373C",
-              "speed": 1.0,
-              "preserve_pitch": true,
-              "loop": false,
-              "loop_count": 0,
-              "loop_delay": 0.0,
-              "groups": [],
-              "source_file_path": null
-            }
-          ]
-        },
-        {
-          "id": "5cc9b7f2",
+          "id": "4b1a4f4c",
           "name": "HI",
           "color": null,
           "emoji": "👋",
@@ -9153,11 +9934,48 @@
                 "הלו?"
               ],
               "source_file_path": null
+            },
+            {
+              "name": "יקיר\" מה קורה?\"",
+              "file_path": "sounds\\discord_20260601_124839_2eb90829_42068826.wav",
+              "hotkey": null,
+              "volume": 1.0,
+              "emoji": null,
+              "image_path": null,
+              "color": "#da373c",
+              "speed": 1.0,
+              "preserve_pitch": true,
+              "loop": false,
+              "loop_count": 0,
+              "loop_delay": 0.0,
+              "groups": [
+                "היי/hi",
+                "הלו?"
+              ],
+              "source_file_path": null
+            },
+            {
+              "name": "יקיר \"מה קורה\"",
+              "file_path": "sounds\\יקיר _מה קורה_41811656.wav",
+              "hotkey": null,
+              "volume": 1.0,
+              "emoji": null,
+              "image_path": null,
+              "color": "#da373c",
+              "speed": 1.0,
+              "preserve_pitch": true,
+              "loop": false,
+              "loop_count": 0,
+              "loop_delay": 0.0,
+              "groups": [
+                "הלו?"
+              ],
+              "source_file_path": null
             }
           ]
         },
         {
-          "id": "2e71e8b2",
+          "id": "99439530",
           "name": "מפתח",
           "color": "#c8f700",
           "emoji": "🔑",
@@ -9165,7 +9983,7 @@
           "sounds": []
         },
         {
-          "id": "ec09879c",
+          "id": "e33fa756",
           "name": "bye",
           "color": null,
           "emoji": null,
@@ -9173,7 +9991,7 @@
           "sounds": []
         },
         {
-          "id": "38217570",
+          "id": "c4832e9e",
           "name": "צחוק",
           "color": null,
           "emoji": null,
@@ -9181,7 +9999,7 @@
           "sounds": []
         },
         {
-          "id": "93384585",
+          "id": "af2cb661",
           "name": "טלפון",
           "color": null,
           "emoji": "📞",
@@ -9189,7 +10007,7 @@
           "sounds": []
         },
         {
-          "id": "74b7a73f",
+          "id": "65ac1bc0",
           "name": "brb",
           "color": null,
           "emoji": null,
@@ -9197,7 +10015,7 @@
           "sounds": []
         },
         {
-          "id": "5407e2a1",
+          "id": "5777e269",
           "name": "שאלות",
           "color": null,
           "emoji": null,
@@ -9205,10 +10023,26 @@
           "sounds": []
         },
         {
-          "id": "41e00290",
+          "id": "d8db566f",
           "name": "חיובי",
           "color": null,
           "emoji": "👌",
+          "collapsed": false,
+          "sounds": []
+        },
+        {
+          "id": "4c0e3746",
+          "name": "aa",
+          "color": "#0d1a3c",
+          "emoji": "🥸",
+          "collapsed": false,
+          "sounds": []
+        },
+        {
+          "id": "c6c91c2e",
+          "name": "E2E_NEWGROUP",
+          "color": null,
+          "emoji": null,
           "collapsed": false,
           "sounds": []
         },
@@ -9251,6 +10085,58 @@
           "emoji": "⏲️",
           "collapsed": false,
           "sounds": []
+        },
+        {
+          "id": "2e6936db",
+          "name": "חיוב",
+          "color": null,
+          "emoji": null,
+          "collapsed": false,
+          "sounds": [
+            {
+              "name": "יקיר\" כהה\"",
+              "file_path": "sounds\\יקיר_ כהה_41812200.wav",
+              "hotkey": null,
+              "volume": 1.0,
+              "emoji": null,
+              "image_path": null,
+              "color": "#da373c",
+              "speed": 1.0,
+              "preserve_pitch": true,
+              "loop": false,
+              "loop_count": 0,
+              "loop_delay": 0.0,
+              "groups": [
+                "הסכמה/כן"
+              ],
+              "source_file_path": null
+            }
+          ]
+        },
+        {
+          "id": "b78de978",
+          "name": "שלילי",
+          "color": null,
+          "emoji": null,
+          "collapsed": false,
+          "sounds": [
+            {
+              "name": "יקיר:\"ילד חרא\"",
+              "file_path": "sounds\\יקיר__ילד חרא_41811809.wav",
+              "hotkey": null,
+              "volume": 1.0,
+              "emoji": null,
+              "image_path": null,
+              "color": "#DA373C",
+              "speed": 1.0,
+              "preserve_pitch": true,
+              "loop": false,
+              "loop_count": 0,
+              "loop_delay": 0.0,
+              "groups": [],
+              "source_file_path": null
+            }
+          ]
         },
         {
           "id": "1d2e4d15",
@@ -9299,14 +10185,6 @@
           "emoji": null,
           "collapsed": false,
           "sounds": []
-        },
-        {
-          "id": "e909372f",
-          "name": "Bye",
-          "color": null,
-          "emoji": null,
-          "collapsed": false,
-          "sounds": []
         }
       ]
     },
@@ -9317,7 +10195,7 @@
       "image_path": null,
       "groups": [
         {
-          "id": "5cc9b7f2",
+          "id": "4b1a4f4c",
           "name": "HI",
           "color": null,
           "emoji": "👋",
@@ -9356,11 +10234,29 @@
               "loop_delay": 0.0,
               "groups": [],
               "source_file_path": null
+            },
+            {
+              "name": "קרן : שלום לך!",
+              "file_path": "sounds\\קרן _ שלום לך!_10195503.wav",
+              "hotkey": null,
+              "volume": 1.0,
+              "emoji": null,
+              "image_path": null,
+              "color": "#ff00cc",
+              "speed": 1.0,
+              "preserve_pitch": true,
+              "loop": false,
+              "loop_count": 0,
+              "loop_delay": 0.0,
+              "groups": [
+                "הלו?"
+              ],
+              "source_file_path": null
             }
           ]
         },
         {
-          "id": "2e71e8b2",
+          "id": "99439530",
           "name": "מפתח",
           "color": "#c8f700",
           "emoji": "🔑",
@@ -9368,7 +10264,7 @@
           "sounds": []
         },
         {
-          "id": "ec09879c",
+          "id": "e33fa756",
           "name": "bye",
           "color": null,
           "emoji": null,
@@ -9376,7 +10272,7 @@
           "sounds": []
         },
         {
-          "id": "38217570",
+          "id": "c4832e9e",
           "name": "צחוק",
           "color": null,
           "emoji": null,
@@ -9433,7 +10329,7 @@
           ]
         },
         {
-          "id": "93384585",
+          "id": "af2cb661",
           "name": "טלפון",
           "color": null,
           "emoji": "📞",
@@ -9441,7 +10337,7 @@
           "sounds": []
         },
         {
-          "id": "74b7a73f",
+          "id": "65ac1bc0",
           "name": "brb",
           "color": null,
           "emoji": null,
@@ -9449,7 +10345,7 @@
           "sounds": []
         },
         {
-          "id": "5407e2a1",
+          "id": "5777e269",
           "name": "שאלות",
           "color": null,
           "emoji": null,
@@ -9490,7 +10386,7 @@
           ]
         },
         {
-          "id": "41e00290",
+          "id": "d8db566f",
           "name": "חיובי",
           "color": null,
           "emoji": "👌",
@@ -9545,6 +10441,22 @@
               "source_file_path": null
             }
           ]
+        },
+        {
+          "id": "4c0e3746",
+          "name": "aa",
+          "color": "#0d1a3c",
+          "emoji": "🥸",
+          "collapsed": false,
+          "sounds": []
+        },
+        {
+          "id": "c6c91c2e",
+          "name": "E2E_NEWGROUP",
+          "color": null,
+          "emoji": null,
+          "collapsed": false,
+          "sounds": []
         },
         {
           "id": "223d5a0f",
@@ -9914,39 +10826,6 @@
               "source_file_path": null
             }
           ]
-        },
-        {
-          "name": "Hi",
-          "color": null,
-          "emoji": null,
-          "collapsed": false,
-          "sounds": [
-            {
-              "name": "קרן : שלום לך!",
-              "file_path": "sounds\\קרן _ שלום לך!_10195503.wav",
-              "hotkey": null,
-              "volume": 1.0,
-              "emoji": null,
-              "image_path": null,
-              "color": "#ff00cc",
-              "speed": 1.0,
-              "preserve_pitch": true,
-              "loop": false,
-              "loop_count": 0,
-              "loop_delay": 0.0,
-              "groups": [
-                "הלו?"
-              ],
-              "source_file_path": null
-            }
-          ]
-        },
-        {
-          "name": "Bye",
-          "color": null,
-          "emoji": null,
-          "collapsed": false,
-          "sounds": []
         }
       ]
     },
@@ -9957,7 +10836,7 @@
       "image_path": null,
       "groups": [
         {
-          "id": "5cc9b7f2",
+          "id": "4b1a4f4c",
           "name": "HI",
           "color": null,
           "emoji": "👋",
@@ -9982,7 +10861,7 @@
           ]
         },
         {
-          "id": "2e71e8b2",
+          "id": "99439530",
           "name": "מפתח",
           "color": "#c8f700",
           "emoji": "🔑",
@@ -9990,7 +10869,7 @@
           "sounds": []
         },
         {
-          "id": "ec09879c",
+          "id": "e33fa756",
           "name": "bye",
           "color": null,
           "emoji": null,
@@ -9998,7 +10877,7 @@
           "sounds": []
         },
         {
-          "id": "38217570",
+          "id": "c4832e9e",
           "name": "צחוק",
           "color": null,
           "emoji": null,
@@ -10087,7 +10966,7 @@
           ]
         },
         {
-          "id": "93384585",
+          "id": "af2cb661",
           "name": "טלפון",
           "color": null,
           "emoji": "📞",
@@ -10095,7 +10974,7 @@
           "sounds": []
         },
         {
-          "id": "74b7a73f",
+          "id": "65ac1bc0",
           "name": "brb",
           "color": null,
           "emoji": null,
@@ -10103,7 +10982,7 @@
           "sounds": []
         },
         {
-          "id": "5407e2a1",
+          "id": "5777e269",
           "name": "שאלות",
           "color": null,
           "emoji": null,
@@ -10176,7 +11055,7 @@
           ]
         },
         {
-          "id": "41e00290",
+          "id": "d8db566f",
           "name": "חיובי",
           "color": null,
           "emoji": "👌",
@@ -10199,6 +11078,22 @@
               "source_file_path": null
             }
           ]
+        },
+        {
+          "id": "4c0e3746",
+          "name": "aa",
+          "color": "#0d1a3c",
+          "emoji": "🥸",
+          "collapsed": false,
+          "sounds": []
+        },
+        {
+          "id": "c6c91c2e",
+          "name": "E2E_NEWGROUP",
+          "color": null,
+          "emoji": null,
+          "collapsed": false,
+          "sounds": []
         },
         {
           "id": "223d5a0f",
@@ -10435,22 +11330,6 @@
           "emoji": null,
           "collapsed": false,
           "sounds": []
-        },
-        {
-          "id": "14419784",
-          "name": "Hi",
-          "color": null,
-          "emoji": "👋",
-          "collapsed": false,
-          "sounds": []
-        },
-        {
-          "id": "e909372f",
-          "name": "Bye",
-          "color": null,
-          "emoji": null,
-          "collapsed": false,
-          "sounds": []
         }
       ]
     },
@@ -10461,7 +11340,7 @@
       "image_path": null,
       "groups": [
         {
-          "id": "5cc9b7f2",
+          "id": "4b1a4f4c",
           "name": "HI",
           "color": null,
           "emoji": "👋",
@@ -10469,7 +11348,7 @@
           "sounds": []
         },
         {
-          "id": "2e71e8b2",
+          "id": "99439530",
           "name": "מפתח",
           "color": "#c8f700",
           "emoji": "🔑",
@@ -10477,7 +11356,7 @@
           "sounds": []
         },
         {
-          "id": "ec09879c",
+          "id": "e33fa756",
           "name": "bye",
           "color": null,
           "emoji": null,
@@ -10485,7 +11364,7 @@
           "sounds": []
         },
         {
-          "id": "38217570",
+          "id": "c4832e9e",
           "name": "צחוק",
           "color": null,
           "emoji": null,
@@ -10493,7 +11372,7 @@
           "sounds": []
         },
         {
-          "id": "93384585",
+          "id": "af2cb661",
           "name": "טלפון",
           "color": null,
           "emoji": "📞",
@@ -10501,7 +11380,7 @@
           "sounds": []
         },
         {
-          "id": "74b7a73f",
+          "id": "65ac1bc0",
           "name": "brb",
           "color": null,
           "emoji": null,
@@ -10509,7 +11388,7 @@
           "sounds": []
         },
         {
-          "id": "5407e2a1",
+          "id": "5777e269",
           "name": "שאלות",
           "color": null,
           "emoji": null,
@@ -10517,10 +11396,26 @@
           "sounds": []
         },
         {
-          "id": "41e00290",
+          "id": "d8db566f",
           "name": "חיובי",
           "color": null,
           "emoji": "👌",
+          "collapsed": false,
+          "sounds": []
+        },
+        {
+          "id": "4c0e3746",
+          "name": "aa",
+          "color": "#0d1a3c",
+          "emoji": "🥸",
+          "collapsed": false,
+          "sounds": []
+        },
+        {
+          "id": "c6c91c2e",
+          "name": "E2E_NEWGROUP",
+          "color": null,
+          "emoji": null,
           "collapsed": false,
           "sounds": []
         },
@@ -10623,22 +11518,6 @@
         {
           "id": "ec695369",
           "name": "כעס",
-          "color": null,
-          "emoji": null,
-          "collapsed": false,
-          "sounds": []
-        },
-        {
-          "id": "14419784",
-          "name": "Hi",
-          "color": null,
-          "emoji": "👋",
-          "collapsed": false,
-          "sounds": []
-        },
-        {
-          "id": "e909372f",
-          "name": "Bye",
           "color": null,
           "emoji": null,
           "collapsed": false,
@@ -10653,7 +11532,7 @@
       "image_path": null,
       "groups": [
         {
-          "id": "5cc9b7f2",
+          "id": "4b1a4f4c",
           "name": "HI",
           "color": null,
           "emoji": "👋",
@@ -10661,7 +11540,7 @@
           "sounds": []
         },
         {
-          "id": "2e71e8b2",
+          "id": "99439530",
           "name": "מפתח",
           "color": "#c8f700",
           "emoji": "🔑",
@@ -10669,7 +11548,7 @@
           "sounds": []
         },
         {
-          "id": "ec09879c",
+          "id": "e33fa756",
           "name": "bye",
           "color": null,
           "emoji": null,
@@ -10677,7 +11556,7 @@
           "sounds": []
         },
         {
-          "id": "38217570",
+          "id": "c4832e9e",
           "name": "צחוק",
           "color": null,
           "emoji": null,
@@ -10685,7 +11564,7 @@
           "sounds": []
         },
         {
-          "id": "93384585",
+          "id": "af2cb661",
           "name": "טלפון",
           "color": null,
           "emoji": "📞",
@@ -10693,7 +11572,7 @@
           "sounds": []
         },
         {
-          "id": "74b7a73f",
+          "id": "65ac1bc0",
           "name": "brb",
           "color": null,
           "emoji": null,
@@ -10701,7 +11580,7 @@
           "sounds": []
         },
         {
-          "id": "5407e2a1",
+          "id": "5777e269",
           "name": "שאלות",
           "color": null,
           "emoji": null,
@@ -10709,10 +11588,26 @@
           "sounds": []
         },
         {
-          "id": "41e00290",
+          "id": "d8db566f",
           "name": "חיובי",
           "color": null,
           "emoji": "👌",
+          "collapsed": false,
+          "sounds": []
+        },
+        {
+          "id": "4c0e3746",
+          "name": "aa",
+          "color": "#0d1a3c",
+          "emoji": "🥸",
+          "collapsed": false,
+          "sounds": []
+        },
+        {
+          "id": "c6c91c2e",
+          "name": "E2E_NEWGROUP",
+          "color": null,
+          "emoji": null,
           "collapsed": false,
           "sounds": []
         },
@@ -10819,22 +11714,6 @@
           "emoji": null,
           "collapsed": false,
           "sounds": []
-        },
-        {
-          "id": "14419784",
-          "name": "Hi",
-          "color": null,
-          "emoji": "👋",
-          "collapsed": false,
-          "sounds": []
-        },
-        {
-          "id": "e909372f",
-          "name": "Bye",
-          "color": null,
-          "emoji": null,
-          "collapsed": false,
-          "sounds": []
         }
       ]
     },
@@ -10845,9 +11724,105 @@
       "image_path": null,
       "groups": [
         {
+          "id": "4b1a4f4c",
+          "name": "HI",
+          "color": null,
+          "emoji": "👋",
+          "collapsed": false,
+          "sounds": [
+            {
+              "name": "מה הולך אחי?",
+              "file_path": "sounds\\recording_2026-06-04_12-05-14_33m45s_01396598.wav",
+              "hotkey": null,
+              "volume": 1.0,
+              "emoji": null,
+              "image_path": null,
+              "color": "#9b59b6",
+              "speed": 1.0,
+              "preserve_pitch": true,
+              "loop": false,
+              "loop_count": 0,
+              "loop_delay": 0.0,
+              "groups": [
+                "היי/hi",
+                "הלו?"
+              ],
+              "source_file_path": null
+            },
+            {
+              "name": "מה הולך אחי?",
+              "file_path": "sounds\\recording_2026-06-04_12-05-14_33m45s_01396598.wav",
+              "hotkey": null,
+              "volume": 1.0,
+              "emoji": null,
+              "image_path": null,
+              "color": "#9b59b6",
+              "speed": 1.0,
+              "preserve_pitch": true,
+              "loop": false,
+              "loop_count": 0,
+              "loop_delay": 0.0,
+              "groups": [
+                "היי/hi",
+                "הלו?"
+              ],
+              "source_file_path": null
+            }
+          ]
+        },
+        {
+          "id": "99439530",
+          "name": "מפתח",
+          "color": "#c8f700",
+          "emoji": "🔑",
+          "collapsed": false,
+          "sounds": []
+        },
+        {
+          "id": "e33fa756",
+          "name": "bye",
+          "color": null,
+          "emoji": null,
+          "collapsed": false,
+          "sounds": []
+        },
+        {
+          "id": "c4832e9e",
+          "name": "צחוק",
+          "color": null,
+          "emoji": null,
+          "collapsed": false,
+          "sounds": []
+        },
+        {
+          "id": "af2cb661",
+          "name": "טלפון",
+          "color": null,
+          "emoji": "📞",
+          "collapsed": false,
+          "sounds": []
+        },
+        {
+          "id": "65ac1bc0",
+          "name": "brb",
+          "color": null,
+          "emoji": null,
+          "collapsed": false,
+          "sounds": []
+        },
+        {
+          "id": "5777e269",
+          "name": "שאלות",
+          "color": null,
+          "emoji": null,
+          "collapsed": false,
+          "sounds": []
+        },
+        {
+          "id": "d8db566f",
           "name": "חיובי",
           "color": null,
-          "emoji": "👍",
+          "emoji": "👌",
           "collapsed": false,
           "sounds": [
             {
@@ -10871,33 +11846,71 @@
           ]
         },
         {
-          "name": "Hi",
+          "id": "4c0e3746",
+          "name": "aa",
+          "color": "#0d1a3c",
+          "emoji": "🥸",
+          "collapsed": false,
+          "sounds": []
+        },
+        {
+          "id": "c6c91c2e",
+          "name": "E2E_NEWGROUP",
           "color": null,
           "emoji": null,
           "collapsed": false,
-          "sounds": [
-            {
-              "name": "מה הולך אחי?",
-              "file_path": "sounds\\recording_2026-06-04_12-05-14_33m45s_01396598.wav",
-              "hotkey": null,
-              "volume": 1.0,
-              "emoji": null,
-              "image_path": null,
-              "color": "#9b59b6",
-              "speed": 1.0,
-              "preserve_pitch": true,
-              "loop": false,
-              "loop_count": 0,
-              "loop_delay": 0.0,
-              "groups": [
-                "היי/hi",
-                "הלו?"
-              ],
-              "source_file_path": null
-            }
-          ]
+          "sounds": []
         },
         {
+          "id": "223d5a0f",
+          "name": "שלילה",
+          "color": null,
+          "emoji": "👎",
+          "collapsed": false,
+          "sounds": []
+        },
+        {
+          "id": "befcb2c9",
+          "name": "Name Calling",
+          "color": null,
+          "emoji": null,
+          "collapsed": false,
+          "sounds": []
+        },
+        {
+          "id": "f3a3b5cf",
+          "name": "מפתחות",
+          "color": null,
+          "emoji": "🗝️",
+          "collapsed": false,
+          "sounds": []
+        },
+        {
+          "id": "cd421c2c",
+          "name": "Random",
+          "color": null,
+          "emoji": "🎲",
+          "collapsed": false,
+          "sounds": []
+        },
+        {
+          "id": "546ee844",
+          "name": "Time",
+          "color": null,
+          "emoji": "⏲️",
+          "collapsed": false,
+          "sounds": []
+        },
+        {
+          "id": "2e6936db",
+          "name": "חיוב",
+          "color": null,
+          "emoji": null,
+          "collapsed": false,
+          "sounds": []
+        },
+        {
+          "id": "b78de978",
           "name": "שלילי",
           "color": null,
           "emoji": null,
@@ -10924,6 +11937,15 @@
           ]
         },
         {
+          "id": "1d2e4d15",
+          "name": "Lol",
+          "color": null,
+          "emoji": null,
+          "collapsed": false,
+          "sounds": []
+        },
+        {
+          "id": "7c3d3ecc",
           "name": "Not sure...",
           "color": null,
           "emoji": null,
@@ -10946,138 +11968,6 @@
               "source_file_path": null
             }
           ]
-        },
-        {
-          "id": "5cc9b7f2",
-          "name": "HI",
-          "color": null,
-          "emoji": "👋",
-          "collapsed": false,
-          "sounds": [
-            {
-              "name": "מה הולך אחי?",
-              "file_path": "sounds\\recording_2026-06-04_12-05-14_33m45s_01396598.wav",
-              "hotkey": null,
-              "volume": 1.0,
-              "emoji": null,
-              "image_path": null,
-              "color": "#9b59b6",
-              "speed": 1.0,
-              "preserve_pitch": true,
-              "loop": false,
-              "loop_count": 0,
-              "loop_delay": 0.0,
-              "groups": [
-                "היי/hi",
-                "הלו?"
-              ],
-              "source_file_path": null
-            }
-          ]
-        },
-        {
-          "id": "2e71e8b2",
-          "name": "מפתח",
-          "color": "#c8f700",
-          "emoji": "🔑",
-          "collapsed": false,
-          "sounds": []
-        },
-        {
-          "id": "ec09879c",
-          "name": "bye",
-          "color": null,
-          "emoji": null,
-          "collapsed": false,
-          "sounds": []
-        },
-        {
-          "id": "38217570",
-          "name": "צחוק",
-          "color": null,
-          "emoji": null,
-          "collapsed": false,
-          "sounds": []
-        },
-        {
-          "id": "93384585",
-          "name": "טלפון",
-          "color": null,
-          "emoji": "📞",
-          "collapsed": false,
-          "sounds": []
-        },
-        {
-          "id": "74b7a73f",
-          "name": "brb",
-          "color": null,
-          "emoji": null,
-          "collapsed": false,
-          "sounds": []
-        },
-        {
-          "id": "5407e2a1",
-          "name": "שאלות",
-          "color": null,
-          "emoji": null,
-          "collapsed": false,
-          "sounds": []
-        },
-        {
-          "id": "223d5a0f",
-          "name": "שלילה",
-          "color": null,
-          "emoji": "👎",
-          "collapsed": false,
-          "sounds": []
-        },
-        {
-          "id": "befcb2c9",
-          "name": "Name Calling",
-          "color": null,
-          "emoji": null,
-          "collapsed": false,
-          "sounds": []
-        },
-        {
-          "id": "f3a3b5cf",
-          "name": "מפתחות",
-          "color": null,
-          "emoji": "🗝️",
-          "collapsed": false,
-          "sounds": []
-        },
-        {
-          "id": "cd421c2c",
-          "name": "Random",
-          "color": null,
-          "emoji": "🎲",
-          "collapsed": false,
-          "sounds": []
-        },
-        {
-          "id": "546ee844",
-          "name": "Time",
-          "color": null,
-          "emoji": "⏲️",
-          "collapsed": false,
-          "sounds": []
-        },
-        {
-          "id": "2e6936db",
-          "name": "חיוב",
-          "color": null,
-          "emoji": null,
-          "collapsed": false,
-          "sounds": []
-        },
-        {
-          "id": "1d2e4d15",
-          "name": "Lol",
-          "color": null,
-          "emoji": null,
-          "collapsed": false,
-          "sounds": []
         },
         {
           "id": "65b91bc9",
@@ -11110,19 +12000,11 @@
           "emoji": null,
           "collapsed": false,
           "sounds": []
-        },
-        {
-          "id": "e909372f",
-          "name": "Bye",
-          "color": null,
-          "emoji": null,
-          "collapsed": false,
-          "sounds": []
         }
       ]
     }
   ],
-  "current_tab": 0,
+  "current_tab": 18,
   "ptt_enabled": true,
   "ptt_key": "f9",
   "hover_preview_key": "mouse3",
@@ -11155,9 +12037,10 @@
     "#54452d",
     "#0d1a3c"
   ],
-  "window_geometry": "3136x2604+4108+865",
+  "window_geometry": "",
   "person_windows": {
-    "hub": "900x620+4169+719"
+    "hub": "900x620+4159+333",
+    "popout": "300x460"
   },
   "youtube_cookies_path": "C:/Users/User/Documents/cookies.txt",
   "youtube_cookies_browser": "",
