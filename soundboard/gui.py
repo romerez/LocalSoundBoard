@@ -6101,25 +6101,13 @@ class SoundboardApp:
         for i in range(num_slots):
             self._update_slot_button_for_tab(tab_idx, i)
 
-        # Warm-up: force Tk to lay out and CTk to draw all widgets NOW so the
-        # first switch to this tab doesn't trigger a layout/draw cascade.
-        # Only needed for non-current tabs (current tab is already visible).
-        # SKIP entirely if the user is currently moving/resizing the window —
-        # update_idletasks() is synchronous and would stall the resize. The
-        # tab will warm up lazily on first visit instead (acceptable trade-off).
-        if tab_idx != self.current_tab_idx and time.time() >= getattr(
-            self, "_resize_active_until", 0.0
-        ):
-            try:
-                # The grid is currently grid_remove()'d; re-add briefly to
-                # force layout, flush, then remove again. This pre-warms
-                # widget sizes and CTk Canvas renders.
-                tab_grid.grid()
-                tab_grid.lower()  # Ensure it stays beneath the visible tab
-                self.root.update_idletasks()
-                tab_grid.grid_remove()
-            except Exception:
-                pass
+        # (Removed) Per-tab synchronous update_idletasks() warm-up. It forced a
+        # FULL-WINDOW layout+paint flush for EVERY background tab at startup —
+        # 18-19 flushes that blocked the UI thread for tens of seconds on this
+        # config and were the main reason startup felt "stuck". Virtualization
+        # already re-culls + repaints a tab on first show (_schedule_cull via
+        # _show_tab_only), so the pre-warm was redundant. The first switch to a
+        # never-shown tab now just lays out lazily (one quick frame).
 
         # Virtualization: reserve row heights now, and cull the current tab once
         # it's laid out (non-current tabs are culled when first shown).
