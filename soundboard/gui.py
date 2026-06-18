@@ -4,6 +4,7 @@ GUI components for the Discord Soundboard.
 
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -94,16 +95,43 @@ try:
             ):
                 self._current_width = new_w
                 self._current_height = new_h
-                if time.time() < _SHARED_RESIZE_STATE["until"]:
-                    # Defer ONLY widgets in the main window. Its post-resize sweep
-                    # (_post_resize_sweep) is the only thing that repaints the
-                    # deferred set, and it runs for the main window alone — so
-                    # deferring a separate toplevel's widgets (the People hub /
-                    # pop-outs) would leave them PERMANENTLY blank ("stuck / design
-                    # breaking"). Those draw immediately instead.
+                _now = time.time()
+                if _now < _SHARED_RESIZE_STATE["until"]:
+                    # Main-window defer: only _post_resize_sweep repaints this
+                    # dirty set, and it runs for the main window alone — so a
+                    # separate toplevel's widgets must never land in it (they
+                    # would stay PERMANENTLY blank).
                     _main = _SHARED_RESIZE_STATE.get("root")
                     if _main is None or self.winfo_toplevel() is _main:
                         _SHARED_RESIZE_STATE.setdefault("dirty", set()).add(self)  # type: ignore[arg-type]
+                        return
+                # Per-toplevel defer: the People hub / pop-outs arm THEMSELVES
+                # via _shared.arm_toplevel_resize_defer on real size changes;
+                # each runs its own sweep, so nothing is left undrawn. Without
+                # this, resizing a People window ran the full CTk rounded-corner
+                # redraw cascade for every widget on every pixel.
+                _tops = _SHARED_RESIZE_STATE.get("tops")
+                if _tops:
+                    _top = self.winfo_toplevel()
+                    if _now < _tops.get(_top, 0.0):
+                        # Widgets inside a COVERED person panel (the hub
+                        # tkraise-stacks all cached panels in one cell, so
+                        # they ALL resize) are parked on the panel itself —
+                        # sweeping them is pure waste while invisible. The
+                        # panel drains its set when raised. Pure-Python
+                        # master walk; no Tcl.
+                        _m = self
+                        for _ in range(14):
+                            if _m is None:
+                                break
+                            if getattr(_m, "_showing", None) is False:
+                                _cd = getattr(_m, "_covered_dirty", None)
+                                if _cd is not None:
+                                    _cd.add(self)
+                                    return
+                                break
+                            _m = getattr(_m, "master", None)
+                        _SHARED_RESIZE_STATE["dirty_tops"].setdefault(_top, set()).add(self)
                         return
                 self._draw(no_color_updates=True)
         except Exception:
@@ -118,6 +146,144 @@ try:
 except Exception:
     # If CTk internals change, silently fall back to default behavior.
     from ._shared import RESIZE_STATE as _SHARED_RESIZE_STATE  # type: ignore[no-redef]
+
+
+# ---------------------------------------------------------------------------
+# CustomTkinter performance patch #2: O(1) widget-destroy bookkeeping.
+#
+# Every CTk widget registers a bound-method callback in TWO global trackers
+# (AppearanceModeTracker.callback_list and ScalingTracker.window_widgets_dict)
+# and destroy() removes it with list.remove() — a linear equality scan over
+# EVERY live CTk widget in the app. With all main-board tabs built (~thousands
+# of callbacks), destroying one ~300-widget People panel cost ~1M bound-method
+# comparisons — the hidden bulk of "clicking a person / rebuilding is laggy".
+# Bound methods compare by (instance, function) equality, so we index on
+# exactly that key for O(1) add/remove while preserving iteration order.
+# ---------------------------------------------------------------------------
+try:
+    from customtkinter.windows.widgets.appearance_mode import AppearanceModeTracker as _AMT
+    from customtkinter.windows.widgets.scaling import ScalingTracker as _ST
+
+    def _cb_key(cb: Any):
+        inst = getattr(cb, "__self__", None)
+        if inst is not None:
+            return (id(inst), getattr(cb, "__func__", None))
+        return id(cb)
+
+    class _CallbackBag:
+        """Drop-in for the trackers' callback lists: append/remove/iter/len,
+        but remove() is an O(1) dict pop instead of a linear scan."""
+
+        __slots__ = ("_d",)
+
+        def __init__(self, items=()) -> None:
+            self._d = {_cb_key(cb): cb for cb in items}
+
+        def append(self, cb) -> None:
+            self._d[_cb_key(cb)] = cb
+
+        def remove(self, cb) -> None:
+            if self._d.pop(_cb_key(cb), None) is None:
+                raise ValueError(cb)
+
+        def __iter__(self):
+            return iter(list(self._d.values()))
+
+        def __len__(self) -> int:
+            return len(self._d)
+
+        def __contains__(self, cb) -> bool:
+            return _cb_key(cb) in self._d
+
+    _AMT.callback_list = _CallbackBag(_AMT.callback_list)
+
+    _orig_st_add_widget = _ST.add_widget.__func__
+    _orig_st_add_window = _ST.add_window.__func__
+
+    def _bag_for(cls, window) -> _CallbackBag:
+        bag = cls.window_widgets_dict.get(window)
+        if not isinstance(bag, _CallbackBag):
+            bag = cls.window_widgets_dict[window] = _CallbackBag(bag or ())
+        return bag
+
+    @classmethod  # type: ignore[misc]
+    def _patched_st_add_widget(cls, widget_callback, widget):
+        window_root = cls.get_window_root_of_widget(widget)
+        _bag_for(cls, window_root).append(widget_callback)
+        if window_root not in cls.window_dpi_scaling_dict:
+            cls.window_dpi_scaling_dict[window_root] = cls.get_window_dpi_scaling(window_root)
+        if not cls.update_loop_running:
+            window_root.after(100, cls.check_dpi_scaling)
+            cls.update_loop_running = True
+
+    @classmethod  # type: ignore[misc]
+    def _patched_st_add_window(cls, window_callback, window):
+        _bag_for(cls, window).append(window_callback)
+        if window not in cls.window_dpi_scaling_dict:
+            cls.window_dpi_scaling_dict[window] = cls.get_window_dpi_scaling(window)
+
+    _ST.add_widget = _patched_st_add_widget
+    _ST.add_window = _patched_st_add_window
+    # remove_widget/remove_window/update_* keep working unchanged: they call
+    # .remove()/del/iteration, which _CallbackBag provides.
+except Exception:
+    pass
+
+
+# ---------------------------------------------------------------------------
+# CustomTkinter performance patch #3: CTkScrollableFrame leaks its FIVE
+# bind_all handlers (<MouseWheel> + 4 Shift binds) — destroy() never unbinds
+# them, so every panel eviction and every closed dialog permanently adds
+# handlers that run on EVERY wheel notch / Shift press for the rest of the
+# session (scrolling literally got slower the longer the app ran). Record the
+# funcids at init and splice them out of the 'all' bindtag on destroy.
+# ---------------------------------------------------------------------------
+try:
+    _orig_sf_init = ctk.CTkScrollableFrame.__init__
+    _orig_sf_destroy = ctk.CTkScrollableFrame.destroy
+
+    def _patched_sf_init(self, *args: Any, **kwargs: Any) -> None:
+        ids: list = []
+        real_bind_all = self.bind_all
+
+        def _recording_bind_all(sequence, func=None, add=None):
+            funcid = real_bind_all(sequence, func, add)
+            if func is not None and funcid:
+                ids.append((sequence, funcid))
+            return funcid
+
+        self.bind_all = _recording_bind_all  # instance attr shadows the method
+        try:
+            _orig_sf_init(self, *args, **kwargs)
+        finally:
+            try:
+                del self.__dict__["bind_all"]
+            except Exception:
+                pass
+        self._lsb_bindall_ids = ids
+
+    def _patched_sf_destroy(self) -> None:
+        ids = getattr(self, "_lsb_bindall_ids", None)
+        if ids:
+            self._lsb_bindall_ids = None
+            try:
+                root = self._root()
+                for sequence, funcid in ids:
+                    try:
+                        script = str(root.tk.call("bind", "all", sequence))
+                        kept = [ln for ln in script.split("\n") if funcid not in ln]
+                        root.tk.call("bind", "all", sequence, "\n".join(kept))
+                        root.deletecommand(funcid)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        _orig_sf_destroy(self)
+
+    ctk.CTkScrollableFrame.__init__ = _patched_sf_init
+    ctk.CTkScrollableFrame.destroy = _patched_sf_destroy
+except Exception:
+    pass
 
 
 # Regex matching Hebrew, Arabic, Persian RTL characters
@@ -2152,14 +2318,24 @@ class SoundboardApp:
         self._hover_preview_keyboard_handle: Optional[Any] = None
         self._hover_preview_mouse_hook: Optional[Any] = None
         self._hover_preview_mouse_key: Optional[str] = None
+        self._hover_preview_poll_id: Optional[str] = None  # GetAsyncKeyState poll loop
+        self._hover_preview_vk: Optional[int] = None
+        self._hover_preview_btn_was_down: bool = True
         self._hover_preview_last_at: float = 0.0
         self._hovered_slot: Optional[tuple[int, int]] = None
         self._quick_popup: Optional[Any] = None
         self._suppress_slot_click_until: float = 0.0
         self._volume_indicator_after_id: Optional[str] = None  # Temporary volume display timeout
+        self._volume_indicator_widget: Optional[Any] = None  # slot whose gauge clear is pending
 
         # Debounced save handle (see _save_config / _save_config_now)
         self._save_after_id: Optional[str] = None
+        # Async config writer (see _save_config_now): snapshot on Tk thread,
+        # disk I/O on one serialized worker; sync flush on shutdown.
+        self._config_write_lock = threading.Lock()
+        self._config_io_lock = threading.Lock()
+        self._pending_config_blob: Optional[dict] = None
+        self._config_writer_busy: bool = False
 
         # AFK Mode: auto-replay a chosen slot every N seconds.
         self._afk_enabled: bool = False
@@ -2330,6 +2506,7 @@ class SoundboardApp:
         self._resize_active_until: float = 0.0
         self._ptt_stuck_since: Optional[float] = None  # PTT watchdog timestamp
         self._resize_sweep_after_id: Optional[str] = None
+        self._last_root_size: tuple = (0, 0)  # to tell window MOVES from resizes
         # ---- Grid virtualization (occlusion culling) ----------------------
         # Only the slot rows in/near the scroll viewport are kept gridded; the
         # rest are grid_remove()'d so Tk doesn't lay them out on every resize.
@@ -2357,6 +2534,15 @@ class SoundboardApp:
         # Only react to events on the root window itself, not children.
         if event.widget is not self.root:
             return
+        # Pure MOVE (title-bar drag): width/height unchanged. Children get no
+        # <Configure> and nothing needs repainting — Windows just blits the
+        # window. Arming the defer machinery here paused the progress
+        # animation and queued a needless cull+sweep wave after every drag,
+        # which read as "the app smudges/lags whenever I move it".
+        size = (event.width, event.height)
+        if size == self._last_root_size:
+            return
+        self._last_root_size = size
         until = time.time() + 0.15
         self._resize_active_until = until
         # Share with the CTk monkeypatch so per-widget redraws are deferred.
@@ -2369,7 +2555,10 @@ class SoundboardApp:
                 self.root.after_cancel(self._resize_sweep_after_id)  # type: ignore[arg-type]
             except Exception:
                 pass
-        self._resize_sweep_after_id = self.root.after(180, self._post_resize_sweep)
+        # 160ms: just past the 150ms defer window above, so after the LAST
+        # Configure the sweep fires once and drains immediately (anything
+        # ≤150ms lands inside the window and pays a +60ms reschedule hop).
+        self._resize_sweep_after_id = self.root.after(160, self._post_resize_sweep)
 
     def _post_resize_sweep(self):
         """Redraw CTk widgets that were skipped during the resize.
@@ -2396,11 +2585,15 @@ class SoundboardApp:
         # Drain in chunks to keep each tick's work bounded.
         self._sweep_drain(list(dirty))
 
-    def _sweep_drain(self, widgets: list, chunk: int = 16):
+    def _sweep_drain(self, widgets: list, chunk: int = 24):
         """Redraw up to `chunk` widgets, then yield to the event loop."""
         # If a new resize started while we were draining, abandon this sweep —
-        # the next sweep will pick up the (re-populated) dirty set.
+        # but RE-PARK the remainder first. Just dropping them left widgets
+        # stale/blank after overlapping drags (the dirty set had already been
+        # popped, so no later sweep knew about them).
         if time.time() < self._resize_active_until:
+            if widgets:
+                _SHARED_RESIZE_STATE.setdefault("dirty", set()).update(widgets)
             return
         end = min(chunk, len(widgets))
         for widget in widgets[:end]:
@@ -2447,11 +2640,22 @@ class SoundboardApp:
         cols = max(1, int(self.grid_columns))
         num = len(self.tab_slot_wrappers.get(tab_idx, {}))
         num_rows = (num + cols - 1) // cols
+        # The cull runs per wheel notch now — skip the grid_rowconfigure loop
+        # when nothing it depends on has changed. The memo holds the grid
+        # widget itself (identity-compared) so a rebuilt grid re-applies.
+        memo = getattr(self, "_row_minsize_memo", None)
+        if memo is None:
+            memo = self._row_minsize_memo = {}
+        key = (cols, num_rows, rh)
+        prev = memo.get(tab_idx)
+        if prev is not None and prev[0] is grid and prev[1] == key:
+            return
         for r in range(num_rows):
             try:
                 grid.grid_rowconfigure(r, minsize=rh)
             except Exception:
                 pass
+        memo[tab_idx] = (grid, key)
 
     def _visible_row_range(self):
         """Return (first_row, last_row) of slot rows in/near the viewport, with
@@ -2767,7 +2971,15 @@ class SoundboardApp:
         fragile because ``winfo_id`` returns Tk's inner-frame HWND and owned
         popups don't share the root's parent chain). Non-Windows / API failure →
         returns True so scrolling is never blocked there.
+
+        The Win32 query is cached for ~50 ms: multiple ``bind_all`` handlers
+        gate on it per wheel notch and foreground focus can't meaningfully
+        change mid-gesture; focus loss still stops scrolling within a frame.
         """
+        now = time.time()
+        cached = getattr(self, "_app_active_cache", None)
+        if cached is not None and now - cached[0] < 0.05:
+            return cached[1]
         try:
             import ctypes
             from ctypes import wintypes
@@ -2775,12 +2987,15 @@ class SoundboardApp:
             user32 = ctypes.windll.user32
             fg = user32.GetForegroundWindow()
             if not fg:
-                return False
-            pid = wintypes.DWORD()
-            user32.GetWindowThreadProcessId(fg, ctypes.byref(pid))
-            return pid.value == os.getpid()
+                result = False
+            else:
+                pid = wintypes.DWORD()
+                user32.GetWindowThreadProcessId(fg, ctypes.byref(pid))
+                result = pid.value == os.getpid()
         except Exception:
-            return True
+            result = True
+        self._app_active_cache = (now, result)
+        return result
 
     def _pointer_scroll_region(self):
         """Classify which scrollable region the mouse pointer is over.
@@ -3062,6 +3277,23 @@ class SoundboardApp:
             corner_radius=4,
         )
         self.mic_mute_checkbox.pack(side=tk.LEFT, padx=(0, 16))
+
+        # Auto-PTT mic duck: when a sound auto-presses the PTT key, Discord
+        # transmits the whole cable — without this, everyone heard the live
+        # mic alongside every sound. Mic stays in while the user physically
+        # holds their PTT key (talking over a sound on purpose).
+        self.duck_mic_var = tk.BooleanVar(value=True)
+        self.duck_mic_checkbox = ctk.CTkCheckBox(
+            stream_row,
+            text="🤫 Mic muted during sounds",
+            variable=self.duck_mic_var,
+            command=self._toggle_duck_mic,
+            fg_color=COLORS["blurple"],
+            hover_color=COLORS["blurple_hover"],
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            corner_radius=4,
+        )
+        self.duck_mic_checkbox.pack(side=tk.LEFT, padx=(0, 16))
 
         self.monitor_var = tk.BooleanVar(value=True)
         self.monitor_checkbox = ctk.CTkCheckBox(
@@ -5826,8 +6058,11 @@ class SoundboardApp:
                 direction * notches * self._get_scroll_units_per_notch(),
                 "units",
             )
-            # Bring newly-revealed slot rows into existence (virtualization).
-            self._schedule_cull(delay=40)
+            # Bring newly-revealed slot rows into existence (virtualization)
+            # IN THIS EVENT: at high scroll speeds one notch jumps past the
+            # 3-row buffer, and a debounced cull left blank rows on screen
+            # for 40ms+ before a burst regrid (the scroll "smudge").
+            self._cull_slots()
             return "break"
         except Exception:
             return None
@@ -5875,10 +6110,12 @@ class SoundboardApp:
             except Exception:
                 pass
 
-        # Temporarily show a visual volume indicator on the slot
+        # Temporarily show a visual volume indicator on the slot. Volume
+        # changes no colour/emoji/image, so the gauge is the only repaint
+        # needed — the full _update_slot_button_for_tab per notch (incl. a
+        # disk stat for the image) was pure jank.
         self._show_slot_volume_indicator(tab_idx, slot_idx, slot.volume)
 
-        self._update_slot_button_for_tab(tab_idx, slot_idx)
         self._save_config()
         volume_pct = int(round(slot.volume * 100))
         status_msg = f"🔊 {slot.name}: volume {volume_pct}%"
@@ -5893,8 +6130,12 @@ class SoundboardApp:
             if tab_idx not in self.tab_slot_buttons or slot_idx not in self.tab_slot_buttons[tab_idx]:
                 return
 
-            # Get the slot widget (SlotWidget is a tk.Canvas)
+            # Get the slot widget (SlotWidget is a tk.Canvas). The per-tab
+            # store holds ButtonProxy facades — unwrap to the real canvas,
+            # otherwise the hasattr guards below never match and the gauge
+            # silently never shows.
             slot_widget = self.tab_slot_buttons[tab_idx][slot_idx]
+            slot_widget = getattr(slot_widget, "slot_widget", slot_widget)
 
             # Add a temporary visual indicator by updating the slot's progress-like display
             # This uses the same mechanism as playback progress but shows volume level
@@ -5907,23 +6148,38 @@ class SoundboardApp:
                 except Exception:
                     pass
 
-            # Mark the slot as showing volume (if it's a SlotWidget with custom rendering)
+            # ONE shared timer guards the gauge. If a clear was pending for a
+            # DIFFERENT slot, cancelling its timer above orphaned that slot's
+            # gauge — clear it now, or its frozen green bar would mask that
+            # slot's playback progress forever.
+            prev = getattr(self, '_volume_indicator_widget', None)
+            if prev is not None and prev is not slot_widget:
+                try:
+                    prev._volume_display = None
+                    prev._redraw_progress()
+                except Exception:
+                    pass
+            self._volume_indicator_widget = slot_widget
+
+            # Mark the slot as showing volume (if it's a SlotWidget with custom
+            # rendering). Only the progress strip changes — repainting just it
+            # keeps Shift+wheel smooth (a full redraw per notch caused jank).
             if hasattr(slot_widget, '_volume_display'):
                 slot_widget._volume_display = volume
-                # Force a redraw
-                if hasattr(slot_widget, '_redraw_full'):
-                    slot_widget._redraw_full()
+                if hasattr(slot_widget, '_redraw_progress'):
+                    slot_widget._redraw_progress()
 
             # Clear the volume indicator after 1 second
             def clear_volume_display():
                 try:
                     if hasattr(slot_widget, '_volume_display'):
                         slot_widget._volume_display = None
-                    if hasattr(slot_widget, '_redraw_full'):
-                        slot_widget._redraw_full()
+                    if hasattr(slot_widget, '_redraw_progress'):
+                        slot_widget._redraw_progress()
                 except Exception:
                     pass
                 self._volume_indicator_after_id = None
+                self._volume_indicator_widget = None
 
             self._volume_indicator_after_id = self.root.after(1000, clear_volume_display)
         except Exception:
@@ -6818,18 +7074,46 @@ class SoundboardApp:
         self._save_config()
 
     def _on_search_changed(self):
-        """Called when the search entry text changes."""
+        """Called when the search entry text changes.
+
+        Debounced ~180ms (same pattern as PersonHub/emoji picker): the result
+        overlay destroys + rebuilds a widget tree per match, which cost
+        ~340ms per keystroke when run synchronously on every letter.
+        """
         self._search_query = self._search_var.get().strip().lower()
+        self._cancel_search_debounce()
+        # Clearing the box back to empty should restore the grid immediately.
+        if not self._search_query:
+            self._run_search()
+            return
+        self._search_debounce_id = self.root.after(180, self._run_search_debounced)
+
+    def _run_search_debounced(self):
+        self._search_debounce_id = None
         self._run_search()
+
+    def _cancel_search_debounce(self):
+        """Cancel a pending debounced search. MUST be called by anything that
+        hides the results overlay — a timer surviving a tab switch would
+        re-show the overlay 180ms after the user navigated away."""
+        pending = getattr(self, "_search_debounce_id", None)
+        if pending is not None:
+            try:
+                self.root.after_cancel(pending)
+            except Exception:
+                pass
+            self._search_debounce_id = None
 
     def _on_filter_changed(self, _value: str = ""):
         """Called when the group filter combobox changes."""
+        self._cancel_search_debounce()  # this runs with the freshest query
         selected = self._filter_group_var.get()
         self._filter_group = None if selected == "All Groups" else selected
         self._run_search()
 
     def _on_tab_filter_changed(self, _value: str = ""):
         """Called when the tab filter combobox changes."""
+        self._cancel_search_debounce()  # this runs with the freshest query
         selected = self._filter_tab_var.get()
         self._filter_tab = None if selected == "All Tabs" else selected
         self._run_search()
@@ -7167,10 +7451,17 @@ class SoundboardApp:
                 group_text = "  •  " + ", ".join(slot_obj.groups)
             else:
                 group_text = "  •  (no groups)"
+            # One shared footer font — a fresh CTkFont per result leaked a new
+            # named Tcl font on every keystroke's rebuild.
+            footer_font = getattr(self, "_search_footer_font", None)
+            if footer_font is None:
+                footer_font = self._search_footer_font = ctk.CTkFont(
+                    family=FONTS["family"], size=11
+                )
             footer = ctk.CTkLabel(
                 wrapper,
                 text=_fix_rtl_text(f"{tab_info}{group_text}"),
-                font=ctk.CTkFont(family=FONTS["family"], size=11),
+                font=footer_font,
                 text_color=COLORS["text_primary"],
                 fg_color=COLORS["bg_medium"],
                 corner_radius=4,
@@ -7202,6 +7493,7 @@ class SoundboardApp:
 
     def _hide_search_results(self):
         """Hide search results and restore normal tab grid view."""
+        self._cancel_search_debounce()
         self._search_results = None
 
         if self._search_results_frame is not None:
@@ -7497,6 +7789,11 @@ class SoundboardApp:
                 if hasattr(self, "noise_suppress_var"):
                     self.mixer.noise_suppressor.enabled = self.noise_suppress_var.get()
                     self.mixer.noise_suppressor.set_strength(self.ns_strength_var.get() / 100.0)
+                # Apply mic mute + auto-PTT mic duck (fresh mixer per start).
+                if hasattr(self, "mic_mute_var"):
+                    self.mixer.mic_muted = self.mic_mute_var.get()
+                if hasattr(self, "duck_mic_var"):
+                    self.mixer.duck_mic_during_sounds = self.duck_mic_var.get()
                 # Apply voice changer settings (mirror GUI model into the mixer).
                 self._sync_voice_fx()
                 self.mixer.start()
@@ -7535,6 +7832,12 @@ class SoundboardApp:
         if self.mixer:
             self.mixer.mic_muted = self.mic_mute_var.get()
         self._update_status_bar()
+
+    def _toggle_duck_mic(self):
+        """Toggle 'mute mic while sounds play' (auto-PTT mic duck)."""
+        if self.mixer:
+            self.mixer.duck_mic_during_sounds = self.duck_mic_var.get()
+        self._save_config()
 
     def _toggle_monitor(self):
         """Toggle local speaker monitoring (hear sounds through speakers)."""
@@ -8167,11 +8470,16 @@ class SoundboardApp:
         try:
             meter.set(max(0.0, min(1.0, peak)))
             if peak >= 0.98:
-                meter.configure(progress_color=COLORS["red"])      # clipping
+                color = COLORS["red"]      # clipping
             elif peak >= 0.7:
-                meter.configure(progress_color=COLORS["yellow"])    # hot
+                color = COLORS["yellow"]   # hot
             else:
-                meter.configure(progress_color=COLORS["green"])
+                color = COLORS["green"]
+            # configure(progress_color=...) forces a full CTk redraw — only
+            # pay it when the zone actually changes, not every meter tick.
+            if getattr(meter, "_lsb_meter_color", None) != color:
+                meter._lsb_meter_color = color
+                meter.configure(progress_color=color)
         except Exception:
             pass
 
@@ -9365,6 +9673,15 @@ class SoundboardApp:
         self._hover_preview_keyboard_handle = None
         self._hover_preview_keyboard_key = None
 
+        poll_id = getattr(self, "_hover_preview_poll_id", None)
+        if poll_id is not None:
+            try:
+                self.root.after_cancel(poll_id)
+            except Exception:
+                pass
+        self._hover_preview_poll_id = None
+        self._hover_preview_vk = None
+
         if self._hover_preview_mouse_hook is not None:
             try:
                 import mouse  # type: ignore[import-untyped]
@@ -9397,6 +9714,44 @@ class SoundboardApp:
 
         if key.startswith("mouse"):
             self._hover_preview_mouse_key = key
+
+            # On Windows, poll GetAsyncKeyState (~30ms, one cheap syscall)
+            # instead of installing the `mouse` library's WH_MOUSE_LL hook.
+            # That hook ran Python for EVERY system mouse event — including
+            # every pixel of pointer movement, in every app — so whenever the
+            # Tk thread held the GIL through a redraw burst the whole OS
+            # cursor stuttered (the system-wide "laggy mouse" feel). Polling
+            # keeps the trigger global while taking us out of the OS mouse
+            # path entirely. VK codes mirror _mouse_button_to_key_name:
+            # mouse lib 'x'→mouse5 (VK_XBUTTON1), 'x2'→mouse4 (VK_XBUTTON2).
+            vk = {
+                "mouse1": 0x01,  # VK_LBUTTON
+                "mouse2": 0x02,  # VK_RBUTTON
+                "mouse3": 0x04,  # VK_MBUTTON
+                "mouse4": 0x06,  # VK_XBUTTON2
+                "mouse5": 0x05,  # VK_XBUTTON1
+            }.get(key)
+            if sys.platform == "win32" and vk is not None:
+                import ctypes
+
+                self._hover_preview_vk = vk
+                self._hover_preview_user32 = ctypes.windll.user32
+                try:
+                    # Flush the stale "pressed since last call" bit so the
+                    # click that just configured the binding can't trigger.
+                    self._hover_preview_user32.GetAsyncKeyState(vk)
+                except Exception:
+                    pass
+                self._hover_preview_btn_was_down = True  # require a fresh press
+                self._hover_preview_poll_id = self.root.after(
+                    30, self._poll_hover_preview_button
+                )
+                if hasattr(self, "hover_preview_status_label"):
+                    self.hover_preview_status_label.configure(
+                        text=f"Hover preview: {key}",
+                        text_color=COLORS["green"],
+                    )
+                return
 
             def on_mouse_event(event):
                 event_type = getattr(event, "event_type", None)
@@ -9447,6 +9802,35 @@ class SoundboardApp:
                     text="Could not register binding",
                     text_color=COLORS["red"],
                 )
+
+    def _poll_hover_preview_button(self):
+        """Edge-detect the bound hover-preview mouse button via GetAsyncKeyState.
+
+        Replaces the `mouse` library's global WH_MOUSE_LL hook (see
+        _register_hover_preview_binding). Runs on the Tk thread, so the
+        preview fires directly without marshalling; _preview_hovered_slot
+        already gates on the app being the foreground window.
+        """
+        self._hover_preview_poll_id = None
+        vk = getattr(self, "_hover_preview_vk", None)
+        if vk is None:
+            return
+        try:
+            state = int(self._hover_preview_user32.GetAsyncKeyState(vk))
+            down = bool(state & 0x8000)
+            was_down = self._hover_preview_btn_was_down
+            # Rising edge — OR a tap so short it fit entirely between two
+            # polls: bit 0x0001 means "pressed since the last call" (taps of
+            # 20-40ms are common, and the gap stretches if the UI is busy).
+            if (down and not was_down) or (not down and not was_down and state & 0x0001):
+                self._preview_hovered_slot()
+            self._hover_preview_btn_was_down = down
+        except Exception:
+            pass
+        try:
+            self._hover_preview_poll_id = self.root.after(30, self._poll_hover_preview_button)
+        except Exception:
+            self._hover_preview_poll_id = None
 
     def _get_current_tab(self) -> SoundTab:
         """Get the currently active tab."""
@@ -11238,12 +11622,12 @@ class SoundboardApp:
         return None
 
     def _drop_log(self, msg: str):
-        """Append a flushed line to debug.log so the LAST step before a hard
-        crash is always on disk (helps diagnose the drop path)."""
+        """Log a drop-path breadcrumb so the LAST step before a hard crash is
+        always on disk. Routed through the app logger (its FileHandler flushes
+        every record) instead of opening a second raw handle to debug.log on
+        the UI thread mid-drop."""
         try:
-            with open("debug.log", "a", encoding="utf-8") as f:
-                f.write(f"[DROP] {msg}\n")
-                f.flush()
+            logging.getLogger("soundboard.drop").info("[DROP] %s", msg)
         except Exception:
             pass
 
@@ -11697,6 +12081,7 @@ class SoundboardApp:
                 stop=self._stop_person_sound,
                 preview=self._preview_person_sound,
                 stop_preview=self._stop_person_preview,
+                set_volume=self._set_person_sound_volume,
                 scroll_units=self._get_scroll_units_per_notch,
                 get_geometry=self._get_person_window_geometry,
                 set_geometry=self._set_person_window_geometry,
@@ -11779,6 +12164,15 @@ class SoundboardApp:
             if self.mixer:
                 self.mixer.stop_sound(f"person_{id(slot)}")
             self.status_var.set(f"Stopped: {slot.name}")
+        except Exception:
+            pass
+
+    def _set_person_sound_volume(self, slot: SoundSlot):
+        """Live-update the mixer volume of a currently-playing person sound (the
+        People chip Shift+wheel gesture). A no-op if it isn't playing."""
+        try:
+            if self.mixer:
+                self.mixer.set_sound_volume(f"person_{id(slot)}", slot.volume)
         except Exception:
             pass
 
@@ -13762,7 +14156,7 @@ class SoundboardApp:
         """
         # If we are shutting down or root is gone, save immediately and exit.
         if not getattr(self, "root", None):
-            self._save_config_now()
+            self._save_config_now(sync=True)
             return
         if getattr(self, "_save_after_id", None):
             try:
@@ -13779,10 +14173,23 @@ class SoundboardApp:
             except Exception:
                 pass
             self._save_after_id = None
-        self._save_config_now()
+        # Shutdown must write synchronously — a daemon worker could be killed
+        # mid-write by os._exit. The io-lock below waits out any in-flight
+        # worker write first, so the final state always lands.
+        self._save_config_now(sync=True)
 
-    def _save_config_now(self):
-        """Write configuration to JSON file using atomic write to prevent corruption."""
+    def _save_config_now(self, sync: bool = False):
+        """Snapshot the config on the Tk thread, write it on a worker.
+
+        The dict build reads live tkinter Vars so it MUST stay on the Tk
+        thread (~2ms). The expensive part — json.dump of ~390KB + the .bak
+        copy + the atomic replace (~12-26ms) — used to run on the Tk thread
+        too, so every debounced save (window move/resize, slider drag,
+        volume wheel) cost a visible frame. It now runs on a single
+        serialized writer thread; only the newest snapshot is written when
+        saves arrive faster than the disk. ``sync=True`` (shutdown) writes
+        on the calling thread instead.
+        """
         self._save_after_id = None
         # DATA SAFETY: never overwrite the config if we didn't load it cleanly,
         # and never write an empty tab list. Either would wipe the user's sounds.
@@ -13850,6 +14257,10 @@ class SoundboardApp:
             "noise_suppression_strength": (
                 self.ns_strength_var.get() if hasattr(self, "ns_strength_var") else 85
             ),
+            # Mute the live mic while sounds auto-hold PTT (see _toggle_duck_mic).
+            "duck_mic_during_sounds": (
+                self.duck_mic_var.get() if hasattr(self, "duck_mic_var") else True
+            ),
             # Live soundboard density (slots per row).
             "grid_columns": int(self.grid_columns),
             # Real-time mic voice changer (preset + per-effect params).
@@ -13871,29 +14282,62 @@ class SoundboardApp:
             "afk_interval_seconds": self._afk_interval_seconds,
         }
 
-        # Atomic write: write to temp file first, then rename
+        if sync:
+            self._write_config_blob(config)
+            return
+
+        # Hand the snapshot to the single writer. The lock-protected
+        # enqueue/drain pair guarantees: exactly one writer thread at a time,
+        # no snapshot ever lost, and bursts coalesce to the newest state.
+        with self._config_write_lock:
+            self._pending_config_blob = config
+            if self._config_writer_busy:
+                return  # the running writer will pick this snapshot up
+            self._config_writer_busy = True
+        threading.Thread(
+            target=self._drain_config_writes, name="ConfigWriter", daemon=True
+        ).start()
+
+    def _drain_config_writes(self):
+        """Worker: write pending config snapshots until none remain."""
+        while True:
+            with self._config_write_lock:
+                blob = self._pending_config_blob
+                self._pending_config_blob = None
+                if blob is None:
+                    self._config_writer_busy = False
+                    return
+            self._write_config_blob(blob)
+
+    def _write_config_blob(self, config: dict):
+        """Serialize + atomically write one config snapshot (any thread).
+
+        _config_io_lock serializes the file ops so the shutdown sync-flush
+        can never interleave with an in-flight worker write.
+        """
         temp_file = CONFIG_FILE + ".tmp"
-        try:
-            # Keep a one-version-old backup so the user can always recover the
-            # previous good config if something ever goes wrong.
-            if os.path.exists(CONFIG_FILE):
-                try:
-                    shutil.copy2(CONFIG_FILE, CONFIG_FILE + ".bak")
-                except Exception:
-                    pass
+        with self._config_io_lock:
+            try:
+                # Keep a one-version-old backup so the user can always recover
+                # the previous good config if something ever goes wrong.
+                if os.path.exists(CONFIG_FILE):
+                    try:
+                        shutil.copy2(CONFIG_FILE, CONFIG_FILE + ".bak")
+                    except Exception:
+                        pass
 
-            with open(temp_file, "w", encoding="utf-8") as f:
-                json.dump(config, f, indent=2, ensure_ascii=False)
+                with open(temp_file, "w", encoding="utf-8") as f:
+                    json.dump(config, f, indent=2, ensure_ascii=False)
 
-            os.replace(temp_file, CONFIG_FILE)
-        except Exception as e:
-            print(f"Error saving config: {e}")
-            # Clean up temp file if it exists
-            if os.path.exists(temp_file):
-                try:
-                    os.remove(temp_file)
-                except Exception:
-                    pass
+                os.replace(temp_file, CONFIG_FILE)
+            except Exception as e:
+                print(f"Error saving config: {e}")
+                # Clean up temp file if it exists
+                if os.path.exists(temp_file):
+                    try:
+                        os.remove(temp_file)
+                    except Exception:
+                        pass
 
     def _snapshot_good_config(self, keep: int = 20):
         """Save a timestamped copy of the just-loaded (known-good) config to
@@ -14033,6 +14477,11 @@ class SoundboardApp:
                 self.noise_suppress_var.set(ns_enabled)
             if hasattr(self, "ns_strength_var"):
                 self.ns_strength_var.set(ns_strength)
+
+            # Auto-PTT mic duck (default ON — people heard the live mic
+            # alongside every sound otherwise).
+            if hasattr(self, "duck_mic_var"):
+                self.duck_mic_var.set(bool(config.get("duck_mic_during_sounds", True)))
 
             # Load soundboard density (slots per row). Read BEFORE the deferred
             # _build_all_tab_widgets runs, so the grid builds at the saved size.
@@ -14186,6 +14635,19 @@ class SoundboardApp:
                 if fp and fp not in seen:
                     seen.add(fp)
                     paths.append(fp)
+        # Also warm People's sounds. They play through the SAME SoundCache (so
+        # they share the decoded-PCM disk cache), but were never in the startup
+        # warm set — so the first click on a person's sound used to pay a decode.
+        # Warming them here means person sounds are decode-cached to storage at
+        # launch too, exactly like main-board sounds. (Duplicates that point at
+        # the same file as a main slot are skipped by `seen`.)
+        for person in getattr(self, "persons", []):
+            for group in getattr(person, "groups", []):
+                for slot in getattr(group, "sounds", []):
+                    fp = getattr(slot, "file_path", None)
+                    if fp and fp not in seen:
+                        seen.add(fp)
+                        paths.append(fp)
 
         if not paths:
             self.status_var.set("Ready")
@@ -14207,10 +14669,19 @@ class SoundboardApp:
                     self._warm_active = False
                     return
                 try:
-                    if os.path.exists(fp) and not self._is_long_audio_file(fp):
-                        # Fill the cache without the extra copy get_sound_data makes.
-                        self.sound_cache._load_into_cache(fp)
-                        self._warm_cached += 1
+                    if os.path.exists(fp):
+                        if not self._is_long_audio_file(fp):
+                            # Fill the cache without the extra copy get_sound_data makes.
+                            self.sound_cache._load_into_cache(fp)
+                            self._warm_cached += 1
+                        elif self.sound_cache.warm_disk_cache(fp):
+                            # Long file: decode ONCE into audio_cache/ but keep
+                            # it out of RAM. First play then np.loads in tens of
+                            # ms instead of freezing the UI for a full decode —
+                            # this was the "first click on a big person sound
+                            # hangs the app" complaint. (No-op when already
+                            # cached: one stat call.)
+                            self._warm_cached += 1
                 except Exception:
                     pass
                 self._warm_done += 1

@@ -182,6 +182,11 @@ class SlotWidget(tk.Canvas):
         # debounced redraw instead of redrawing on every pixel.
         self._dirty: bool = False
         self._redraw_after_id: Optional[str] = None
+        # Persistent progress-bar items: the playing animation ticks
+        # _redraw_progress every frame, so the fill rect is moved via
+        # coords() instead of delete()+create_rectangle() churn.
+        self._prog_fill_id: Optional[int] = None
+        self._prog_size: tuple = (0, 0)
 
         # Bindings
         self.bind("<Configure>", self._on_resize, add="+")
@@ -340,7 +345,10 @@ class SlotWidget(tk.Canvas):
         now = time.time()
         if now < _SHARED_RESIZE_STATE.get("until", 0.0):
             self._dirty = True
-            self._schedule_debounced_redraw(220)
+            # 100ms: long enough to skip every intermediate pixel of a drag,
+            # short enough that the stale stretched canvas (the "smudge")
+            # disappears almost as soon as the user pauses.
+            self._schedule_debounced_redraw(100)
             return
         # Outside an active resize (e.g. tab switch, initial layout, audio
         # options toggle), redraw IMMEDIATELY so the user never sees a stale
@@ -372,7 +380,7 @@ class SlotWidget(tk.Canvas):
         self._redraw_after_id = None
         # If a fresh resize started while we were waiting, defer further.
         if time.time() < _SHARED_RESIZE_STATE.get("until", 0.0):
-            self._schedule_debounced_redraw(220)
+            self._schedule_debounced_redraw(100)
             return
         if self._dirty:
             self._dirty = False
@@ -388,6 +396,7 @@ class SlotWidget(tk.Canvas):
             return
 
         self.delete("all")
+        self._prog_fill_id = None  # all canvas items are gone
 
         # Outer frame (canvas bg already set; draw border if any)
         if self._border_width > 0:
@@ -515,15 +524,16 @@ class SlotWidget(tk.Canvas):
         self._redraw_overlays()
 
     def _redraw_progress(self) -> None:
-        self.delete("progress")
         try:
             w = self.winfo_width()
             h = self.winfo_height()
         except tk.TclError:
             return
-        
+
         # If volume display is active, show volume bar instead of progress
         if self._volume_display is not None:
+            self.delete("progress")
+            self._prog_fill_id = None
             volume = max(0.0, min(1.5, self._volume_display))
             # Bar sits ABOVE the overlay button row, with a small gap.
             bar_pad_left = self.OVERLAY_PAD
@@ -572,6 +582,12 @@ class SlotWidget(tk.Canvas):
         
         # Normal progress display
         if w <= 1 or self._progress <= 0.0:
+            # find_withtag too: the volume gauge leaves "progress"-tagged
+            # items behind with _prog_fill_id already None — they must still
+            # be cleared when the display returns to idle.
+            if self._prog_fill_id is not None or self.find_withtag("progress"):
+                self.delete("progress")
+                self._prog_fill_id = None
             return
         # Bar sits ABOVE the overlay button row, with a small gap.
         bar_pad_left = self.OVERLAY_PAD
@@ -580,6 +596,28 @@ class SlotWidget(tk.Canvas):
         y_top = y_bot - self.PROGRESS_H
         track_x0 = bar_pad_left
         track_x1 = w - bar_pad_right
+        fill_w = max(0.0, (track_x1 - track_x0 - 2) * self._progress)
+
+        # Fast path — the playing animation ticks here every frame for every
+        # playing slot, so just move the existing fill rect's right edge.
+        # NB: coords() on a deleted item is a SILENT no-op (returns []), so
+        # existence is checked positively rather than via TclError.
+        if self._prog_fill_id is not None and (w, h) == self._prog_size:
+            try:
+                if self.coords(self._prog_fill_id):
+                    self.coords(
+                        self._prog_fill_id,
+                        track_x0 + 1,
+                        y_top + 1,
+                        track_x0 + 1 + fill_w,
+                        y_bot - 1,
+                    )
+                    return
+                self._prog_fill_id = None  # item vanished — full rebuild
+            except tk.TclError:
+                self._prog_fill_id = None  # fall through to a full rebuild
+
+        self.delete("progress")
         # Track (background) — dark with a white border for visibility
         self.create_rectangle(
             track_x0,
@@ -591,18 +629,18 @@ class SlotWidget(tk.Canvas):
             fill=COLORS["bg_dark"],
             tags="progress",
         )
-        # Fill — red, inset 1px so the white border stays visible
-        fill_w = (track_x1 - track_x0 - 2) * self._progress
-        if fill_w > 1:
-            self.create_rectangle(
-                track_x0 + 1,
-                y_top + 1,
-                track_x0 + 1 + fill_w,
-                y_bot - 1,
-                outline="",
-                fill=COLORS["red"],
-                tags="progress",
-            )
+        # Fill — red, inset 1px so the white border stays visible. Created even
+        # at zero width so the per-tick fast path always has an item to move.
+        self._prog_fill_id = self.create_rectangle(
+            track_x0 + 1,
+            y_top + 1,
+            track_x0 + 1 + fill_w,
+            y_bot - 1,
+            outline="",
+            fill=COLORS["red"],
+            tags="progress",
+        )
+        self._prog_size = (w, h)
 
     def _redraw_overlays(self) -> None:
         self.delete("overlay")
@@ -762,12 +800,29 @@ class SlotWidget(tk.Canvas):
     def _on_enter(self, event: Any) -> None:
         if not self._hover:
             self._hover = True
-            self._redraw_full()
+            self._apply_hover_fill()
 
     def _on_leave(self, event: Any) -> None:
         if self._hover:
             self._hover = False
-            self._redraw_full()
+            self._apply_hover_fill()
+
+    def _apply_hover_fill(self) -> None:
+        """Recolour the existing bg rect in place. Hover is a 6% lighten of the
+        button fill — sweeping the mouse across a dense tab must not pay a full
+        delete("all") + rebuild per slot crossed."""
+        if not self._button_color or self._button_color == self._frame_color:
+            # No bg rect exists in this state and the lighten would be a
+            # no-op anyway (matches the condition in _redraw_full).
+            return
+        fill = _lighten(self._button_color, 0.06) if self._hover else self._button_color
+        try:
+            if self.find_withtag("bg"):
+                self.itemconfigure("bg", fill=fill)
+            else:
+                self._redraw_full()
+        except tk.TclError:
+            pass
 
 
 # ---------------------------------------------------------------------------

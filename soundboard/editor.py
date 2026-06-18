@@ -793,9 +793,31 @@ class SoundEditor:
         self._draw_waveform()
 
     def _on_canvas_resize(self, event):
-        """Handle canvas resize."""
+        """Handle canvas resize — debounced.
+
+        A live dialog resize fires <Configure> per pixel and the full waveform
+        redraw (delete-all + ~one create_line per pixel column) costs tens of
+        ms, so redrawing only once the size settles keeps the drag smooth.
+        """
         self.canvas_width = event.width
         self.canvas_height = event.height
+        aid = getattr(self, "_resize_redraw_after", None)
+        if aid is not None:
+            try:
+                self.canvas.after_cancel(aid)
+            except Exception:
+                pass
+        self._resize_redraw_after = self.canvas.after(80, self._redraw_after_resize)
+
+    def _redraw_after_resize(self):
+        # The timer lives on the interpreter, not the widget — it can fire
+        # after the dialog was closed.
+        self._resize_redraw_after = None
+        try:
+            if not self.canvas.winfo_exists():
+                return
+        except Exception:
+            return
         self._draw_waveform()
 
     def _on_mouse_wheel(self, event):
@@ -1640,9 +1662,27 @@ class LongAudioPicker:
                           font=("Segoe UI", 7), anchor="s")
 
     def _on_canvas_resize(self, event):
+        # Debounced like the main editor canvas: _build_columns slices numpy
+        # per pixel column, so per-pixel redraws during a live dialog resize
+        # stutter badly.
         self.canvas_width = event.width
         self.canvas_height = event.height
         self._col_cache = None
+        aid = getattr(self, "_resize_redraw_after", None)
+        if aid is not None:
+            try:
+                self.canvas.after_cancel(aid)
+            except Exception:
+                pass
+        self._resize_redraw_after = self.canvas.after(80, self._redraw_after_resize)
+
+    def _redraw_after_resize(self):
+        self._resize_redraw_after = None
+        try:
+            if not self.canvas.winfo_exists():
+                return
+        except Exception:
+            return
         self._draw()
 
     # ------------------------------------------------------------- selection

@@ -53,12 +53,23 @@ def _enable_dpi_awareness():
 
 _enable_dpi_awareness()
 
-logging.basicConfig(
-    filename="debug.log",
-    filemode="a",
-    level=logging.DEBUG,
-    format="[%(name)s] %(message)s",
+# Root logger must NOT sit at DEBUG: PIL logs a burst per PNG decode and numba
+# ~31k lines per JIT warm-up, so debug.log grew to 6 MB (~80% third-party spam)
+# with synchronous disk writes during the exact image-heavy moments that should
+# feel snappy. App diagnostics stay on the "soundboard" logger (DEBUG via
+# LSB_DEBUG=1); the rotating handler caps the file so it can never grow unbounded.
+import logging.handlers
+
+_log_handler = logging.handlers.RotatingFileHandler(
+    "debug.log", mode="a", maxBytes=1_000_000, backupCount=3, encoding="utf-8"
 )
+_log_handler.setFormatter(logging.Formatter("[%(name)s] %(message)s"))
+logging.basicConfig(level=logging.WARNING, handlers=[_log_handler])
+logging.getLogger("soundboard").setLevel(
+    logging.DEBUG if os.environ.get("LSB_DEBUG") else logging.INFO
+)
+for _noisy in ("PIL", "numba", "pydub", "filelock"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 from soundboard import SoundboardApp
 
