@@ -1,5 +1,9 @@
-# User configuration
+# User configuration (live data — the app rewrites it constantly; never track it)
 soundboard_config.json
+# Config safety backups. A *tracked* .bak is how the people-data wipe destroyed
+# the only good copy — keep every backup out of git.
+*.bak
+soundboard_config.json.bak
 
 # Sound files (user content)
 sounds/
@@ -29,12 +33,15 @@ env/
 .DS_Store
 Thumbs.db
 
-# Distribution / packaging
+# Distribution / packaging (PyInstaller output + staging/rollback copies)
 dist/
 build/
 *.egg-info/
 dist_fresh/
 build_fresh/
+dist_new/
+build_new/
+dist_old/
 
 # Local config safety backups + recovery scratch (not source)
 config_backups/
@@ -45,5 +52,6 @@ audio_cache/
 
 # Runtime logs / profiling artifacts (not source)
 debug.log
+debug.log.*
 perf.log
 importtime.txt
