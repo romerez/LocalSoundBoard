@@ -1,6 +1,8 @@
 # LocalSoundBoard — Lightning Performance Plan
 
-> **Status:** Planning document (no code changes yet)
+> **Status:** Planning document — partially executed.
+> **Shipped 2026-06-09:** #3/#21 (image caches), #4 (warm-up flush), #37 (people search debounce), #38 (avatar cache), #39 (panel LRU), decoded-audio disk cache.
+> **Shipped 2026-06-10:** #8 (hover itemconfigure), #10 (progress coords()), #16 (active-window cache), #17 (shift+wheel repaint), #18 (memoized minsizes), #20-lite (main search debounce + shared footer font), #41+range-picker (editor resize debounce), #49/#50/#51 (logging) — plus three items the plan missed: the hover-preview global mouse hook (Python per system mouse-move → GetAsyncKeyState poll), window MOVE arming the resize-defer (now size-gated), and the wheel cull gap (synchronous cull). See [SESSION_BACKLOG.md](SESSION_BACKLOG.md) for detail.
 > **Date:** 2026-06-08
 > **Scope:** Bottom-to-top performance audit of the whole app — startup, GUI, tabs, slot grid, scrolling, audio engine, voice FX, person board, editor, emoji picker, config, logging — plus 3 strategic plans.
 > **Hard constraint:** We can rewire and refactor freely, but **every feature that works today must keep working.** No regressions.
