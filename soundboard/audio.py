@@ -846,6 +846,43 @@ class SoundCache:
             print(f"Error loading sound into cache: {e}")
             raise
 
+    def warm_disk_cache(self, file_path: str) -> bool:
+        """Ensure the on-disk decoded-PCM cache exists WITHOUT keeping the PCM
+        in RAM.
+
+        The startup warmer keeps short sounds resident, but holding every big
+        sound in memory would balloon RAM — so long files used to stay fully
+        cold, and their FIRST play decoded + resampled synchronously (a
+        multi-second UI freeze for multi-minute person sounds). Warming just
+        the disk cache makes first play one np.load instead of a full decode.
+        Files at/over HUGE_AUDIO_SECONDS are skipped — playback streams those
+        and never materialises the full PCM. Returns True when the disk cache
+        exists by the time we're done.
+        """
+        try:
+            with self._lock:
+                if file_path in self._cache:
+                    return True  # resident → disk copy was made on load
+            dc = self._disk_cache_path(file_path)
+            if dc is None:
+                return False
+            if dc.exists():
+                return True
+            if probe_duration(file_path) >= HUGE_AUDIO_SECONDS:
+                return False  # streamed at play time; nothing to warm
+            data, sr = self._read_audio_file(file_path)
+            if sr != self.sample_rate:
+                data = _resample_audio(data, sr, self.sample_rate)
+            data = np.ascontiguousarray(data, dtype=np.float32)
+            self._audio_cache_dir.mkdir(exist_ok=True)
+            tmp = dc.parent / (dc.name + ".tmp")
+            with open(tmp, "wb") as fh:
+                np.save(fh, data)          # write to handle => exact name
+            os.replace(str(tmp), str(dc))  # atomic publish
+            return True
+        except Exception:
+            return False
+
     def _read_audio_file(self, file_path: str) -> Tuple[np.ndarray, int]:
         """
         Read an audio file. Delegates to module-level read_audio_file function.
@@ -1001,6 +1038,24 @@ class AudioMixer:
         self._ptt_active_cycles = 0  # Counts callback cycles while ptt_active is True
         self._ptt_max_hold_cycles = 500  # ~10 seconds (500 * ~21ms)
 
+        # --- Physical-PTT awareness -------------------------------------
+        # We inject the USER'S OWN Discord PTT key for auto-PTT, so the OS
+        # key state can't tell "we hold it" from "the user holds it". A
+        # keyboard hook (see _register_ptt_physical_watch) tracks the
+        # user's real finger: events inside our tiny injection windows are
+        # ours; everything else is physical. Two bugs this kills:
+        # * "PTT locked": a sound ended while the user was PHYSICALLY
+        #   holding the key to talk — our injected key-UP cut Discord off,
+        #   and since a held key sends no new key-downs, transmission
+        #   stayed dead until they re-pressed.
+        # * "people hear my mic with sounds": during auto-PTT Discord
+        #   transmits the whole cable; the live mic is now ducked unless
+        #   the user is actually holding the key to talk over the sound.
+        self.ptt_user_physical: bool = False     # user's real finger on the key
+        self._inject_window_until: float = 0.0   # our SendInput moments
+        self._ptt_watch_handles: list = []       # keyboard-lib hook handles
+        self.duck_mic_during_sounds: bool = True  # GUI checkbox; persisted
+
         # Local monitoring (play sounds to speakers too)
         self.monitor_enabled = False
         self.monitor_stream = None
@@ -1086,6 +1141,13 @@ class AudioMixer:
             return
         try:
             logger.debug("PTT pressing: %s", self.ptt_key)
+            if self.ptt_user_physical:
+                # The user already physically holds the key (they're talking)
+                # — Discord is transmitting; nothing to inject. Still mark
+                # active so the release countdown runs at sound end.
+                self.ptt_active = True
+                return
+            self._inject_window_until = time.time() + 0.05
             if self.ptt_key.startswith("mouse"):
                 button = self.PTT_BUTTON_MAP.get(self.ptt_key, "x2")
                 _simulate_mouse_button(button, press=True)
@@ -1103,10 +1165,19 @@ class AudioMixer:
         if not self.ptt_key or not self.ptt_active:
             return
         try:
-            if self.ptt_key.startswith("mouse"):
+            if self.ptt_user_physical:
+                # The user is PHYSICALLY holding the key (talking). Injecting
+                # a key-up now cuts Discord off mid-sentence — and because a
+                # held key sends no further key-downs, transmission stays
+                # dead until they re-press: the recurring "PTT locked" bug.
+                # Skip the injection; their own release ends the transmit.
+                logger.debug("PTT release skipped — user physically holds %s", self.ptt_key)
+            elif self.ptt_key.startswith("mouse"):
+                self._inject_window_until = time.time() + 0.05
                 button = self.PTT_BUTTON_MAP.get(self.ptt_key, "x2")
                 _simulate_mouse_button(button, press=False)
             elif self._cached_ptt_vk is not None:
+                self._inject_window_until = time.time() + 0.05
                 _simulate_key_vk(self._cached_ptt_vk, press=False)
             else:
                 # No valid key config - clear active flag to prevent stuck state
@@ -1434,8 +1505,20 @@ class AudioMixer:
         # Initialize sounds-only buffer for monitoring
         sounds_mix = np.zeros((frames, self.channels), dtype=np.float32)
 
-        # Process microphone input
-        if self.mic_muted:
+        # Process microphone input.
+        # Duck the live mic during AUTO-PTT: when a sound auto-presses the
+        # user's Discord PTT key, Discord transmits the whole cable — so
+        # everyone heard the user's room/mic alongside every sound. The mic
+        # stays in the mix when the user PHYSICALLY holds the PTT key
+        # (deliberately talking over the sound) and during Test Output's
+        # manual hold (it verifies the full pipeline).
+        _duck = (
+            self.duck_mic_during_sounds
+            and self.ptt_active
+            and not self.ptt_user_physical
+            and not self.manual_ptt_hold
+        )
+        if self.mic_muted or _duck:
             mixed = np.zeros((frames, self.channels), dtype=np.float32)
         else:
             mic_mono = mic_data * self.mic_volume
@@ -2408,7 +2491,48 @@ class AudioMixer:
         else:
             self._cached_ptt_vk = None
 
+        self._register_ptt_physical_watch()
         logger.debug("PTT key set to: %s (VK: %s)", self.ptt_key, self._cached_ptt_vk)
+
+    def _register_ptt_physical_watch(self):
+        """Watch the user's REAL finger on the (keyboard) PTT key.
+
+        We inject the same key for auto-PTT, so the OS key state alone can't
+        distinguish our injection from the user's hold. The keyboard hook
+        sees both too — but we know exactly when we inject
+        (``_inject_window_until`` is set right before every SendInput), so
+        any event OUTSIDE those ~50ms windows is the user's own press or
+        release. Mouse PTT buttons aren't watched (no reliable physical
+        signal); ``ptt_user_physical`` simply stays False for them.
+        """
+        # Drop the previous watch (key changed or cleared).
+        for h in self._ptt_watch_handles:
+            try:
+                import keyboard as _kb
+
+                _kb.unhook(h)
+            except Exception:
+                pass
+        self._ptt_watch_handles = []
+        self.ptt_user_physical = False
+        if not self.ptt_key or self.ptt_key.startswith("mouse"):
+            return
+        try:
+            import keyboard as _kb
+
+            def _phys(event, down):
+                # Our own injected events land inside the window — ignore.
+                if time.time() < self._inject_window_until:
+                    return
+                self.ptt_user_physical = down
+
+            self._ptt_watch_handles = [
+                _kb.on_press_key(self.ptt_key, lambda e: _phys(e, True), suppress=False),
+                _kb.on_release_key(self.ptt_key, lambda e: _phys(e, False), suppress=False),
+            ]
+        except Exception as e:
+            logger.warning("PTT physical watch unavailable: %s", e)
+            self._ptt_watch_handles = []
 
     # mouse button name → Windows API button name (matches Discord's labeling)
     PTT_BUTTON_MAP = {
@@ -2467,12 +2591,19 @@ class AudioMixer:
                     self._ptt_queue.get_nowait()
                 except queue.Empty:
                     break
-        # Directly release to ensure key isn't stuck (bypass queue)
+        # Directly release to ensure key isn't stuck (bypass queue). Skipped
+        # while the user PHYSICALLY holds the key — injecting a key-up then
+        # would cut their Discord transmission dead until they re-pressed
+        # (their own physical release ends it instead).
         try:
-            if self.ptt_key.startswith("mouse"):
+            if self.ptt_user_physical and not shutdown:
+                logger.debug("PTT force-release skipped — user physically holds %s", self.ptt_key)
+            elif self.ptt_key.startswith("mouse"):
+                self._inject_window_until = time.time() + 0.05
                 button = self.PTT_BUTTON_MAP.get(self.ptt_key, "x2")
                 _simulate_mouse_button(button, press=False)
             elif self._cached_ptt_vk is not None:
+                self._inject_window_until = time.time() + 0.05
                 _simulate_key_vk(self._cached_ptt_vk, press=False)
         except Exception:
             pass  # Best effort
