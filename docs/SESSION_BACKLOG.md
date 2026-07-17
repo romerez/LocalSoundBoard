@@ -1,6 +1,36 @@
 # Session Backlog & Open Items
 
-> **Date:** 2026-06-09 (updated 2026-06-11)
+> **Date:** 2026-06-09 (updated 2026-07-17)
+
+---
+
+## 2026-07-17 — People-window launch: persistent hub + measured pump fixes (DONE, uncommitted)
+
+The user: People window "extra slow on launch". Audited with a 7-agent workflow + a LIVE timed benchmark harness (`scratchpad bench_people_hub.py` pattern — real config, 10 persons / 220 group cards / 165 sounds). Measured root causes, in order of impact:
+
+1. **Every open was a cold launch** — `_on_close` destroyed the hub + all ~10 prewarmed panels (~4s), and gui.py's deiconify fast path was dead code.
+2. **Idle starvation** — the after(1) build pump starved Tk's idle queue: first panel "drained" at 1.3s but a hidden ~1.6s geometry/first-draw backlog made true time-to-interactive ~2.9s; each prewarmed panel landed a ~1.3-1.7s freeze (prewarm-all ~19s, NOT the ~7s previously believed).
+3. **68% waste** — 149/220 group cards were full 9-widget cards for EMPTY shared groups.
+4. Duplicate avatar decodes (26px + 28px = 2 full photo decodes/person), unconditional 18px chip emoji raster, post-launch rewrap burst.
+
+Fixes shipped (all in `person_board.py` + small gui.py glue; each verified by re-running the benchmark):
+- ✅ **Persistent hub**: close=withdraw, `reopen()` reconciles (refresh_people + ensure_fresh + covered-dirty drain + rewrap flush); popouts same; `shutdown()` on real app exit. Reopen measured **270ms** (close 17ms).
+- ✅ **Hidden startup prebuild** (`_prebuild_person_hub`, after(4500)) → first open is also the 270ms path. CTk quirk relied on: immediate `withdraw()` after construction sticks through the deferred deiconify. `select()` derives `_showing` from `wm_state()`.
+- ✅ **Empty-group stub rows** (3-4 widgets, droppable, right-click menu, lazy `_upgrade_stub` with `pack(before=)`).
+- ✅ **Pump policy — PROBED, not guessed**: no-flush = one giant cliff; flush-per-tick = quadratic masonry re-layout (632ms jobs vs 3,457ms flushes; ~350-420ms per flush regardless of delta); bounded `dooneevent(IDLE)` = dead end (single reflow atom is 240-400ms). Landed: debt-based flush (0.10s showing / 0.30s covered / on drain), `_CHUNK=1`, `_build_group` enqueues its expand step, 14-16ms tick budget.
+- ✅ **Rewrap gated while pump busy** + wrap width seeded from real window width (`_chip_avail_base`) + `play._last_avail` seeded → the +120ms full-board PIL re-render wave after launch is now usually a no-op.
+- ✅ **Avatar master-decode cache** ((path,mtime) → ≤256px master, JPEG draft) + fallback-only chip `cimg` + **CTk patch #4** (CTkToplevel `<Configure>` child-event guard).
+- ✅ **UX**: opens on last-used person (`last_person`), chip size (L/M/S) + ▦ group-columns persist across launches, Esc hides the hub.
+
+**Before → after (same harness):** true interactive ~2.9s (mostly frozen) → 3.4s fully-progressive/responsive with ≤~400ms stalls; prewarm-all 19s w/ 1.3-1.7s freezes → 14.8s w/ ≤~400ms background stalls; close ~4s → 17ms; reopen seconds → **270ms**; user-visible open with prebuild: **always ~270ms**.
+
+Verified: 21/21 unit tests; benchmark before/after; 15-check gui-glue smoke (prebuild stays withdrawn through CTk's deiconify timer, reopen/popout state machine, shutdown teardown). NOT verified live in the running app (the built EXE was running — no second instance risked); **smoke-test checklist for next real launch**: open People (should appear instantly after ~5s uptime), close+reopen, click through people, drag a sound onto an EMPTY group's stub row, right-click a stub, collapse/expand a stub group from a pop-out, Esc closes, Hebrew chip labels wrap correctly at 150% DPI.
+
+### Foundation decision (next steps, ranked)
+- **NOW (done)**: persistent hub + stubs + pump policy — removed ~90% of felt launch cost, near-zero regression surface.
+- **NEXT (recommended, behind a flag)**: canvas-chip — replace each chip's CTkFrame+2 CTkButton+CTkProgressBar (~10 Tk widgets, ~9ms) with ONE tk.Canvas modeled on the main board's SlotWidget (~0.5ms): label is already a pre-rendered PIL image; drag/shift-wheel/`_slot_ref` tagging port directly. Kills the remaining per-widget floor (first panel < 200ms cold, prewarm ~2s).
+- **LATER/probably never at this scale**: canvas-per-panel (masonry as canvas items) — the true ceiling-raiser but re-implements drop targets/menus/collapse; only if someone loads hundreds of sounds per person.
+- **Data hygiene worth doing**: the shared-group list carries dead groups (`E2E_NEWGROUP`, duplicate מפתח/מפתחות, חיובי/חיוב, שלילה/שלילי) — deleting them cuts every panel's card count by ~a third.
 > **Purpose:** Everything still to figure out / fix from this session — the performance work we started with, the data-loss emergency, the keyboard issue, and recovery follow-ups. Cross-references [docs/PERFORMANCE_PLAN.md](PERFORMANCE_PLAN.md) for the full perf detail.
 
 ---

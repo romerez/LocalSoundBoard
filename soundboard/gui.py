@@ -288,6 +288,29 @@ except Exception:
     pass
 
 
+# ---------------------------------------------------------------------------
+# CustomTkinter performance patch #4: CTkToplevel binds <Configure> on the
+# TOPLEVEL bindtag, which is in every descendant's bindtags — so its
+# _update_dimensions_event ran (2 winfo_* Tcl round-trips + 2 scaling
+# computations) for EVERY child widget packed/gridded/resized inside the
+# window. Building a ~300-widget People panel delivered hundreds of those for
+# nothing. The handler only exists to track the toplevel's OWN size, so
+# early-return for child events (person_board's own handlers already guard
+# exactly like this).
+# ---------------------------------------------------------------------------
+try:
+    _orig_top_update_dims = ctk.CTkToplevel._update_dimensions_event
+
+    def _patched_top_update_dims(self, event=None):
+        if event is not None and getattr(event, "widget", self) is not self:
+            return
+        _orig_top_update_dims(self, event)
+
+    ctk.CTkToplevel._update_dimensions_event = _patched_top_update_dims
+except Exception:
+    pass
+
+
 # Regex matching Hebrew, Arabic, Persian RTL characters
 _RTL_PATTERN = re.compile(r"[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F]")
 
@@ -2487,6 +2510,12 @@ class SoundboardApp:
         # feel like it took 11s to start. Defer until the UI has painted and the
         # tab widgets have built, then warm in a paced background thread.
         self.root.after(2000, self._preload_sounds)
+        # Pre-build the People hub HIDDEN once the app has settled, so the
+        # first click on 👥 People is a ~50ms deiconify instead of seconds of
+        # window/sidebar/panel construction. The build streams through the
+        # panels' paced pump (with per-tick geometry flushes), so it costs
+        # background slices, never a freeze.
+        self.root.after(4500, self._prebuild_person_hub)
 
         # Let window size itself based on content, then set minimum size
         self.root.after(50, self._finalize_window_size)
@@ -12324,13 +12353,16 @@ class SoundboardApp:
         return out
 
     def _open_person_hub(self):
-        """Open (or focus) the People hub window."""
+        """Open (or focus) the People hub window.
+
+        The hub is PERSISTENT: closing it only withdraws it (PersonHub._on_close),
+        so every open after the first — and even the first, when the startup
+        prebuild has run (_prebuild_person_hub) — is a ~50ms reopen() instead of
+        seconds of window + sidebar + panel construction."""
         hub = getattr(self, "_person_hub", None)
         try:
             if hub is not None and hub.winfo_exists():
-                hub.deiconify()
-                hub.lift()
-                hub.focus_force()
+                hub.reopen()  # deiconify + reconcile sidebar/panel staleness
                 return
         except Exception:
             pass
@@ -12338,8 +12370,13 @@ class SoundboardApp:
             self.root, self._person_context(), on_popout=self._open_person_popout
         )
         # Bring it to the FRONT — otherwise it can open behind the main window.
+        self._raise_person_hub()
+
+    def _raise_person_hub(self):
+        hub = getattr(self, "_person_hub", None)
+        if hub is None:
+            return
         try:
-            hub = self._person_hub
             hub.lift()
             hub.focus_force()
             hub.attributes("-topmost", True)
@@ -12347,15 +12384,40 @@ class SoundboardApp:
         except Exception:
             pass
 
+    def _prebuild_person_hub(self):
+        """Build the People hub WITHDRAWN during app idle so even the first
+        click on 👥 People is a ~50ms deiconify. No-op when there are no
+        people or a hub already exists (the user beat the timer to it)."""
+        try:
+            if not self.persons:
+                return
+            hub = getattr(self, "_person_hub", None)
+            if hub is not None and hub.winfo_exists():
+                return
+        except Exception:
+            pass
+        try:
+            hub = PersonHub(self.root, self._person_context(),
+                            on_popout=self._open_person_popout)
+            # Withdraw IMMEDIATELY, before returning to the mainloop: CTk's
+            # deferred titlebar deiconify (after(5)) honours an explicit
+            # withdraw() (leaves the window hidden), so nothing flashes on
+            # screen. The first panel + prewarm then stream through the paced
+            # pump entirely off-screen.
+            hub.withdraw()
+            self._person_hub = hub
+        except Exception:
+            logging.getLogger("soundboard.people").exception("People hub prebuild failed")
+
     def _open_person_popout(self, person: Person):
-        """Open (or focus) a floating pop-out window for a single person."""
+        """Open (or focus) a floating pop-out window for a single person.
+        Pop-outs are persistent like the hub (close = withdraw), so reopening
+        one is a deiconify + staleness reconcile, not a panel rebuild."""
         key = id(person)
         existing = self._person_popouts.get(key)
         try:
             if existing is not None and existing.winfo_exists():
-                existing.deiconify()
-                existing.lift()
-                existing.focus_force()
+                existing.reopen()
                 return
         except Exception:
             pass
@@ -14845,6 +14907,17 @@ class SoundboardApp:
 
     def _real_quit(self):
         """Actual shutdown — releases PTT, stops mixer, destroys window."""
+        # Tear down the persistent People hub first so every cached panel's
+        # after-timers are cancelled deterministically (the <Destroy> backstops
+        # would cover it, but this keeps shutdown order explicit).
+        hub = getattr(self, "_person_hub", None)
+        if hub is not None:
+            try:
+                if hub.winfo_exists():
+                    hub.shutdown()
+            except Exception:
+                pass
+            self._person_hub = None
         # Cancel any pending AFK timers so they can't fire post-shutdown.
         for _attr in ("_afk_after_id", "_afk_countdown_after_id"):
             _aid = getattr(self, _attr, None)

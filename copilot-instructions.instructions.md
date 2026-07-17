@@ -1,6 +1,6 @@
 # Copilot Instructions - Discord Soundboard Project
 
-> **Last Updated:** 2026-06-09 (data recovery + save-path safety, decoded-audio disk cache, startup-freeze fix, HiDPI window-size fix, People-hub hang fix)
+> **Last Updated:** 2026-07-17 (People window: persistent hub + hidden startup prebuild + empty-group stubs + measured pump/flush policy — open/reopen is now near-instant)
 > **Status:** Active Development
 > **Language:** Python 3.x
 ALWAYS EDIT THIS FILE FIRST when adding features or making changes. This is the source of truth for the project and helps maintain consistency.
@@ -308,6 +308,13 @@ Persistent (NOT reset per-click):
 - [x] **Two-line sound chips** — sound-chip labels use a smaller font and wrap a long title onto up to two lines (RTL-correct) instead of clipping it with a single `…`.
 - [x] **Coloured person names** — names in the People list render in each person's assigned colour (white if none) with a thin black+white outline for legibility on dark/selected rows.
 - [x] **Shift+wheel volume on People chips** — Shift + mouse-wheel over a person's sound adjusts that sound's volume (no edit dialog), mirroring the main board: inverted (up=quieter, down=louder), capped 0–150%, live-updates a currently-playing copy, persists, and flashes the chip's length bar as a volume gauge (green / yellow when boosted).
+- [x] **Persistent People hub (close = hide, open = instant)** — `PersonHub._on_close` WITHDRAWS the window instead of destroying it (panels + caches survive); `reopen()` deiconifies + reconciles staleness (`refresh_people`, `ensure_fresh`, covered-dirty drain, chip-rewrap flush). Pop-outs do the same (`PersonPopout.reopen()`). Real teardown only via `PersonHub.shutdown()` on app exit (`_real_quit`). Esc also hides the hub.
+- [x] **People hub prebuilt hidden at startup** — `_prebuild_person_hub` (gui.py, `after(4500)`) constructs the hub withdrawn (CTk's deferred deiconify honours an immediate `withdraw()`), so the FIRST click on 👥 People is a ~50ms deiconify. While withdrawn, panels build with covered-panel semantics (`select()` derives `_showing` from `wm_state() != "withdrawn"`).
+- [x] **Empty-group stub rows** — shared groups with no sounds for a person render as a 3-4 widget stub row (`_build_group_stub`: caret + emoji/name, droppable, right-click menu) instead of a full ~9-widget card; the real card builds lazily on click/expand (`_upgrade_stub`, `pack(before=stub)`). In the real config 149 of 220 cards were empty — two-thirds of all card-build work skipped.
+- [x] **Measured build-pump policy** — pump ticks carry ~14-16ms of single-widget jobs (`_CHUNK=1`; `_build_group` enqueues its expand step instead of running it inline) and flush `update_idletasks()` on accumulated-work debt (~100ms visible / ~300ms covered / always on drain). This kills BOTH failure modes measured by probe: the ~1.6s idle-starvation cliff (no flushing) and the quadratic ~350-420ms-per-tick masonry re-layout (flushing every tick). Chip label wrap width is seeded from the real window width (`_chip_avail_base`) and `_flush_chip_rewrap` defers while the pump streams, so the post-layout rewrap is one cheap pass.
+- [x] **Prewarm gating + last-person memory** — background panel warm starts only once the active panel's pump drains (`_maybe_start_prewarm`); the hub opens on the last-selected person (`last_person` via the ctx geometry store) and the chip size (L/M/S) + group-columns choices persist across launches (`chip_size`/`gcols`).
+- [x] **Avatar master-decode cache** — `circle_avatar` decodes each picture ONCE per `(path, mtime)` into a ≤256px square master (JPEG `draft()` fast-path) and derives every requested size from it; sidebar 26px / title 28px / dialog 36px no longer each pay a full photo decode.
+- [x] **CTk perf patch #4** — `CTkToplevel._update_dimensions_event` early-returns for child-widget `<Configure>` events (it only tracks the toplevel's own size), removing hundreds of pointless Tcl round-trips per panel build.
 
 ---
 
@@ -491,6 +498,21 @@ python main.py
 ---
 
 ## Change Log
+
+### Version 1.3.x (People-Window Launch Performance — 2026-07-17)
+
+**Problem:** opening the People window was "extra slow" every time despite earlier passes. A 7-agent audit + live benchmark (real config: 10 persons / 220 group cards / 165 sounds) measured: window maps fast (~190ms) but true time-to-interactive was ~2.9s (1.3s pump + a hidden ~1.6s idle-starved geometry backlog), the background prewarm then hammered the UI for ~19s with repeated ~1.3-1.7s freezes, closing destroyed everything (~4s), and every reopen re-paid the entire cost.
+
+**Fixes (all measured before/after with the same harness):**
+- **Persistent hub:** close = `withdraw()`, reopen = `reopen()` (~270ms measured, vs seconds). Pop-outs identical. Real destroy only on app exit (`shutdown()`).
+- **Hidden startup prebuild:** `_prebuild_person_hub` builds the hub withdrawn at app idle (`after(4500)`), so even the first open is the reopen path.
+- **Empty-group stubs:** 149/220 cards in the real config were placeholders for empty shared groups — now 3-4 widget stub rows that stay droppable/menu-able and upgrade to real cards on demand.
+- **Pump flush policy:** probed three alternatives (never flush = one ~1.6s cliff; every tick = quadratic, 632ms of jobs vs 3,457ms of flushes; bounded `dooneevent` = useless, single reflow atom is 240-400ms). Landed: debt-based `update_idletasks()` (~100ms visible / ~300ms covered / on drain). Jobs right-sized (`_CHUNK=1`, expand step enqueued) under a 14-16ms tick.
+- **Rewrap discipline:** `_flush_chip_rewrap` waits for the pump to drain; wrap width pre-seeded from real window width — the old ~85-120ms post-launch PIL re-render wave is now usually a no-op.
+- **Avatar master cache** (one decode per photo, sizes derived) + fallback-only 18px chip emoji + CTk patch #4 (toplevel `<Configure>` child-event guard).
+- **UX:** hub opens on the last-used person; chip size + group columns persist; Esc hides the hub.
+
+**Result (same benchmark):** first-panel stream 3.4s fully progressive with worst stall ~400ms (was 2.9s mostly frozen), prewarm-all 14.8s with ~400ms max background stalls (was ~19s with 1.3-1.7s freezes), close 17ms (was ~4s destroy), reopen 270ms (was full cold rebuild) — and with the prebuild, the user-visible open is always the 270ms path. Verified: 21/21 unit tests, live open/close/reopen benchmark, 15-check gui-glue smoke test (prebuild stays withdrawn, reopen states, popout lifecycle, shutdown).
 
 ### Version 1.3.0 (Performance, Data-Safety & Window-Size — 2026-06-09)
 

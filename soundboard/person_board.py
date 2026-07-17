@@ -956,8 +956,15 @@ def emoji_image(emoji: Optional[str], size: int = 20):
 # hub doesn't re-decode/crop/mask the same picture from disk on every rebuild
 # and every sidebar row; the CTkImage wrapper is cached on the same key (the
 # mtime in the key invalidates both when the picture file changes).
+# The FULL decode happens once per (path, mtime) into a small square "master"
+# (_avatar_master_cache); every requested size is a cheap resize of that.
+# Before this, a phone-camera photo was fully decoded + LANCZOS'd once PER
+# SIZE (sidebar row 26px, panel title 28px, dialogs 36px…) — ~50-200ms each,
+# on the Tk thread, while the hub window was still invisible.
 _avatar_pil_cache: dict = {}
+_avatar_master_cache: dict = {}
 _avatar_ctk_cache: "OrderedDict" = OrderedDict()
+_AVATAR_MASTER_PX = 256  # ≥2x the largest requested size, so derived sizes stay crisp
 
 
 def circle_avatar(image_path: Optional[str], size: int = 36):
@@ -975,12 +982,29 @@ def circle_avatar(image_path: Optional[str], size: int = 36):
         if out is None:
             try:
                 from PIL import Image, ImageDraw
-                img = Image.open(image_path).convert("RGBA")
-                # Center-crop to a square, then resize.
-                w, h = img.size
-                s = min(w, h)
-                img = img.crop(((w - s) // 2, (h - s) // 2, (w + s) // 2, (h + s) // 2))
-                img = img.resize((size, size), Image.LANCZOS)
+                mkey = (image_path, mtime)
+                master = _avatar_master_cache.get(mkey)
+                if master is None:
+                    img = Image.open(image_path)
+                    try:
+                        # JPEG fast-path: decode at reduced resolution (huge
+                        # photos drop ~8x in decode cost; final quality is set
+                        # by the LANCZOS resize below, not the draft).
+                        img.draft("RGB", (_AVATAR_MASTER_PX * 2, _AVATAR_MASTER_PX * 2))
+                    except Exception:
+                        pass
+                    img = img.convert("RGBA")
+                    # Center-crop to a square.
+                    w, h = img.size
+                    s = min(w, h)
+                    img = img.crop(((w - s) // 2, (h - s) // 2, (w + s) // 2, (h + s) // 2))
+                    if s > _AVATAR_MASTER_PX:
+                        img = img.resize((_AVATAR_MASTER_PX, _AVATAR_MASTER_PX), Image.LANCZOS)
+                    master = img
+                    if len(_avatar_master_cache) > 64:
+                        _avatar_master_cache.clear()
+                    _avatar_master_cache[mkey] = master
+                img = master.resize((size, size), Image.LANCZOS)
                 mask = Image.new("L", (size, size), 0)
                 ImageDraw.Draw(mask).ellipse((0, 0, size - 1, size - 1), fill=255)
                 out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
@@ -1448,6 +1472,10 @@ class PersonPanel(ctk.CTkFrame):
         self._size = order[(order.index(self._size) + 1) % len(order)]
         PersonPanel._shared_size = self._size  # remember for other panels this session
         try:
+            self.ctx.save_geometry("chip_size", self._size)  # …and across launches
+        except Exception:
+            pass
+        try:
             self._size_btn.configure(text=f"⤢ {self._SIZE_LABEL[self._size]}")
         except Exception:
             pass
@@ -1480,6 +1508,10 @@ class PersonPanel(ctk.CTkFrame):
         cur = self._gcols if self._gcols in order else 0
         self._gcols = order[(order.index(cur) + 1) % len(order)]
         PersonPanel._shared_gcols = self._gcols  # session-wide, like chip size
+        try:
+            self.ctx.save_geometry("gcols", str(self._gcols))  # persist across launches
+        except Exception:
+            pass
         try:
             self._gcols_btn.configure(text=self._gcols_label())
         except Exception:
@@ -1641,6 +1673,21 @@ class PersonPanel(ctk.CTkFrame):
         # used and the board stays compact (instead of one tall sparse column).
         gcols = self._group_cols()
         chip_cols = self._chip_cols_in_card(gcols)
+        # Estimated LOGICAL play-button text width for this layout, derived
+        # from the real window width (sidebar/margins → columns → tiles → the
+        # play button minus its padding). Chips wrap their titles against this
+        # up-front, so the post-layout <Configure> rewrap pass — which used to
+        # re-measure + re-render every label ~120ms after launch — almost
+        # always lands inside its ±4px skip band. The rewrap stays as the
+        # corrector for whatever this estimate gets wrong (odd DPI, tiny
+        # windows), so a bad estimate costs one extra render, never clipping.
+        try:
+            margins = 42 if self.compact else 264  # popout vs hub chrome+sidebar
+            col_w = (self._win_width() - margins) // max(1, gcols) - 6
+            tile_w = (col_w - 16) // max(1, chip_cols) - 6
+            self._chip_avail_base = max(0, tile_w - 26 - 16)
+        except Exception:
+            self._chip_avail_base = 0
         col_frames = []
         for i in range(gcols):
             cf = ctk.CTkFrame(self._body, fg_color="transparent")
@@ -1670,6 +1717,22 @@ class PersonPanel(ctk.CTkFrame):
         heights = [0] * gcols
         for group in visible:
             ci = heights.index(min(heights))
+            if not group.sounds:
+                # EMPTY shared group → cheap 3-4 widget stub row instead of the
+                # full ~9-widget card. In the real config 149 of 220 cards
+                # across a full warm-up were empty placeholders — two-thirds of
+                # all card-build work. The stub stays visible, droppable and
+                # clickable; the real card is built lazily on first interaction.
+                heights[ci] += 1
+
+                def _build_stub(group=group, parent=col_frames[ci]):
+                    if not _alive(parent):
+                        return
+                    stub = self._build_group_stub(parent, group, chip_cols)
+                    stub.pack(fill=tk.X, pady=(0, 8))
+
+                self._enqueue_build(_build_stub)
+                continue
             n = len(group.sounds) if not group.collapsed else 0
             heights[ci] += 2 + (n + chip_cols - 1) // max(1, chip_cols)  # rough row estimate
 
@@ -1838,11 +1901,88 @@ class PersonPanel(ctk.CTkFrame):
                  "holder": None, "built": False, "chip_cols": max(1, chip_cols)}
         self._group_widgets[id(group)] = entry
         if not collapsed:
-            self._expand_group_inplace(entry)
+            # Through the pump, NOT synchronously: the card job alone is ~8ms;
+            # stacking the holder + first chips on top blew the tick budget.
+            # FIFO keeps order sane (all shells land, then holders/chips fill),
+            # and _expand_group_inplace no-ops if the card died in between.
+            self._enqueue_build(lambda e=entry: self._expand_group_inplace(e))
         return card
+
+    def _build_group_stub(self, parent, group: PersonGroup, chip_cols: int) -> ctk.CTkFrame:
+        """A cheap stub row standing in for an EMPTY group's full card.
+
+        Keeps the group visible (name + caret + colour/emoji), droppable
+        (registered drop target) and clickable (left-click expands into the
+        real card, right-click opens the group menu) — but skips the two
+        ~4ms CTkButtons and the holder/hint widgets until actually needed.
+        """
+        stub = ctk.CTkFrame(parent, fg_color=COLORS["bg_dark"], corner_radius=10)
+        self.ctx.register_drop_target(stub, self.person, group)
+        caret = ctk.CTkLabel(stub, text="▶", width=14, font=_font(bold=True),
+                             text_color=COLORS["text_muted"])
+        caret.pack(side=tk.LEFT, padx=(8, 0), pady=5)
+        gimg = emoji_image(group.emoji, 18)
+        if gimg is not None:
+            il = ctk.CTkLabel(stub, image=gimg, text="")
+            il._gimg = gimg
+            il.pack(side=tk.LEFT, padx=(2, 4), pady=5)
+        gname_txt = f"{group.name}  (0)"
+        gname_img = _group_name_image(gname_txt)
+        if gname_img is not None:
+            name_lbl = ctk.CTkLabel(stub, image=gname_img, text="")
+            name_lbl._gname_img = gname_img  # keep a ref so it isn't GC'd
+        else:
+            name_lbl = ctk.CTkLabel(stub, text=_disp(gname_txt),
+                                    font=_font("size_md", bold=True),
+                                    text_color=COLORS["text_primary"])
+        name_lbl.pack(side=tk.LEFT, padx=(4, 8), pady=5)
+        entry = {"card": stub, "group": group, "caret": caret, "holder": None,
+                 "built": False, "chip_cols": max(1, chip_cols), "stub": True}
+        self._group_widgets[id(group)] = entry
+        widgets = (stub, caret, name_lbl) if gimg is None else (stub, caret, il, name_lbl)
+        for w in widgets:
+            w.bind("<Button-1>", lambda _e, e=entry: self._stub_clicked(e))
+            w.bind("<Button-3>", lambda _e, g=group, s=stub: self._open_group_menu(g, s))
+        return stub
+
+    def _stub_clicked(self, entry: dict):
+        group = entry["group"]
+        if group.collapsed:
+            # Match the full-card header: expanding un-collapses (persisted,
+            # for every view of this person). collapse_changed routes back
+            # through apply_collapse_state → _expand_group_inplace, which
+            # upgrades the stub to a real card.
+            self._toggle_group_collapse(group)
+        else:
+            self._expand_group_inplace(entry)
+
+    def _upgrade_stub(self, entry: dict):
+        """Replace an empty-group stub row with the full card, in place."""
+        stub = entry.get("card")
+        if not _alive(stub):
+            return
+        group = entry["group"]
+        parent = stub.master
+        try:
+            # _build_group replaces our _group_widgets entry with a full-card
+            # one and (when expanded) enqueues its own chip build.
+            card = self._build_group(parent, group, entry.get("chip_cols", 1))
+            card.pack(fill=tk.X, pady=(0, 8), before=stub)
+        except Exception:
+            return
+        try:
+            stub.destroy()
+        except Exception:
+            pass
 
     def _expand_group_inplace(self, entry: dict):
         """Build (once) then show a group's chips — no panel rebuild."""
+        if entry.get("stub"):
+            # Empty-group stub → build the real card in place. _build_group
+            # schedules the holder/hint expansion itself when un-collapsed,
+            # so there is nothing further to do here.
+            self._upgrade_stub(entry)
+            return
         group = entry["group"]
         card = entry["card"]
         if not _alive(card):
@@ -1874,10 +2014,13 @@ class PersonPanel(ctk.CTkFrame):
                 # does not disturb the column layout.
                 gen = entry.get("_chip_gen", 0) + 1
                 entry["_chip_gen"] = gen
-                # 3 per job: a CTkButton costs ~4ms to create, so 6-chip jobs
-                # overran the pump's ~8ms tick budget (the budget is checked
-                # BETWEEN jobs) and read as micro-stutter while groups filled.
-                _CHUNK = 3
+                # 1 per job: the pump's budget is only checked BETWEEN jobs, so
+                # the job itself must fit the ~8ms tick. A warm chip is ~4-9ms
+                # but a COLD one (first open: PIL wrap-measure + supersampled
+                # label render) is ~25-40ms — 3-chip jobs hit 75-120ms ticks on
+                # launch (measured p90 28ms, max 71ms). One chip per job keeps
+                # every tick honest; the after(1) round-trip overhead is noise.
+                _CHUNK = 1
 
                 def _build_chunk(start, _gen=gen):
                     if entry.get("_chip_gen") != _gen or not _alive(holder):
@@ -1916,21 +2059,53 @@ class PersonPanel(ctk.CTkFrame):
                 self._build_pump_after = None
 
     def _drain_build_jobs(self):
-        """Run queued chip-build jobs for ~8ms, then yield to the event loop.
+        """Run queued chip-build jobs for one ~14-16ms frame, then yield.
 
         Keeps every tick under a frame budget no matter how many groups a
-        person has — the UI (and the global keyboard hook) never stalls."""
+        person has — the UI (and the global keyboard hook) never stalls.
+        Geometry/first-draw backlog is flushed on accumulated-work debt (see
+        the inline policy note below). update_idletasks only runs idle
+        callbacks (geometry + deferred draws); it can NOT re-enter this
+        timer-driven pump. Never update() here."""
         self._build_pump_after = None
         jobs = self._build_jobs
         if not jobs:
             return
-        deadline = time.perf_counter() + 0.008
+        # Windows' default timer granularity makes every after(1) round-trip
+        # cost up to ~15ms of dead latency, so ticks must carry a meaningful
+        # batch of (single-widget-sized) jobs — ~14-16ms ≈ one frame.
+        showing = getattr(self, "_showing", True)
+        t0 = time.perf_counter()
+        deadline = t0 + (0.014 if showing else 0.016)
         while jobs and time.perf_counter() < deadline:
             job = jobs.pop(0)
             try:
                 job()
             except Exception:
                 pass
+        # Flush policy (measured, not guessed). Three probed alternatives:
+        # (a) never flush → the geometry + CTk first-draw backlog of every
+        #     widget the pump created lands as ONE giant stall when something
+        #     finally pumps idletasks (~1.6s after the first panel, ~1.5s per
+        #     prewarmed panel — the original "extra slow on launch");
+        # (b) flush every tick → quadratic: each update_idletasks() re-runs
+        #     the scrollable-frame reflow cascade over the whole masonry so
+        #     far (probe: 632ms of jobs vs 3,457ms of flush);
+        # (c) bounded dooneevent(IDLE) draining → useless here, a SINGLE idle
+        #     atom (the reflow cascade) is itself 240-400ms.
+        # So: flush on accumulated-work debt. The visible panel flushes every
+        # ~100ms of build work (progressive paint, worst stall ~400ms instead
+        # of 1.6s); covered prewarm panels every ~300ms (nobody sees them —
+        # only total background churn matters); and always once at the end.
+        debt = getattr(self, "_flush_debt", 0.0) + (time.perf_counter() - t0)
+        if not jobs or debt >= (0.10 if showing else 0.30):
+            self._flush_debt = 0.0
+            try:
+                self.update_idletasks()
+            except Exception:
+                pass
+        else:
+            self._flush_debt = debt
         if jobs:
             try:
                 self._build_pump_after = self.after(1, self._drain_build_jobs)
@@ -2014,12 +2189,23 @@ class PersonPanel(ctk.CTkFrame):
         bg = self.person.color or slot.color or group.color or COLORS["blurple"]
         fg = get_text_color_for_bg(bg)
         # Wrap a long name onto up to 2 lines so more of the title is readable.
-        # Budget = chip width minus the ⋮ menu button + paddings (and a leading
-        # emoji). Measured in real pixels by _wrap_label so wrapping actually
-        # triggers for bold/Hebrew titles a char-count never caught.
-        avail = max(36, p["chip_w"] - 36 - (24 if slot.emoji else 0))
+        # Budget = estimated real tile width minus the ⋮ menu button + paddings
+        # (and a leading emoji). rebuild() derives _chip_avail_base from the
+        # actual window width so this first wrap usually already matches the
+        # laid-out width and the +120ms rewrap pass becomes a no-op; fall back
+        # to the preset's nominal chip_w when no estimate is available.
+        # Measured in real pixels by _wrap_label so wrapping actually triggers
+        # for bold/Hebrew titles a char-count never caught.
+        base = getattr(self, "_chip_avail_base", 0)
+        if base > 36:
+            avail = max(36, base - (24 if slot.emoji else 0))
+        else:
+            avail = max(36, p["chip_w"] - 36 - (24 if slot.emoji else 0))
         label = _wrap_label(slot.name, avail)
-        cimg = emoji_image(slot.emoji, 18)
+        # The 18px emoji is only used by the NON-outlined fallback label — the
+        # outlined path bakes the emoji into the label image at render size, so
+        # rasterizing a second 18px variant per chip was pure launch waste.
+        cimg = None
 
         # NOTE: no grid_propagate(False). The old fixed-size chip relied on the
         # parent grid for its width and on propagate-off for height; that combo
@@ -2042,6 +2228,7 @@ class PersonPanel(ctk.CTkFrame):
             )
             play._label_img = label_img  # keep a ref so it isn't GC'd
         else:
+            cimg = emoji_image(slot.emoji, 18)  # fallback-only (see above)
             play = ctk.CTkButton(
                 chip, text=(f"  {_disp(label)}" if cimg else _disp(label)), image=cimg,
                 compound="left", height=h, fg_color=bg, hover_color=bg, text_color=fg,
@@ -2084,6 +2271,10 @@ class PersonPanel(ctk.CTkFrame):
         # tile width is fixed by the grid, not by the label image).
         if outlined:
             play._wrap_state = {"slot": slot, "emoji": slot.emoji, "label": label}
+            # Seed the rewrap's change-detector with the width we just wrapped
+            # for: when the real laid-out width lands within its ±4px band the
+            # post-layout rewrap skips the PIL re-measure entirely.
+            play._last_avail = avail
             # NOTE: CTkButton.bind() forwards <Configure> to its internal canvas,
             # so event.widget is NOT the button — capture the button in a closure
             # and read its real width via winfo_width() instead.
@@ -2313,6 +2504,16 @@ class PersonPanel(ctk.CTkFrame):
         # exists to kill — wait until the drag settles. Covered panels keep
         # their pending set untouched; select() flushes it on raise.
         if not getattr(self, "_showing", True):
+            return
+        # While the build pump is still streaming cards, the masonry shifts on
+        # every tick's geometry flush — chips would re-wrap (PIL measure +
+        # supersampled re-render) over and over against transient widths.
+        # Wait for the pump to drain; the final layout then gets ONE pass.
+        if self._build_jobs or self._build_pump_after:
+            try:
+                self._rewrap_after = self.after(180, self._flush_chip_rewrap)
+            except Exception:
+                self._rewrap_after = None
             return
         try:
             until = float(_RESIZE_STATE.get("until", 0.0))
@@ -2726,6 +2927,24 @@ class PersonPanel(ctk.CTkFrame):
         self.ctx.changed(self.person)
 
 
+def _restore_ui_prefs(ctx: PersonContext):
+    """Apply persisted People-UI preferences (chip size / group columns) to the
+    session-wide PersonPanel defaults before any panel is built. The values are
+    stored through the same generic per-key store as the window geometries."""
+    try:
+        s = ctx.load_geometry("chip_size")
+        if s in PersonPanel._SIZES:
+            PersonPanel._shared_size = s
+    except Exception:
+        pass
+    try:
+        g = ctx.load_geometry("gcols")
+        if g is not None and str(g).lstrip("-").isdigit() and int(g) in PersonPanel._GCOLS_ORDER:
+            PersonPanel._shared_gcols = int(g)
+    except Exception:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Pop-out: a single person in a floating, always-on-top window
 # ---------------------------------------------------------------------------
@@ -2734,6 +2953,7 @@ class PersonPopout(ctk.CTkToplevel):
         super().__init__(master)
         self.person = person
         self.ctx = ctx
+        _restore_ui_prefs(ctx)  # honour the saved chip-size/columns choice
         self.title(person.name)
         self.configure(fg_color=COLORS["bg_dark"])
         # Reopen pop-outs at the last size you used (positioned beside the hub).
@@ -2792,12 +3012,32 @@ class PersonPopout(ctk.CTkToplevel):
 
     def _on_close(self):
         self._remember_size()
-        # Unregister the panel before the window tears it down at the C level.
+        # Hide, don't destroy — reopening the same person's pop-out is then a
+        # ~50ms deiconify (gui.py's reuse path) instead of a full panel build.
+        # While hidden, _showing=False parks rebuilds (changed() marks dirty).
         try:
-            self.panel.destroy()
+            self.panel._showing = False
         except Exception:
             pass
-        self.destroy()
+        self.withdraw()
+
+    def reopen(self):
+        """Re-show a hidden pop-out and settle anything that changed meanwhile."""
+        self.deiconify()
+        try:
+            if self.panel.winfo_exists():
+                self.panel._showing = True
+                self.panel.ensure_fresh()
+                self.panel.drain_covered_dirty()
+                self.panel._flush_chip_rewrap()
+        except Exception:
+            pass
+        try:
+            self.attributes("-topmost", bool(self._top_var.get()))
+            self.lift()
+            self.focus_force()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -2819,6 +3059,7 @@ class PersonHub(ctk.CTkToplevel):
     def __init__(self, master, ctx: PersonContext, on_popout: Callable[[Person], None]):
         super().__init__(master)
         self.ctx = ctx
+        _restore_ui_prefs(ctx)  # honour the saved chip-size/columns choice
         self.on_popout = on_popout
         self.selected: Optional[Person] = None
         self._panel: Optional[PersonPanel] = None
@@ -2891,6 +3132,8 @@ class PersonHub(ctk.CTkToplevel):
         self.host.grid_columnconfigure(0, weight=1)
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        # Esc hides the hub too (same park-don't-destroy path as the ✕ button).
+        self.bind("<Escape>", lambda _e: self._on_close())
         # Only auto-place beside the main window when we have NO remembered
         # position (otherwise honour where the user left it). Keep the size/pos
         # fresh in the config as the user moves/resizes (debounced write).
@@ -2898,22 +3141,62 @@ class PersonHub(ctk.CTkToplevel):
             self._position_beside(master)
         self.bind("<Configure>", self._remember_geometry, add="+")
         # Panels (incl. pop-outs) call this after person-meta edits so the
-        # sidebar can't go stale; cleared again in _on_close.
+        # sidebar can't go stale; stays wired while the hub is merely hidden,
+        # cleared only in shutdown().
         self.ctx.refresh_sidebar = self.refresh_people
         self.refresh_people()
         if ctx.persons:
-            # Defer the first panel build one tick: the window maps first (the
-            # hub APPEARS instantly) and the panel then builds at the REAL
-            # width — building synchronously pre-map laid the masonry out
-            # against winfo_width()==1 and paid a second full rebuild.
-            self.after_idle(lambda: self.select(ctx.persons[0]) if ctx.persons else None)
+            # after(40), NOT after_idle: after_idle ran BEFORE the map/expose
+            # redraw idle-callbacks, so the hub sat as an empty dark frame
+            # until person #1's whole panel had streamed in. With a short
+            # timer pending and nothing due, Tk goes idle right after CTk's
+            # deferred deiconify — the sidebar/header PAINT first, then the
+            # panel starts building at the real window width.
+            self.after(40, self._select_initial)
             # Then pre-build EVERYONE ELSE's panel in the background (one at a
             # time, through each panel's ~8ms build pump) so clicking any
             # person is a pure tkraise — near-instant. RAM trade explicitly
-            # chosen by the user.
-            self.after(1500, self._prewarm_panels)
+            # chosen by the user. Start is gated on the ACTIVE panel's pump
+            # having drained, so warming never competes with the first paint.
+            self.after(800, self._maybe_start_prewarm)
         else:
             self._show_empty_hint()
+
+    def _select_initial(self):
+        """Select the person the user last had open (falls back to the first)."""
+        if not self.ctx.persons:
+            return
+        target = self.ctx.persons[0]
+        try:
+            last = self.ctx.load_geometry("last_person")
+        except Exception:
+            last = None
+        if last:
+            for p in self.ctx.persons:
+                if p.name == last:
+                    target = p
+                    break
+        self.select(target)
+
+    def _maybe_start_prewarm(self):
+        """Start the background warm only once the active panel has finished
+        building — a fixed 1500ms start used to land mid-stream on cold opens
+        and stretched the first paint."""
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+        panel = self._panel
+        try:
+            busy = panel is not None and _alive(panel) and (
+                panel._build_jobs or panel._build_pump_after)
+        except Exception:
+            busy = False
+        if busy:
+            self.after(250, self._maybe_start_prewarm)
+        else:
+            self._prewarm_panels()
 
     def _remember_geometry(self, event=None):
         # Persist the hub's geometry whenever it changes (debounced downstream).
@@ -3120,6 +3403,11 @@ class PersonHub(ctk.CTkToplevel):
         if person is prev and self._panel is not None and _alive(self._panel):
             return
         self.selected = person
+        # Remember for next launch so the hub opens on the person you use.
+        try:
+            self.ctx.save_geometry("last_person", person.name)
+        except Exception:
+            pass
         # Mark the panel we're leaving as covered + cancel any pending resize
         # reflow on it (a covered panel must not run a full rebuild; keep the
         # pending column change as a dirty flag so it reflows when next shown).
@@ -3141,7 +3429,15 @@ class PersonHub(ctk.CTkToplevel):
             panel = PersonPanel(self.host, person, self.ctx, compact=False)
             panel.grid(row=0, column=0, sticky="nsew")
             self._panel_cache[id(person)] = panel
-        panel._showing = True
+        # A select while the hub is WITHDRAWN (startup prebuild / hidden-hub
+        # bookkeeping) gets covered-panel semantics: repaints park, the pump
+        # uses its background flush cadence. reopen() flips it back showing.
+        # wm_state is read synchronously, so a user click in a visible hub can
+        # never be misclassified (deiconify sets 'normal' before any click).
+        try:
+            panel._showing = self.wm_state() != "withdrawn"
+        except Exception:
+            panel._showing = True
         # Mark this panel most-recently-used, then drop any stale panels past the
         # cap so the cache can't grow without bound as you click through people.
         self._panel_cache.move_to_end(id(person))
@@ -3291,21 +3587,57 @@ class PersonHub(ctk.CTkToplevel):
             self.on_popout(self.selected)
 
     def _on_close(self):
+        """Hide, don't destroy. Rebuilding the hub from scratch cost seconds on
+        EVERY open (window + sidebar + first panel + the long background warm),
+        and destroying ~10 cached panels wasn't free either — parking the hub
+        withdrawn makes every reopen a ~50ms deiconify (see reopen()). Panels
+        stay registered with the context, so edits made while hidden flow in
+        as usual: changed() marks non-showing panels dirty and ensure_fresh()
+        settles them on reopen. Real destruction happens with the app root."""
         # Remember where/how big it was so it reopens the same.
         self._remember_geometry()
-        try:
-            if getattr(self.ctx, "refresh_sidebar", None) == self.refresh_people:
-                self.ctx.refresh_sidebar = None
-        except Exception:
-            pass
-        # Cancel a pending debounced search so it can't fire on a destroyed hub.
+        # Cancel a pending debounced search so it can't fire while hidden.
         if self._search_after is not None:
             try:
                 self.after_cancel(self._search_after)
             except Exception:
                 pass
             self._search_after = None
-        # Tear down every cached panel (each unregisters from the context).
+        # The active panel is no longer what the user is looking at — park its
+        # repaint/reflow work exactly like a covered cached panel.
+        if self._panel is not None and _alive(self._panel):
+            self._panel._showing = False
+        self.withdraw()
+
+    def reopen(self):
+        """Bring the hidden hub back — the fast path for every open after the
+        first. Reconciles anything that changed while it was withdrawn."""
+        self.deiconify()
+        # Sidebar first (people may have been added/renamed/recoloured from
+        # pop-outs or the recording-editor tagging flow while hidden).
+        self.refresh_people()
+        panel = self._panel
+        if panel is not None and _alive(panel):
+            panel._showing = True
+            panel.ensure_fresh()        # rebuild only if flagged dirty
+            panel.drain_covered_dirty()
+            try:
+                panel._flush_chip_rewrap()
+            except Exception:
+                pass
+        elif self.ctx.persons:
+            self._select_initial()
+        else:
+            self._show_empty_hint()
+        try:
+            self.lift()
+            self.focus_force()
+        except Exception:
+            pass
+
+    def shutdown(self):
+        """Really tear the hub down (app exit): destroy every cached panel so
+        their after-timers are cancelled, then the window itself."""
         for panel in list(self._panel_cache.values()):
             try:
                 panel.destroy()
@@ -3313,4 +3645,9 @@ class PersonHub(ctk.CTkToplevel):
                 pass
         self._panel_cache.clear()
         self._panel = None
+        try:
+            if getattr(self.ctx, "refresh_sidebar", None) == self.refresh_people:
+                self.ctx.refresh_sidebar = None
+        except Exception:
+            pass
         self.destroy()
