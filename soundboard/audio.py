@@ -68,25 +68,173 @@ except Exception:  # pragma: no cover - import-time guard
     RNNOISE_AVAILABLE = False
 
 
+# ---------------------------------------------------------------------------
+# DeepFilterNet3 backend (ONNX via onnxruntime, NO PyTorch at runtime).
+#
+# A Krisp-class deep denoiser that — unlike RNNoise — strongly suppresses
+# NON-stationary noise (keyboard, other voices, clatter). It is 48 kHz native
+# (full voice band, no telephone-band muffling) and, conveniently, uses the
+# SAME 480-sample frame as RNNoise, so it drops straight into the existing
+# ring buffer. The combined raw-in/raw-out model carries its STFT/ERB/deep-
+# filtering/ISTFT inside the graph, so per frame we just pass audio + a
+# recurrent state vector and get clean audio + the next state back.
+# Model: DeepFilterNet3 (Hendrik Schröter, MIT/Apache-2.0), exported to a
+# single ONNX (soundboard/models/denoiser_model.onnx).
+# ---------------------------------------------------------------------------
+_DFN_FRAME_SIZE = 480
+_DFN_STATE_SIZE = 45304
+_DFN_OUTPUTS = ["enhanced_audio_frame", "new_states", "lsnr"]
+
+try:
+    import onnxruntime as _ort  # type: ignore
+
+    ONNXRUNTIME_AVAILABLE = True
+except Exception:  # pragma: no cover
+    _ort = None  # type: ignore
+    ONNXRUNTIME_AVAILABLE = False
+
+
+def _dfn_model_path() -> str:
+    """Locate the DeepFilterNet ONNX in dev (soundboard/models/) or a frozen
+    PyInstaller bundle (sys._MEIPASS/soundboard/models/)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    cand = os.path.join(here, "models", "denoiser_model.onnx")
+    if os.path.exists(cand):
+        return cand
+    mei = getattr(sys, "_MEIPASS", None)
+    if mei:
+        c2 = os.path.join(mei, "soundboard", "models", "denoiser_model.onnx")
+        if os.path.exists(c2):
+            return c2
+    return cand
+
+
+DEEPFILTERNET_AVAILABLE = ONNXRUNTIME_AVAILABLE and os.path.exists(_dfn_model_path())
+
+
+class _DenoiseBackend:
+    """A frame-by-frame mono denoiser. ``frame_size`` samples in → same out, at
+    48 kHz. Implementations keep their own recurrent state across frames."""
+
+    name = "none"
+    frame_size = _RNN_FRAME_SIZE
+
+    def process_frame(self, frame: np.ndarray) -> np.ndarray:  # float32[fs]->float32[fs]
+        return frame
+
+    def reset(self) -> None:
+        pass
+
+    def warmup(self) -> None:
+        """Run several dummy frames so the FIRST real frames don't pay the
+        graph-load + onnxruntime arena-allocation cost inside the audio callback
+        (the very first inference can be ~10x steady state). A few frames let
+        the memory arenas settle, then we reset the recurrent state."""
+        try:
+            for _ in range(5):
+                self.process_frame(np.zeros(self.frame_size, dtype=np.float32))
+            self.reset()
+        except Exception:
+            pass
+
+    def close(self) -> None:
+        pass
+
+
+class _RnnoiseBackend(_DenoiseBackend):
+    """Tiny RNN (Xiph RNNoise). ~0.5% CPU, BSD-licensed, lowest latency. Weak on
+    non-stationary noise — kept as the light / always-available fallback."""
+
+    name = "rnnoise"
+    frame_size = _RNN_FRAME_SIZE
+
+    def __init__(self) -> None:
+        if not RNNOISE_AVAILABLE or _rnn_create is None:
+            raise RuntimeError("RNNoise unavailable")
+        self._state = [_rnn_create()]
+
+    def process_frame(self, frame: np.ndarray) -> np.ndarray:
+        i16 = np.clip(frame * 32767.0, -32768, 32767).astype(np.int16).reshape(1, -1)
+        out_frame, _sp = _rnn_process_frame(self._state, i16)  # type: ignore[arg-type]
+        return out_frame.reshape(-1).astype(np.float32) / 32767.0
+
+    def reset(self) -> None:
+        self.close()
+        if _rnn_create is not None:
+            self._state = [_rnn_create()]
+
+    def close(self) -> None:
+        if getattr(self, "_state", None) and _rnn_destroy is not None:
+            for s in self._state:
+                try:
+                    _rnn_destroy(s)
+                except Exception:
+                    pass
+        self._state = None
+
+
+class _DeepFilterNetBackend(_DenoiseBackend):
+    """DeepFilterNet3 via onnxruntime. Krisp-class, 48 kHz, ~3 ms/frame on CPU
+    (3x real-time). Heavier than RNNoise but a large quality jump."""
+
+    name = "deepfilternet"
+    frame_size = _DFN_FRAME_SIZE
+
+    def __init__(self) -> None:
+        if not ONNXRUNTIME_AVAILABLE:
+            raise RuntimeError("onnxruntime unavailable")
+        path = _dfn_model_path()
+        if not os.path.exists(path):
+            raise RuntimeError(f"DeepFilterNet model missing: {path}")
+        so = _ort.SessionOptions()
+        # Single-threaded, sequential — lowest jitter for real-time audio (ORT's
+        # own recommendation); the model is small enough not to need more.
+        so.intra_op_num_threads = 1
+        so.inter_op_num_threads = 1
+        so.execution_mode = _ort.ExecutionMode.ORT_SEQUENTIAL
+        self._sess = _ort.InferenceSession(path, so, providers=["CPUExecutionProvider"])
+        self._state = np.zeros(_DFN_STATE_SIZE, dtype=np.float32)
+        self._atten = np.zeros(1, dtype=np.float32)  # 0 dB limit = full denoise
+
+    def process_frame(self, frame: np.ndarray) -> np.ndarray:
+        f = np.ascontiguousarray(frame, dtype=np.float32)
+        enhanced, self._state, _lsnr = self._sess.run(
+            _DFN_OUTPUTS,
+            {"input_frame": f, "states": self._state, "atten_lim_db": self._atten},
+        )
+        return enhanced
+
+    def reset(self) -> None:
+        self._state = np.zeros(_DFN_STATE_SIZE, dtype=np.float32)
+
+
+def _default_backend_name() -> str:
+    """Best available backend: DeepFilterNet if its model + onnxruntime are
+    present, else RNNoise, else none."""
+    if DEEPFILTERNET_AVAILABLE:
+        return "deepfilternet"
+    if RNNOISE_AVAILABLE:
+        return "rnnoise"
+    return "none"
+
+
 class NoiseSuppressor:
-    """Real-time noise suppressor for mic input using RNNoise.
+    """Real-time mic noise suppressor with a PLUGGABLE backend.
 
-    Replaces Discord's Krisp noise suppression (which is bypassed when routing
-    through a virtual cable). RNNoise is a small recurrent neural network
-    designed specifically for real-time voice denoising — no spectral gating,
-    no musical-noise / robot-voice artifacts. CPU cost is ~0.5% on a modern
-    machine.
+    Replaces Discord's Krisp (bypassed when routing through a virtual cable) by
+    denoising the MIC ONLY, before soundboard sounds are mixed in. Backends:
 
-    The audio callback feeds float32 mono blocks of arbitrary size; RNNoise
-    works on fixed 480-sample int16 frames at 48 kHz. We keep small input /
-    output ring buffers to bridge the two, so latency added is bounded by one
-    RNNoise frame (~10 ms).
+      * ``deepfilternet`` — DeepFilterNet3 DNN (ONNX). Krisp-class quality,
+        48 kHz, ~3 ms/frame. The default when available.
+      * ``rnnoise``       — tiny RNN. ~0.5% CPU, lowest latency, weak on
+        non-stationary noise. Light / always-available fallback.
+      * ``none``          — passthrough.
 
-    The `strength` knob is implemented as a wet/dry mix between the denoised
-    signal and the original mic, since RNNoise itself has no strength
-    parameter. 1.0 = fully denoised, 0.0 = fully bypassed.
-
-    Falls back to passthrough if `pyrnnoise` is missing or processing fails.
+    Both real backends use 480-sample 48 kHz frames, so a single input/output
+    ring buffer bridges arbitrary audio blocks (e.g. 1024) to fixed frames; the
+    one-frame output priming avoids the underrun-buzz that block≠frame caused.
+    ``strength`` is a wet/dry mix (1.0 = fully denoised, 0.0 = bypass). Any load
+    or inference failure falls back to passthrough — NS can never break audio.
     """
 
     def __init__(self, sample_rate: int, block_size: int):
@@ -95,37 +243,78 @@ class NoiseSuppressor:
         self.enabled: bool = False
         # Wet/dry mix: 0.0 = original mic, 1.0 = fully denoised.
         self.strength: float = 1.0
-        # RNNoise expects 48 kHz int16 mono. We currently always run the
-        # mixer at 48 kHz so no resampling is needed in the hot path.
-        self._native_sr = _RNN_SAMPLE_RATE
-        self._frame_size = _RNN_FRAME_SIZE
-        self._matched_sr = sample_rate == self._native_sr
-        # Allocate the RNNoise denoise state lazily so an unavailable lib
-        # doesn't blow up __init__.
-        self._state = None
-        # Float32 input ring (samples waiting to fill a 480-sample frame).
+        # Both backends are 48 kHz native; only run when the mixer matches.
+        self._matched_sr = sample_rate == _RNN_SAMPLE_RATE
+        # Desired backend name; the backend object is built lazily on first use
+        # so an unavailable lib / missing model never blows up __init__.
+        self._backend_name = _default_backend_name()
+        self._backend: Optional[_DenoiseBackend] = None
+        # Float32 rings bridging arbitrary blocks <-> fixed frames.
         self._in_buf = np.zeros(0, dtype=np.float32)
-        # Float32 output ring (denoised samples waiting to be returned).
         self._out_buf = np.zeros(0, dtype=np.float32)
-        # Whether the output ring has been primed with one frame of latency.
-        # The audio block size (e.g. 1024) is NOT a multiple of the 480-sample
-        # RNNoise frame, so without a one-frame backlog the ring underflows on
-        # EVERY block and the old fallback spliced ~64 raw samples in at a
-        # timeline discontinuity → a constant ~47 Hz buzz + partly-undenoised
-        # voice. Priming once keeps every steady-state read clean and in order.
         self._primed = False
 
-    def _ensure_state(self) -> bool:
-        if not RNNOISE_AVAILABLE or _rnn_create is None:
-            return False
-        if self._state is None:
+    @property
+    def backend_name(self) -> str:
+        return self._backend_name
+
+    def available_backends(self) -> list:
+        """Backend names that can actually load on this machine (for the GUI)."""
+        out = []
+        if DEEPFILTERNET_AVAILABLE:
+            out.append("deepfilternet")
+        if RNNOISE_AVAILABLE:
+            out.append("rnnoise")
+        return out
+
+    def set_backend(self, name: str) -> None:
+        """Switch denoiser backend (rebuilt + warmed on next enable/use)."""
+        name = (name or "").strip().lower()
+        if name not in ("deepfilternet", "rnnoise", "none"):
+            return
+        if name == self._backend_name and self._backend is not None:
+            return
+        self._backend_name = name
+        # Tear down the old backend and force a fresh build (+ ring reset) so
+        # the switch is clean even mid-stream.
+        self._teardown_backend()
+        self._in_buf = np.zeros(0, dtype=np.float32)
+        self._out_buf = np.zeros(0, dtype=np.float32)
+        self._primed = False
+
+    def _teardown_backend(self) -> None:
+        if self._backend is not None:
             try:
-                self._state = [_rnn_create()]
-            except Exception as e:
-                logger.debug("RNNoise create failed: %s", e)
-                self._state = None
-                return False
-        return True
+                self._backend.close()
+            except Exception:
+                pass
+            self._backend = None
+
+    def _build_backend(self, name: str) -> Optional[_DenoiseBackend]:
+        try:
+            if name == "deepfilternet":
+                b = _DeepFilterNetBackend()
+            elif name == "rnnoise":
+                b = _RnnoiseBackend()
+            else:
+                return None
+        except Exception as e:
+            logger.warning("Denoiser backend '%s' failed to load: %s", name, e)
+            return None
+        b.warmup()
+        return b
+
+    def _ensure_backend(self) -> Optional[_DenoiseBackend]:
+        if self._backend is not None:
+            return self._backend
+        # Try the requested backend, then gracefully fall back to RNNoise.
+        b = self._build_backend(self._backend_name)
+        if b is None and self._backend_name != "rnnoise" and RNNOISE_AVAILABLE:
+            logger.warning("Falling back to RNNoise denoiser")
+            self._backend_name = "rnnoise"
+            b = self._build_backend("rnnoise")
+        self._backend = b
+        return b
 
     def set_strength(self, strength: float) -> None:
         """Set wet/dry mix (0.0 = bypass, 1.0 = fully denoised)."""
@@ -136,95 +325,76 @@ class NoiseSuppressor:
         self._in_buf = np.zeros(0, dtype=np.float32)
         self._out_buf = np.zeros(0, dtype=np.float32)
         self._primed = False
-        if self._state is not None and _rnn_destroy is not None:
+        if self._backend is not None:
             try:
-                for s in self._state:
-                    _rnn_destroy(s)
+                self._backend.reset()
             except Exception:
                 pass
-            self._state = None
 
     def __del__(self):
         try:
-            self.reset()
+            self._teardown_backend()
         except Exception:
             pass
 
     def process(self, mic_block: np.ndarray) -> np.ndarray:
-        """Apply noise suppression to a mic block. Returns same length array.
+        """Apply noise suppression to a mic block. Returns a same-length array.
 
-        Safe to call even when disabled or when RNNoise is unavailable -
-        will return the input unchanged in those cases.
+        Safe to call when disabled or when no backend can load — returns the
+        input unchanged in those cases.
         """
         if not self.enabled or not self._matched_sr:
             return mic_block
         n = len(mic_block)
         if n == 0:
             return mic_block
-        if not self._ensure_state() or _rnn_process_frame is None:
+        backend = self._ensure_backend()
+        if backend is None:
             return mic_block
         try:
-            state = self._state
-            if state is None:  # paranoia after _ensure_state
-                return mic_block
             mic_f32 = np.ascontiguousarray(mic_block, dtype=np.float32).reshape(-1)
+            fs = backend.frame_size
             # Prime the output ring with ONE frame of latency the first time we
-            # run after enable/reset. The block size isn't a multiple of the
-            # 480-sample frame, so without this slack the ring underflows every
-            # block and we'd splice raw samples in at a discontinuity (the old
-            # "constant buzz / partly-undenoised" bug). ~10 ms of leading silence
-            # is imperceptible and is the only added latency.
+            # run after enable/reset/switch. The block size isn't a multiple of
+            # the 480-sample frame, so without this slack the ring underflows
+            # every block and we'd splice raw samples in at a discontinuity (the
+            # old "constant buzz / partly-undenoised" bug). ~10 ms of leading
+            # silence is imperceptible and is the only ring-added latency.
             if not self._primed:
-                self._out_buf = np.zeros(self._frame_size, dtype=np.float32)
+                self._out_buf = np.zeros(fs, dtype=np.float32)
                 self._primed = True
-            # Append new samples to the input ring.
             self._in_buf = (
                 np.concatenate((self._in_buf, mic_f32))
                 if self._in_buf.size
                 else mic_f32.copy()
             )
-            # Drain as many full RNNoise frames as we can.
-            fs = self._frame_size
+            # Drain as many full frames as we can through the backend.
             n_frames = self._in_buf.size // fs
             if n_frames > 0:
                 consumed = n_frames * fs
-                # Convert float [-1,1] → int16. Clip to be safe.
-                int_chunk = np.clip(self._in_buf[:consumed] * 32767.0, -32768, 32767).astype(
-                    np.int16
-                )
-                int_chunk = int_chunk.reshape(n_frames, fs)
-                denoised_chunks = []
-                for i in range(n_frames):
-                    frame = int_chunk[i : i + 1, :]  # (1, FRAME_SIZE) mono
-                    out_frame, _sp = _rnn_process_frame(state, frame)  # type: ignore[arg-type]
-                    denoised_chunks.append(out_frame.reshape(-1))
-                denoised_i16 = np.concatenate(denoised_chunks)
-                denoised_f32 = denoised_i16.astype(np.float32) / 32767.0
-                # Wet/dry mix vs original samples that produced these frames
+                frames = self._in_buf[:consumed].reshape(n_frames, fs)
+                den_parts = [backend.process_frame(frames[i]) for i in range(n_frames)]
+                denoised_f32 = np.concatenate(den_parts).astype(np.float32, copy=False)
+                # Wet/dry mix vs the original samples that produced these frames
                 # (time-aligned: both are delayed together by the output ring).
                 if self.strength < 1.0:
                     orig = self._in_buf[:consumed]
                     denoised_f32 = self.strength * denoised_f32 + (1.0 - self.strength) * orig
-                # Keep leftover samples for next call.
                 self._in_buf = self._in_buf[consumed:].copy()
-                # Append to output ring.
                 self._out_buf = np.concatenate((self._out_buf, denoised_f32))
-            # Steady state: the primed backlog guarantees >= n samples here, so
-            # this returns clean, in-order denoised audio.
+            # Steady state: the primed backlog guarantees >= n samples here.
             if self._out_buf.size >= n:
                 out = self._out_buf[:n].copy()
                 self._out_buf = self._out_buf[n:]
                 return out
-            # Safety net only (shouldn't fire after priming): not enough yet —
-            # drain what we have and pad the TAIL with the freshest raw input so
-            # at least the timeline stays monotonic.
+            # Safety net (shouldn't fire after priming): pad the TAIL with the
+            # freshest raw input so the timeline stays monotonic.
             deficit = n - self._out_buf.size
             out = np.concatenate((self._out_buf, mic_f32[-deficit:]))
             self._out_buf = np.zeros(0, dtype=np.float32)
             return out
         except Exception as e:
-            # Never let noise suppression break the audio callback - fall
-            # back to passthrough on any failure.
+            # Never let noise suppression break the audio callback.
             logger.debug("NoiseSuppressor.process failed: %s", e)
             return mic_block
 

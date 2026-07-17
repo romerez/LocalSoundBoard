@@ -1,7 +1,25 @@
 # Session Backlog & Open Items
 
-> **Date:** 2026-06-09 (updated 2026-06-10)
+> **Date:** 2026-06-09 (updated 2026-06-11)
 > **Purpose:** Everything still to figure out / fix from this session — the performance work we started with, the data-loss emergency, the keyboard issue, and recovery follow-ups. Cross-references [docs/PERFORMANCE_PLAN.md](PERFORMANCE_PLAN.md) for the full perf detail.
+
+---
+
+## 2026-06-11 — top-tier noise suppression (DeepFilterNet3) — DONE, uncommitted
+
+The user: our RNNoise filter is "shit" vs Discord's Krisp. Correct — RNNoise is a tiny 2017 model, weak on non-stationary noise (keyboard, other voices). Researched (4-track workflow) and built a **Krisp-class upgrade**:
+
+- ✅ **DeepFilterNet3 added as the default denoiser** — a 48 kHz-native DNN run via **onnxruntime (no PyTorch)**. Big jump over RNNoise on keyboard/voices; preserves full voice band (most alternatives — GTCRN/NSNet2/Picovoice — are 16 kHz telephone-band and were rejected for that). Model: single combined raw-in/raw-out ONNX `soundboard/models/denoiser_model.onnx` (16 MB; 480-sample frames = same as RNNoise; 45304-float recurrent state; `atten_lim_db` scalar). Validated against the source repo's reference output: **correlation 1.0000**. Cost: **~3.3 ms/frame, ~8 ms/block — 3× real-time on CPU**, runs inline in the input callback with a multi-frame warm-up so enabling mid-call doesn't glitch.
+- ✅ **Pluggable backend design** — `NoiseSuppressor` now holds a `_DenoiseBackend` (`deepfilternet` | `rnnoise` | none); reuses the existing 480-frame ring buffer + one-frame priming (the buzz fix). Graceful fallback: DeepFilterNet → RNNoise → passthrough on any load/inference failure. Wet/dry `strength` is backend-agnostic.
+- ✅ **GUI**: engine dropdown ("Best (DeepFilterNet)" / "Light (RNNoise)") next to the NS checkbox + strength slider; persisted as `noise_suppression_backend` (default `deepfilternet`, only restored if available). NVIDIA Broadcast hint label (detects the Broadcast mic by name; shows "select it as Input" when present, else an install tip).
+- ✅ **NVIDIA Broadcast routing** — the user has an RTX GPU but the Broadcast APP isn't installed (not in the device list), so this is the detect-and-recommend hint for now; once installed, its mic just appears in the Input picker and the hint goes green.
+- ✅ **PyInstaller spec** bundles onnxruntime DLLs (`collect_dynamic_libs`/`collect_data_files` — avoids the `onnxruntime_providers_shared.dll` load error) + the ONNX model; `onnxruntime` already in the venv (1.27.0).
+
+### NS follow-ups / open
+- ⏳ **Latency**: default DeepFilterNet adds ~40 ms algorithmic vs RNNoise's ~10 ms. Fine for voice chat; if the user wants RNNoise-low latency there's a ~10 ms 0-lookahead "LL" variant (split ONNX only — would need merging). Add a "low latency" toggle later if asked.
+- ⏳ **Weights license for the paid product**: DeepFilterNet code is MIT/Apache and the weights ship permissively, BUT the combined ONNX came from a wrapper repo (yuyun2000/SpeechDenoiser) with no LICENSE file; underlying weights trained on the MS DNS dataset (mixed provenance). For commercialization: regenerate the combined model from Rikorose's official split ONNX (explicit MIT/Apache) via the deepfilter-rt merge script, or get written confirmation. RNNoise (BSD) remains the unambiguously-clean default-shippable fallback. Keep DeepFilterNet attribution (Hendrik Schröter, MIT/Apache).
+- ⏳ **If glitches under heavy CPU load**: move inference to a worker thread off the input callback (the research-recommended design; deferred since steady-state cost is well within budget).
+- ⏳ **Optional**: ai-coustics SDK (48 kHz, CPU, clean embeddable license, $) or NVIDIA Maxine in-app (RTX, royalty-free, heavy CUDA bundle) as a future "even better" tier; Krisp SDK is enterprise-sales-gated.
 
 ---
 

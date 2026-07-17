@@ -28,6 +28,8 @@ from .audio import (
     HUGE_AUDIO_SECONDS,
     probe_duration,
     decode_overview,
+    DEEPFILTERNET_AVAILABLE,
+    RNNOISE_AVAILABLE,
 )
 from .constants import (
     ALL_SLOT_COLORS,
@@ -3657,6 +3659,35 @@ class SoundboardApp:
         )
         self.noise_suppress_checkbox.pack(side=tk.LEFT, padx=(0, 12))
 
+        # Engine selector: DeepFilterNet (Krisp-class DNN) vs RNNoise (light).
+        # Only offer engines that can actually load on this machine.
+        self._ns_backend_labels = {
+            "deepfilternet": "Best (DeepFilterNet)",
+            "rnnoise": "Light (RNNoise)",
+        }
+        self._ns_label_to_backend = {v: k for k, v in self._ns_backend_labels.items()}
+        _ns_values = []
+        if DEEPFILTERNET_AVAILABLE:
+            _ns_values.append(self._ns_backend_labels["deepfilternet"])
+        if RNNOISE_AVAILABLE:
+            _ns_values.append(self._ns_backend_labels["rnnoise"])
+        self.ns_backend_var = tk.StringVar(
+            value=_ns_values[0] if _ns_values else "Light (RNNoise)"
+        )
+        if len(_ns_values) > 1:
+            self.ns_backend_menu = ctk.CTkOptionMenu(
+                ns_row,
+                values=_ns_values,
+                variable=self.ns_backend_var,
+                command=self._on_ns_backend_change,
+                width=170,
+                font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+                fg_color=COLORS["bg_light"],
+                button_color=COLORS["blurple"],
+                button_hover_color=COLORS["blurple_hover"],
+            )
+            self.ns_backend_menu.pack(side=tk.LEFT, padx=(0, 12))
+
         ctk.CTkLabel(
             ns_row,
             text="Strength:",
@@ -3678,6 +3709,21 @@ class SoundboardApp:
             button_hover_color=COLORS["blurple"],
         )
         self.ns_strength_slider.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # NVIDIA Broadcast hint: if its virtual mic is installed, recommend
+        # selecting it as Input for GPU-accelerated (top-tier) denoise; the
+        # built-in engine can then be turned off. Text is filled in by
+        # _refresh_broadcast_hint() (detects the device by name at runtime).
+        self.ns_broadcast_hint = ctk.CTkLabel(
+            ns_body,
+            text="",
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            text_color=COLORS["text_muted"],
+            anchor="w",
+            justify="left",
+        )
+        self.ns_broadcast_hint.pack(fill=tk.X, pady=(4, 0))
+        self._refresh_broadcast_hint()
 
         # ============================================================
         # CARD: Voice Changer - real-time mic voice modulation. Applied to
@@ -7785,8 +7831,10 @@ class SoundboardApp:
                     ptt_key = self.ptt_key_var.get().strip()
                     if ptt_key:
                         self.mixer.set_ptt_key(ptt_key)
-                # Apply noise suppression settings
+                # Apply noise suppression settings (engine backend first, then
+                # enabled + strength so the chosen backend is the live one).
                 if hasattr(self, "noise_suppress_var"):
+                    self.mixer.noise_suppressor.set_backend(self._selected_ns_backend())
                     self.mixer.noise_suppressor.enabled = self.noise_suppress_var.get()
                     self.mixer.noise_suppressor.set_strength(self.ns_strength_var.get() / 100.0)
                 # Apply mic mute + auto-PTT mic duck (fresh mixer per start).
@@ -8069,11 +8117,56 @@ class SoundboardApp:
         """Toggle mic noise suppression (Krisp replacement)."""
         enabled = self.noise_suppress_var.get()
         if self.mixer:
+            self.mixer.noise_suppressor.set_backend(self._selected_ns_backend())
             self.mixer.noise_suppressor.enabled = enabled
             self.mixer.noise_suppressor.set_strength(self.ns_strength_var.get() / 100.0)
             # Reset context buffer so we don't carry stale audio when toggling
             self.mixer.noise_suppressor.reset()
         self._save_config()
+
+    def _selected_ns_backend(self) -> str:
+        """The backend name for the current engine dropdown selection."""
+        label = self.ns_backend_var.get() if hasattr(self, "ns_backend_var") else ""
+        return getattr(self, "_ns_label_to_backend", {}).get(label, "deepfilternet")
+
+    def _on_ns_backend_change(self, _value=None):
+        """Engine dropdown changed (DeepFilterNet <-> RNNoise)."""
+        if self.mixer:
+            self.mixer.noise_suppressor.set_backend(self._selected_ns_backend())
+            # Re-apply enabled + strength so the freshly built backend is live.
+            self.mixer.noise_suppressor.enabled = self.noise_suppress_var.get()
+            self.mixer.noise_suppressor.set_strength(self.ns_strength_var.get() / 100.0)
+        self._save_config()
+
+    def _refresh_broadcast_hint(self):
+        """Show a hint if the NVIDIA Broadcast virtual mic is installed — it's a
+        top-tier GPU denoiser the user can pick as Input instead of (or with the
+        built-in engine off). Hidden when not present so it never nags."""
+        if not hasattr(self, "ns_broadcast_hint"):
+            return
+        found = None
+        try:
+            import sounddevice as _sd
+
+            for d in _sd.query_devices():
+                nm = str(d.get("name", ""))
+                if d.get("max_input_channels", 0) > 0 and "nvidia broadcast" in nm.lower():
+                    found = nm
+                    break
+        except Exception:
+            found = None
+        if found:
+            self.ns_broadcast_hint.configure(
+                text="✓ NVIDIA Broadcast mic detected — select it as Input above for "
+                "GPU denoise (then you can turn Noise Suppression off).",
+                text_color=COLORS["green"],
+            )
+        else:
+            self.ns_broadcast_hint.configure(
+                text="Tip: install the NVIDIA Broadcast app (RTX GPUs) for top-tier "
+                "GPU denoise, then pick its mic as Input.",
+                text_color=COLORS["text_muted"],
+            )
 
     def _update_ns_strength(self, _=None):
         """Update noise suppression strength from slider (0-100 → 0.0-1.0)."""
@@ -14257,6 +14350,10 @@ class SoundboardApp:
             "noise_suppression_strength": (
                 self.ns_strength_var.get() if hasattr(self, "ns_strength_var") else 85
             ),
+            # Which denoiser engine: "deepfilternet" (best) or "rnnoise" (light).
+            "noise_suppression_backend": (
+                self._selected_ns_backend() if hasattr(self, "ns_backend_var") else "deepfilternet"
+            ),
             # Mute the live mic while sounds auto-hold PTT (see _toggle_duck_mic).
             "duck_mic_during_sounds": (
                 self.duck_mic_var.get() if hasattr(self, "duck_mic_var") else True
@@ -14477,6 +14574,17 @@ class SoundboardApp:
                 self.noise_suppress_var.set(ns_enabled)
             if hasattr(self, "ns_strength_var"):
                 self.ns_strength_var.set(ns_strength)
+            # Restore the chosen denoiser engine (default DeepFilterNet), but
+            # only if that engine is actually available on this machine.
+            ns_backend = str(config.get("noise_suppression_backend", "deepfilternet"))
+            if hasattr(self, "ns_backend_var") and ns_backend in getattr(self, "_ns_backend_labels", {}):
+                avail = []
+                if DEEPFILTERNET_AVAILABLE:
+                    avail.append("deepfilternet")
+                if RNNOISE_AVAILABLE:
+                    avail.append("rnnoise")
+                if ns_backend in avail:
+                    self.ns_backend_var.set(self._ns_backend_labels[ns_backend])
 
             # Auto-PTT mic duck (default ON — people heard the live mic
             # alongside every sound otherwise).

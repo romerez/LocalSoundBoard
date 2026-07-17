@@ -9,8 +9,27 @@ Build with:
 import os
 import sys
 import importlib
+from PyInstaller.utils.hooks import collect_dynamic_libs, collect_data_files
 
 block_cipher = None
+
+# onnxruntime (DeepFilterNet noise-suppression backend) ships native DLLs —
+# onnxruntime.dll AND onnxruntime_providers_shared.dll — that PyInstaller will
+# miss without collecting them explicitly (the classic "DLL load failed
+# importing onnxruntime_pybind11_state" error). Collect both libs and data.
+try:
+    ort_binaries = collect_dynamic_libs('onnxruntime')
+    ort_datas = collect_data_files('onnxruntime')
+    print(f"[spec] onnxruntime: {len(ort_binaries)} libs, {len(ort_datas)} data files")
+except Exception as _e:
+    print(f"[spec] WARNING: onnxruntime collect failed ({_e}); DeepFilterNet NS will be unavailable in the EXE")
+    ort_binaries, ort_datas = [], []
+
+# DeepFilterNet ONNX model (raw-in/raw-out, 48 kHz). ~16 MB.
+dfn_model = os.path.join('soundboard', 'models', 'denoiser_model.onnx')
+dfn_model_datas = [(dfn_model, 'soundboard/models')] if os.path.exists(dfn_model) else []
+if not dfn_model_datas:
+    print("[spec] WARNING: denoiser_model.onnx not found; DeepFilterNet NS will be unavailable in the EXE")
 
 # Helper to get package directory
 def get_pkg_dir(pkg_name):
@@ -52,7 +71,7 @@ except Exception:
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[],
+    binaries=ort_binaries,
     datas=[
         # CustomTkinter themes/assets
         (ctk_path, 'customtkinter'),
@@ -67,7 +86,9 @@ a = Analysis(
         # emoji_picker.py needs to be accessible as a script for subprocess
         ('soundboard/emoji_picker.py', 'soundboard'),
     ] + ([(static_ffmpeg_dir, 'ffmpeg_bin')] if static_ffmpeg_dir else [])
-      + ([(pyrnnoise_dll, 'pyrnnoise')] if pyrnnoise_dll else []),
+      + ([(pyrnnoise_dll, 'pyrnnoise')] if pyrnnoise_dll else [])
+      + dfn_model_datas
+      + ort_datas,
     hiddenimports=[
         # Core audio
         'sounddevice',
@@ -123,6 +144,12 @@ a = Analysis(
         # RNNoise for mic noise suppression
         'pyrnnoise',
         'pyrnnoise.rnnoise',
+
+        # onnxruntime — DeepFilterNet noise-suppression backend
+        'onnxruntime',
+        'onnxruntime.capi',
+        'onnxruntime.capi._pybind_state',
+        'onnxruntime.capi.onnxruntime_inference_collection',
 
         # PyQt6 for emoji picker subprocess
         'PyQt6',
