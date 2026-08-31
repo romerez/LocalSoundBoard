@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "bl-20260815-commit-wip-k7dq",
+  "title": "Commit the July–August WIP (Favorites, Universal PTT, DFN3 wiring, mobile companion)",
+  "description": "The working tree holds ~6 weeks of shipped-but-uncommitted work: person_board Favorites, universal_ptt.py, DeepFilterNet3 GUI wiring, mobile_sync.py, the whole mobile/ Android tree, and models.py hardening. Commit (or split into logical commits) so app-state vs code changes stay separable — the lesson from the 2026-06 data-loss session.",
+  "priority": "high",
+  "status": "backlog",
+  "tags": ["housekeeping", "git"],
+  "source": "agent:claude-code",
+  "createdAt": "2026-08-15T13:10:00Z",
+  "updatedAt": "2026-08-15T13:10:00Z"
+}

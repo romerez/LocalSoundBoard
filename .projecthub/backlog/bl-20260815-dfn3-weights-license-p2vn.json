@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "bl-20260815-dfn3-weights-license-p2vn",
+  "title": "DeepFilterNet3 weights provenance for commercial builds",
+  "description": "The combined ONNX came from a wrapper repo with no LICENSE. Before commercialization: regenerate the combined model from Rikorose's official split ONNX (MIT/Apache) via the deepfilter-rt merge script, or get written confirmation. RNNoise (BSD) stays the clean fallback. Keep DFN attribution.",
+  "priority": "medium",
+  "status": "backlog",
+  "tags": ["licensing", "audio"],
+  "source": "agent:claude-code",
+  "createdAt": "2026-08-15T13:10:00Z",
+  "updatedAt": "2026-08-15T13:10:00Z"
+}

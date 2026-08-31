@@ -1,4 +1,15 @@
 {
+    // Run the Black formatter's language server on the SYSTEM Python, not the
+    // project's .venv. The extension bundles its own copy of black, so any
+    // 3.8+ interpreter works — and this keeps a long-lived python.exe from
+    // living inside e:\CursorRepos\LocalSoundBoard\.venv\, which the Project
+    // Hub kept detecting as "LocalSoundBoard is running" and offering to kill
+    // (VS Code instantly respawned it, so it looked impossible to close).
+    // Editing/debugging still use the .venv interpreter — this only moves the
+    // formatter's helper process.
+    "black-formatter.interpreter": [
+        "C:\\Python313\\python.exe"
+    ],
     "chat.tools.terminal.autoApprove": {
         "/^python -c \"from soundboard import SoundEditor, SoundboardApp, AudioMixer, SoundCache; print\\('All imports successful!'\\)\"$/": {
             "approve": true,

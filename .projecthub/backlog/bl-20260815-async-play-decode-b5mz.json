@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "bl-20260815-async-play-decode-b5mz",
+  "title": "Async play-path decode for very long sounds",
+  "description": "First play of a long sound still np.loads on the GUI thread (tens–hundreds of ms for very large PCM; was seconds of decode before the disk cache). Move the load to a worker.",
+  "priority": "low",
+  "status": "backlog",
+  "tags": ["perf", "audio"],
+  "source": "agent:claude-code",
+  "createdAt": "2026-08-15T13:10:00Z",
+  "updatedAt": "2026-08-15T13:10:00Z"
+}

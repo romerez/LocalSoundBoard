@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "bl-20260815-phone-v3-acceptance-m3xw",
+  "title": "On-device acceptance pass for Android app v3",
+  "description": "Install v3 via the 📷 update flow, then run the checklist in docs/SESSION_BACKLOG.md: create a phone tab, add from Files, share from WhatsApp, trim a cut with a Hebrew name, delete slot/tab, yt-dlp first-run unpack, then 📷 re-sync and confirm phone content survives (§5.4).",
+  "priority": "high",
+  "status": "backlog",
+  "tags": ["mobile", "testing"],
+  "source": "agent:claude-code",
+  "createdAt": "2026-08-15T13:10:00Z",
+  "updatedAt": "2026-08-15T13:10:00Z"
+}

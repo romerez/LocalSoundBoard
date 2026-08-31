@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "bl-20260815-editor-offthread-w4kt",
+  "title": "Editor: off-thread audio load + marker-drag redraw",
+  "description": "Opening the sound editor does a synchronous full-file resample on the UI thread (perf plan #42); marker drag still full-redraws the waveform per pixel (#40 — needs persistent bars + coords()).",
+  "priority": "medium",
+  "status": "backlog",
+  "tags": ["perf", "editor"],
+  "source": "agent:claude-code",
+  "createdAt": "2026-08-15T13:10:00Z",
+  "updatedAt": "2026-08-15T13:10:00Z"
+}

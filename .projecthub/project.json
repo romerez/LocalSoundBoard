@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "name": "LocalSoundBoard",
+  "shortName": "LSB",
+  "description": "Discord soundboard for Windows: mixes sounds and a noise-suppressed mic into VB-Cable with auto push-to-talk; Hebrew-first CustomTkinter UI; Android companion app synced over Wi-Fi QR.",
+  "category": "tools",
+  "tags": ["python", "customtkinter", "audio", "kotlin", "android"],
+  "icon": ".projecthub/icon.svg",
+  "commands": {
+    "launch": {
+      "label": "Run PROD — the real soundboard (dist\\SoundBoard\\SoundBoard.exe). Runs the last DEPLOYED code, not your newest edits",
+      "command": "dist\\SoundBoard\\SoundBoard.exe",
+      "cwd": null,
+      "kind": "service",
+      "category": "run"
+    },
+    "dev": {
+      "label": "Run DEV — same app from source (.venv python main.py), picks up code edits. Shares one config + sounds folder with prod, so run only one at a time",
+      "command": ".venv\\Scripts\\python.exe main.py",
+      "cwd": null,
+      "kind": "service",
+      "category": "run"
+    },
+    "build": {
+      "label": "Deploy new version (dev → prod) — refreshes yt-dlp, rebuilds the EXE and promotes it into dist\\ so Run PROD serves your latest code. Close the app first: if it is running the build only stages (exit 2)",
+      "command": "scripts\\deploy_new_version.bat",
+      "cwd": null,
+      "kind": "task",
+      "category": "build"
+    },
+    "build-apk": {
+      "label": "Build the Android APK (debug) — phone companion app; the 📱 dialog serves this build to the phone",
+      "command": "gradlew.bat :app:assembleDebug",
+      "cwd": "mobile/android",
+      "kind": "task",
+      "category": "build"
+    }
+  },
+  "runtime": {
+    "prod": { "ports": [], "processes": ["SoundBoard.exe"], "docker": [] },
+    "dev": { "ports": [], "processes": ["main.py"], "docker": [] },
+    "notes": "prod = packaged dist\\SoundBoard\\SoundBoard.exe, dev = repo-venv python running main.py; single desktop process either way, no docker, and port 8765 is bound only while the 📱 mobile-sync QR dialog is open. DEV SIGNATURE IS DELIBERATELY THE BARE 'main.py' FRAGMENT: any pattern that matches python.exe or the venv path also matches VS Code's own language servers (ms-python Black/Pylance run FROM this venv), which made the Hub offer to kill the editor's helpers. Only the dev launch has 'main.py' on its command line."
+  },
+  "systemMap": ".projecthub/system-map.html",
+  "databases": [
+    {
+      "name": "config",
+      "engine": "json",
+      "location": "file",
+      "dataPath": "soundboard_config.json",
+      "notes": "tabs, slots, people, favorites, all settings; .bak + 20 rotating backups in config_backups/"
+    },
+    {
+      "name": "sound library",
+      "engine": "files",
+      "location": "file",
+      "dataPath": "sounds/ + images/",
+      "notes": "~600 wav/mp3/ogg sounds + slot images/avatars; imports named {stem}_{md5-8}"
+    },
+    {
+      "name": "decoded audio cache",
+      "engine": "files",
+      "location": "file",
+      "dataPath": "audio_cache/",
+      "notes": "decoded PCM .npy, ~2.6 GB; rebuildable, safe to delete"
+    },
+    {
+      "name": "mobile hash cache",
+      "engine": "json",
+      "location": "file",
+      "dataPath": "mobile_sync_hashcache.json",
+      "notes": "path→md5 cache that makes SoundPack manifest builds fast"
+    }
+  ]
+}

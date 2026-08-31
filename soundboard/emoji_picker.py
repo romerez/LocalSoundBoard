@@ -19,10 +19,39 @@ Public API (kept compatible with the old module):
 
 from __future__ import annotations
 
+import sys
 import tkinter as tk
 from typing import Dict, List, Optional, Tuple
 
 from . import emoji_render
+
+
+def _window_scaling(widget: tk.Misc) -> float:
+    """CTk's DPI factor for *widget*'s window (1.0 fallback).
+
+    The picker is RAW Tk: button sizes, the PhotoImage glyphs and negative
+    font sizes are all DEVICE pixels, so every logical size is multiplied by
+    this once. CTk is only consulted when the host app is a CustomTkinter app
+    (module already imported) — a stand-alone Tk root (tests) is DPI-unaware
+    and must not be scaled twice.
+    """
+    if "customtkinter" in sys.modules:
+        try:
+            from customtkinter import ScalingTracker  # type: ignore
+
+            top = widget.winfo_toplevel()
+            try:
+                return float(ScalingTracker.get_window_scaling(top))
+            except Exception:
+                return float(ScalingTracker.get_window_dpi_scaling(top)) * float(
+                    getattr(ScalingTracker, "window_scaling", 1.0) or 1.0
+                )
+        except Exception:
+            pass
+    try:
+        return max(1.0, float(widget.winfo_fpixels("1i")) / 96.0)
+    except Exception:
+        return 1.0
 
 # Legacy compat flag — gui.py checks this; the new picker has no Qt
 # dependency so we always advertise "available" as long as Tk is.
@@ -790,9 +819,12 @@ class _EmojiPickerDialog:
     the window fits its content at any size and never needs a manual resize.
     """
 
+    # LOGICAL px — multiplied by the window's DPI factor in __init__ (the
+    # device values are self._btn_px / self._emoji_px / self._cell_px).
     BUTTON_SIZE = 46   # pixels per emoji button (square-ish)
     EMOJI_PIXELS = 32  # rasterised emoji image side length (bigger = easier to read)
     CELL = 54          # button + padding footprint used to compute columns
+    ICON_PIXELS = 18   # category-tab icon side length
     SEARCH_DEBOUNCE_MS = 200
     _PLACEHOLDER = "🔍  Search emoji by name (e.g. fire, heart, cat)…"
 
@@ -815,11 +847,22 @@ class _EmojiPickerDialog:
         self._search_after: Optional[str] = None
         self._placeholder_on = False
 
+        # DPI: all sizes below are LOGICAL px → device px via this factor, and
+        # the emoji glyphs are rasterised at device px (crisp, no upscale).
+        s = _window_scaling(parent)
+        if not (0.4 <= s <= 8.0):
+            s = 1.0
+        self._s = s
+        self._btn_px = max(1, round(self.BUTTON_SIZE * s))
+        self._emoji_px = max(1, round(self.EMOJI_PIXELS * s))
+        self._cell_px = max(1, round(self.CELL * s))
+        self._icon_px = max(1, round(self.ICON_PIXELS * s))
+
         self.win = tk.Toplevel(parent)
         self.win.title("Choose Emoji")
         self.win.configure(bg=_BG_DARK)
-        self.win.geometry("560x560")
-        self.win.minsize(360, 360)
+        self.win.geometry(f"{round(560 * s)}x{round(560 * s)}")
+        self.win.minsize(round(360 * s), round(360 * s))
         try:
             self.win.transient(parent.winfo_toplevel())  # type: ignore[union-attr]
         except Exception:
@@ -838,6 +881,13 @@ class _EmojiPickerDialog:
     # UI
     # ------------------------------------------------------------------
 
+    def _f(self, px: int, bold: bool = False) -> tuple:
+        """Raw-Tk font in DEVICE px (NEGATIVE size) so it matches CTk text of
+        the same logical size (a positive size is points, scaled by Tk's own
+        factor rather than CTk's)."""
+        size = -max(1, round(px * self._s))
+        return ("Segoe UI", size, "bold") if bold else ("Segoe UI", size)
+
     def _build_ui(self) -> None:
         # --- Header: title + live search box -------------------------------
         header = tk.Frame(self.win, bg=_BG_DARK)
@@ -847,7 +897,7 @@ class _EmojiPickerDialog:
             text="Select an emoji",
             bg=_BG_DARK,
             fg=_TEXT,
-            font=("Segoe UI", 12, "bold"),
+            font=self._f(12, True),
         ).pack(side=tk.LEFT)
 
         search_wrap = tk.Frame(self.win, bg=_BG_MEDIUM, highlightthickness=1,
@@ -863,7 +913,7 @@ class _EmojiPickerDialog:
             disabledbackground=_BG_MEDIUM,
             bd=0,
             relief="flat",
-            font=("Segoe UI", 11),
+            font=self._f(11),
         )
         self._search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=10, pady=7)
         self._set_placeholder()
@@ -874,7 +924,7 @@ class _EmojiPickerDialog:
         # A small clear-search "✕" button.
         self._clear_btn = tk.Button(
             search_wrap, text="✕", bg=_BG_MEDIUM, fg=_TEXT_MUTED, activebackground=_BG_HOVER,
-            activeforeground=_TEXT, bd=0, relief="flat", font=("Segoe UI", 10), cursor="hand2",
+            activeforeground=_TEXT, bd=0, relief="flat", font=self._f(10), cursor="hand2",
             command=self._clear_search,
         )
         self._clear_btn.pack(side=tk.RIGHT, padx=(0, 8))
@@ -894,7 +944,7 @@ class _EmojiPickerDialog:
             parts = label.split(" ", 1)
             icon = parts[0]
             name = parts[1] if len(parts) > 1 else label
-            icon_img = emoji_render.get_tk_image(icon, 18)
+            icon_img = emoji_render.get_tk_image(icon, self._icon_px)
             btn = tk.Button(
                 cat_bar,
                 text=f" {name}",
@@ -908,7 +958,7 @@ class _EmojiPickerDialog:
                 relief="flat",
                 padx=6,
                 pady=4,
-                font=("Segoe UI", 9, "bold"),
+                font=self._f(9, True),
                 anchor="w",
                 cursor="hand2",
                 command=lambda idx=i: self._show_category(idx),
@@ -958,7 +1008,7 @@ class _EmojiPickerDialog:
             activeforeground="white",
             bd=0,
             relief="flat",
-            font=("Segoe UI", 9, "bold"),
+            font=self._f(9, True),
             padx=12,
             pady=6,
             cursor="hand2",
@@ -966,7 +1016,7 @@ class _EmojiPickerDialog:
         ).pack(side=tk.LEFT)
 
         self._status = tk.Label(
-            footer, text="", bg=_BG_DARK, fg=_TEXT_MUTED, font=("Segoe UI", 9)
+            footer, text="", bg=_BG_DARK, fg=_TEXT_MUTED, font=self._f(9)
         )
         self._status.pack(side=tk.LEFT, padx=12)
 
@@ -979,7 +1029,7 @@ class _EmojiPickerDialog:
             activeforeground=_TEXT,
             bd=0,
             relief="flat",
-            font=("Segoe UI", 9),
+            font=self._f(9),
             padx=12,
             pady=6,
             cursor="hand2",
@@ -1096,7 +1146,7 @@ class _EmojiPickerDialog:
         except Exception:
             cw = 0
         if cw <= 1:
-            cw = 560
+            cw = round(560 * self._s)
         cols = max(1, self._cols_for_width(cw))
 
         new_frame = tk.Frame(self._canvas, bg=_BG_DARK)
@@ -1141,7 +1191,7 @@ class _EmojiPickerDialog:
             pass
 
     def _cols_for_width(self, width: int) -> int:
-        return max(1, (width - 6) // self.CELL)
+        return max(1, (width - 6) // self._cell_px)
 
     def _on_canvas_configure(self, event: tk.Event) -> None:
         # Keep the inner frame the width of the canvas, then re-grid only if the
@@ -1184,7 +1234,7 @@ class _EmojiPickerDialog:
                 pass
 
     def _make_emoji_button(self, emoji: str, parent: tk.Misc, refs: List) -> tk.Button:
-        img = emoji_render.get_tk_image(emoji, self.EMOJI_PIXELS)
+        img = emoji_render.get_tk_image(emoji, self._emoji_px)
         if img is not None:
             refs.append(img)
             btn = tk.Button(
@@ -1195,8 +1245,8 @@ class _EmojiPickerDialog:
                 bd=0,
                 relief="flat",
                 cursor="hand2",
-                width=self.BUTTON_SIZE,
-                height=self.BUTTON_SIZE,
+                width=self._btn_px,
+                height=self._btn_px,
                 highlightthickness=0,
                 command=lambda e=emoji: self._select(e),
             )
@@ -1212,7 +1262,7 @@ class _EmojiPickerDialog:
                 relief="flat",
                 cursor="hand2",
                 highlightthickness=0,
-                font=("Segoe UI Emoji", 18),
+                font=("Segoe UI Emoji", -max(1, round(18 * self._s))),
                 width=2,
                 height=1,
                 command=lambda e=emoji: self._select(e),

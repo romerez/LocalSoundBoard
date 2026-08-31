@@ -13,6 +13,7 @@ import threading
 import time
 import tkinter as tk
 import unicodedata
+from collections import OrderedDict
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -25,11 +26,16 @@ from .audio import (
     AudioMixer,
     SoundCache,
     Recorder,
+    apply_speed,
     HUGE_AUDIO_SECONDS,
     probe_duration,
+    read_audio_file,
     decode_overview,
     DEEPFILTERNET_AVAILABLE,
     RNNOISE_AVAILABLE,
+    NS_BACKEND_LABELS,
+    NS_BACKEND_BLURBS,
+    ns_available_backends,
 )
 from .constants import (
     ALL_SLOT_COLORS,
@@ -46,9 +52,10 @@ from .constants import (
 from .color_picker import SlickColorPicker
 from .rtl import to_display as _rtl_to_display, is_rtl_dominant as _rtl_is_dominant
 from .editor import SoundEditor, LongAudioPicker
-from .person_board import PersonContext, PersonHub, PersonPopout
+from .person_board import FavoritesWindow, PersonContext, PersonHub, PersonPopout
 from .models import SoundSlot, SoundTab, Person, PersonGroup
 from .voice_fx import VoiceChanger
+from .universal_ptt import UniversalPTT
 from .slot_widget import (
     ButtonProxy,
     EmojiLabelProxy,
@@ -60,6 +67,8 @@ from .slot_widget import (
 )
 import subprocess
 import shutil
+import urllib.parse
+import webbrowser
 
 # ---------------------------------------------------------------------------
 # CustomTkinter performance patch: defer per-widget Canvas redraws during
@@ -307,6 +316,19 @@ try:
         _orig_top_update_dims(self, event)
 
     ctk.CTkToplevel._update_dimensions_event = _patched_top_update_dims
+except Exception:
+    pass
+
+
+# ---------------------------------------------------------------------------
+# CustomTkinter performance patch #5: kill CTk's nested idle pumps + per-widget
+# scrollregion refreshes (see soundboard/ctk_patches.py for the measurements —
+# CTkScrollbar.set alone cost 170–670 ms per call inside People-panel builds).
+# ---------------------------------------------------------------------------
+try:
+    from . import ctk_patches as _ctk_patches
+
+    _ctk_patches.install()
 except Exception:
     pass
 
@@ -658,6 +680,14 @@ def _windows_startup_is_enabled() -> bool:
 # ---------------------------------------------------------------------------
 # Tooltip helper
 # ---------------------------------------------------------------------------
+# Tab-emoji CTkImage cache keyed by (emoji, device_px). CTkImage objects are
+# meant to be shared, so one image serves every tab row that shows the same
+# emoji; rendering at the DEVICE pixel size (22 logical px x window scaling)
+# avoids the bicubic upscale blur CTk applies to a 22 px bitmap at 125%/150%.
+_TAB_EMOJI_IMAGE_CACHE: "OrderedDict[tuple, Any]" = OrderedDict()
+_TAB_EMOJI_IMAGE_CACHE_MAX = 256
+
+
 class _Tooltip:
     """Small, non-annoying tooltip shown after a hover delay.
 
@@ -810,6 +840,24 @@ class NowPlayingPanel:
         # only be staged once at a time.
         self.staged_items: Dict[str, Dict[str, Any]] = {}
 
+        # Cached fonts - one CTkFont per text role instead of one per widget
+        # (same tokens as SoundboardApp so the panel matches the main window).
+        self._font_xs = ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"])
+        self._font_xs_bold = ctk.CTkFont(
+            family=FONTS["family"], size=FONTS["size_xs"], weight="bold"
+        )
+        self._font_sm = ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"])
+        self._font_sm_bold = ctk.CTkFont(
+            family=FONTS["family"], size=FONTS["size_sm"], weight="bold"
+        )
+        self._font_md_bold = ctk.CTkFont(
+            family=FONTS["family"], size=FONTS["size_md"], weight="bold"
+        )
+        self._font_lg_bold = ctk.CTkFont(
+            family=FONTS["family"], size=FONTS["size_lg"], weight="bold"
+        )
+        self._font_mono_xs = ctk.CTkFont(family=FONTS["family_mono"], size=FONTS["size_xs"])
+
         self._create_panel()
 
     # ----- helpers -----
@@ -844,15 +892,14 @@ class NowPlayingPanel:
             width=UI["now_playing_width"],
         )
 
-        # Header
-        header_frame = ctk.CTkFrame(self.frame, fg_color="transparent", height=40)
+        # Header (natural height - no fixed band)
+        header_frame = ctk.CTkFrame(self.frame, fg_color="transparent")
         header_frame.pack(fill=tk.X, padx=12, pady=(12, 8))
-        header_frame.pack_propagate(False)
 
         header_label = ctk.CTkLabel(
             header_frame,
             text="🎧 DJ Looper",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_lg"], weight="bold"),
+            font=self._font_lg_bold,
             text_color=COLORS["text_primary"],
         )
         header_label.pack(side=tk.LEFT)
@@ -866,10 +913,10 @@ class NowPlayingPanel:
             command=self._on_pause_all_click,
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"], weight="bold"),
-            corner_radius=6,
+            font=self._font_xs_bold,
+            corner_radius=UI["button_corner_radius"],
             width=92,
-            height=26,
+            height=UI["compact_height"],
         )
         self.pause_all_btn.pack(side=tk.RIGHT)
         _Tooltip.attach(self.pause_all_btn, "Pause/resume every active sound at once")
@@ -885,10 +932,10 @@ class NowPlayingPanel:
             self.frame,
             orientation="vertical",
             command=self.items_canvas.yview,
-            fg_color=COLORS["bg_medium"],
+            fg_color=COLORS["bg_dark"],
             button_color=COLORS["bg_light"],
             button_hover_color=COLORS["bg_lighter"],
-            width=10,
+            width=12,
         )
         self.items_canvas.configure(yscrollcommand=self.items_scrollbar.set)
         self.items_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(12, 0), pady=(0, 12))
@@ -905,7 +952,7 @@ class NowPlayingPanel:
         self.empty_label = ctk.CTkLabel(
             self.items_frame,
             text="No sounds playing",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            font=self._font_sm,
             text_color=COLORS["text_muted"],
         )
         self.empty_label.pack(pady=20)
@@ -1081,7 +1128,7 @@ class NowPlayingPanel:
         name_label = ctk.CTkLabel(
             title_row,
             text=_fix_rtl_text(display_name),
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"], weight="bold"),
+            font=self._font_sm_bold,
             text_color=COLORS["text_primary"],
             anchor="w",
         )
@@ -1104,7 +1151,8 @@ class NowPlayingPanel:
                 except Exception:
                     pass
 
-        btn_font = ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"], weight="bold")
+        btn_font = self._font_xs
+        btn_w, btn_h = UI["icon_button"], UI["compact_height"]
 
         remove_btn = ctk.CTkButton(
             title_row,
@@ -1113,9 +1161,9 @@ class NowPlayingPanel:
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
             font=btn_font,
-            corner_radius=6,
-            width=26,
-            height=24,
+            corner_radius=UI["button_corner_radius"],
+            width=btn_w,
+            height=btn_h,
         )
         remove_btn.pack(side=tk.RIGHT, padx=(3, 0))
 
@@ -1126,9 +1174,9 @@ class NowPlayingPanel:
             fg_color=COLORS["green"],
             hover_color=COLORS.get("green_hover", COLORS["green"]),
             font=btn_font,
-            corner_radius=6,
-            width=30,
-            height=24,
+            corner_radius=UI["button_corner_radius"],
+            width=btn_w,
+            height=btn_h,
         )
         play_btn.pack(side=tk.RIGHT, padx=(3, 0))
 
@@ -1139,9 +1187,9 @@ class NowPlayingPanel:
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
             font=btn_font,
-            corner_radius=6,
-            width=26,
-            height=24,
+            corner_radius=UI["button_corner_radius"],
+            width=btn_w,
+            height=btn_h,
         )
         edit_btn.pack(side=tk.RIGHT, padx=(3, 0))
 
@@ -1149,8 +1197,8 @@ class NowPlayingPanel:
         _Tooltip.attach(play_btn, "Play this sound")
         _Tooltip.attach(edit_btn, "Open full slot editor")
 
-        small_font = ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"])
-        mono_font = ctk.CTkFont(family=FONTS["family_mono"], size=FONTS["size_xs"])
+        small_font = self._font_xs
+        mono_font = self._font_mono_xs
         ctrl_btn_font = small_font
 
         # If we don't have a slot reference, just show the subtitle and stop.
@@ -1221,9 +1269,9 @@ class NowPlayingPanel:
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
             font=ctrl_btn_font,
-            corner_radius=4,
-            width=22,
-            height=22,
+            corner_radius=UI["button_corner_radius"],
+            width=btn_w,
+            height=btn_h,
         ).pack(side=tk.LEFT, padx=(2, 0))
 
         # ── Speed row ──
@@ -1291,9 +1339,9 @@ class NowPlayingPanel:
                 COLORS["green_hover"] if pitch_state[0] else COLORS["bg_lighter"]
             ),
             font=ctrl_btn_font,
-            corner_radius=4,
-            width=24,
-            height=22,
+            corner_radius=UI["button_corner_radius"],
+            width=btn_w,
+            height=btn_h,
         )
         pitch_btn.pack(side=tk.LEFT, padx=(2, 2))
         _Tooltip.attach(pitch_btn, "🎵 keep original pitch · 🐿 chipmunk/deep voice")
@@ -1311,9 +1359,9 @@ class NowPlayingPanel:
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
             font=ctrl_btn_font,
-            corner_radius=4,
-            width=22,
-            height=22,
+            corner_radius=UI["button_corner_radius"],
+            width=btn_w,
+            height=btn_h,
         ).pack(side=tk.LEFT, padx=(2, 0))
 
         # ── Loop row: single explicit selector [OFF] [∞] [2x] [5x] [10x] ──
@@ -1402,9 +1450,9 @@ class NowPlayingPanel:
                 fg_color=COLORS["bg_light"],
                 hover_color=COLORS["bg_lighter"],
                 font=ctrl_btn_font,
-                corner_radius=4,
-                width=34 if key == "off" else 28,
-                height=22,
+                corner_radius=UI["button_corner_radius"],
+                width=34 if key == "off" else btn_w,
+                height=btn_h,
             )
             b.pack(side=tk.LEFT, padx=(2, 0))
             loop_preset_btns[key] = b
@@ -1516,14 +1564,16 @@ class NowPlayingPanel:
         row1 = ctk.CTkFrame(content, fg_color="transparent")
         row1.pack(fill=tk.X)
 
-        name = sound_info.get("name", "Unknown")[:22]
-        if len(sound_info.get("name", "")) > 22:
-            name += "…"
+        _nm = sound_info.get("name") or "Unknown"
+        _emo = sound_info.get("emoji")
+        name = (_nm[:22] + "…") if len(_nm) > 22 else _nm
+        if _emo:
+            name = f"{_emo}  {name}"
 
         name_label = ctk.CTkLabel(
             row1,
-            text=name,
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_md"], weight="bold"),
+            text=_fix_rtl_text(name),
+            font=self._font_md_bold,
             text_color=COLORS["text_primary"],
             anchor="w",
         )
@@ -1536,10 +1586,10 @@ class NowPlayingPanel:
             command=lambda: self._on_stop_click(sound_id),
             fg_color=COLORS["red"],
             hover_color=COLORS["red_hover"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_md"], weight="bold"),
-            corner_radius=6,
-            width=34,
-            height=28,
+            font=self._font_xs_bold,
+            corner_radius=UI["button_corner_radius"],
+            width=UI["icon_button"],
+            height=UI["compact_height"],
         )
         stop_btn.pack(side=tk.RIGHT, padx=(4, 0))
         _Tooltip.attach(stop_btn, "Stop this sound")
@@ -1553,7 +1603,7 @@ class NowPlayingPanel:
         time_label = ctk.CTkLabel(
             row2,
             text=f"{self._fmt_time(elapsed)} / {self._fmt_time(total)}",
-            font=ctk.CTkFont(family=FONTS["family_mono"], size=FONTS["size_xs"]),
+            font=self._font_mono_xs,
             text_color=COLORS["text_secondary"],
             anchor="w",
         )
@@ -1568,7 +1618,7 @@ class NowPlayingPanel:
         loop_label = ctk.CTkLabel(
             row2,
             text=loop_text,
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            font=self._font_xs,
             text_color=COLORS["green"] if is_looping else COLORS["text_muted"],
         )
         loop_label.pack(side=tk.RIGHT)
@@ -1588,8 +1638,8 @@ class NowPlayingPanel:
         row4 = ctk.CTkFrame(content, fg_color="transparent")
         row4.pack(fill=tk.X, pady=(6, 0))
 
-        btn_font = ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"])
-        btn_w, btn_h = 28, 24
+        btn_font = self._font_xs
+        btn_w, btn_h = UI["icon_button"], UI["compact_height"]
 
         # Play/Pause
         is_paused = sound_info.get("paused", False)
@@ -1600,7 +1650,7 @@ class NowPlayingPanel:
             fg_color=COLORS["blurple"],
             hover_color=COLORS["blurple_hover"],
             font=btn_font,
-            corner_radius=4,
+            corner_radius=UI["button_corner_radius"],
             width=btn_w,
             height=btn_h,
         )
@@ -1615,7 +1665,7 @@ class NowPlayingPanel:
             fg_color=COLORS["green"] if is_looping else COLORS["bg_light"],
             hover_color=COLORS["green_hover"] if is_looping else COLORS["bg_lighter"],
             font=btn_font,
-            corner_radius=4,
+            corner_radius=UI["button_corner_radius"],
             width=btn_w,
             height=btn_h,
         )
@@ -1630,7 +1680,7 @@ class NowPlayingPanel:
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
             font=btn_font,
-            corner_radius=4,
+            corner_radius=UI["button_corner_radius"],
             width=btn_w,
             height=btn_h,
         )
@@ -1644,7 +1694,7 @@ class NowPlayingPanel:
         ctk.CTkLabel(
             row4b,
             text="⚡",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            font=self._font_xs,
             text_color=COLORS["text_muted"],
             width=14,
         ).pack(side=tk.LEFT)
@@ -1664,9 +1714,9 @@ class NowPlayingPanel:
         speed_value_label = ctk.CTkLabel(
             row4b,
             text=f"{current_speed:.1f}x",
-            font=ctk.CTkFont(family=FONTS["family_mono"], size=FONTS["size_xs"]),
+            font=self._font_mono_xs,
             text_color=COLORS["text_muted"],
-            width=30,
+            width=34,
         )
 
         # Default-enable real-time pitch-preserving stretch on the mixer
@@ -1740,8 +1790,8 @@ class NowPlayingPanel:
             fg_color=COLORS["green"],
             hover_color=COLORS["green_hover"],
             font=btn_font,
-            corner_radius=4,
-            width=28,
+            corner_radius=UI["button_corner_radius"],
+            width=btn_w,
             height=btn_h,
         )
         pitch_btn.pack(side=tk.LEFT, padx=(4, 2))
@@ -1767,8 +1817,8 @@ class NowPlayingPanel:
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
             font=btn_font,
-            corner_radius=4,
-            width=24,
+            corner_radius=UI["button_corner_radius"],
+            width=btn_w,
             height=btn_h,
         )
         reset_speed_btn.pack(side=tk.LEFT, padx=(2, 0))
@@ -1781,7 +1831,7 @@ class NowPlayingPanel:
         ctk.CTkLabel(
             row5,
             text="🔊",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            font=self._font_xs,
             text_color=COLORS["text_muted"],
             width=18,
         ).pack(side=tk.LEFT)
@@ -1830,7 +1880,7 @@ class NowPlayingPanel:
         vol_value_label = ctk.CTkLabel(
             row5,
             text=f"{int(current_volume * 100)}%",
-            font=ctk.CTkFont(family=FONTS["family_mono"], size=FONTS["size_xs"]),
+            font=self._font_mono_xs,
             text_color=COLORS["text_muted"],
             width=34,
         )
@@ -1853,8 +1903,8 @@ class NowPlayingPanel:
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
             font=btn_font,
-            corner_radius=4,
-            width=22,
+            corner_radius=UI["button_corner_radius"],
+            width=btn_w,
             height=btn_h,
         )
         reset_vol_btn.pack(side=tk.LEFT, padx=(2, 0))
@@ -1870,7 +1920,7 @@ class NowPlayingPanel:
         ctk.CTkLabel(
             row6,
             text="⏱",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            font=self._font_xs,
             text_color=COLORS["text_muted"],
             width=18,
         ).pack(side=tk.LEFT)
@@ -1878,7 +1928,7 @@ class NowPlayingPanel:
         delay_label_prefix = ctk.CTkLabel(
             row6,
             text="Delay",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            font=self._font_xs,
             text_color=COLORS["text_muted"],
             width=34,
         )
@@ -1926,9 +1976,9 @@ class NowPlayingPanel:
         delay_value_label = ctk.CTkLabel(
             row6,
             text=f"{current_delay:.1f}s",
-            font=ctk.CTkFont(family=FONTS["family_mono"], size=FONTS["size_xs"]),
+            font=self._font_mono_xs,
             text_color=COLORS["text_muted"],
-            width=30,
+            width=34,
         )
         delay_value_label.pack(side=tk.LEFT)
 
@@ -1940,7 +1990,7 @@ class NowPlayingPanel:
         ctk.CTkLabel(
             row7,
             text="🔢",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            font=self._font_xs,
             text_color=COLORS["text_muted"],
             width=18,
         ).pack(side=tk.LEFT)
@@ -1948,7 +1998,7 @@ class NowPlayingPanel:
         loop_count_label = ctk.CTkLabel(
             row7,
             text="Loops",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            font=self._font_xs,
             text_color=COLORS["text_muted"],
             width=36,
         )
@@ -1967,9 +2017,9 @@ class NowPlayingPanel:
             fg_color=COLORS["blurple"] if loops < 0 else COLORS["bg_light"],
             hover_color=COLORS["blurple_hover"],
             font=btn_font,
-            corner_radius=4,
-            width=26,
-            height=22,
+            corner_radius=UI["button_corner_radius"],
+            width=btn_w,
+            height=btn_h,
         )
         inf_btn.pack(side=tk.LEFT, padx=(0, 3))
         _Tooltip.attach(delay_slider, "Pause between loops (0–10s)")
@@ -1992,9 +2042,9 @@ class NowPlayingPanel:
                 fg_color=COLORS["blurple"] if is_active else COLORS["bg_light"],
                 hover_color=COLORS["blurple_hover"] if is_active else COLORS["bg_lighter"],
                 font=btn_font,
-                corner_radius=4,
-                width=26,
-                height=22,
+                corner_radius=UI["button_corner_radius"],
+                width=btn_w,
+                height=btn_h,
             )
             btn.pack(side=tk.LEFT, padx=(0, 3))
             preset_loop_buttons[cnt] = btn
@@ -2048,6 +2098,18 @@ class NowPlayingPanel:
         # State bar
         if item.get("state_bar"):
             item["state_bar"].configure(fg_color=state_color)
+
+        # Name (emoji + real slot title) — refresh in case it changed.
+        if item.get("name_label") is not None:
+            _nm = sound_info.get("name") or "Unknown"
+            _emo = sound_info.get("emoji")
+            _disp = (_nm[:22] + "…") if len(_nm) > 22 else _nm
+            if _emo:
+                _disp = f"{_emo}  {_disp}"
+            try:
+                item["name_label"].configure(text=_fix_rtl_text(_disp))
+            except Exception:
+                pass
 
         # Progress
         item["progress"].set(sound_info.get("progress", 0))
@@ -2290,6 +2352,12 @@ class SoundboardApp:
         self.persons: List[Person] = []
         self._person_hub = None  # type: ignore[assignment]  # lazy PersonHub window
         self._person_popouts: Dict[int, Any] = {}  # id(person) -> PersonPopout
+        # ⭐ Favorites: one pseudo-person whose groups are the user's favorite
+        # FOLDERS. Rendered by the same PersonPanel machinery in its own
+        # window (FavoritesWindow) with a solo PersonContext. Persisted under
+        # config["favorites_board"]; replaced at _load_config.
+        self.favorites_person: Person = Person(name="Favorites", emoji="⭐")
+        self._favorites_win = None  # type: ignore[assignment]  # lazy FavoritesWindow
 
         # Live, user-configurable soundboard density: how many sound slots
         # appear per row. Replaces the fixed UI["grid_columns"] constant so the
@@ -2393,9 +2461,55 @@ class SoundboardApp:
         self._font_slot = ctk.CTkFont(
             family=FONTS["family_text"], size=FONTS["size_lg"], weight="bold"
         )
-        self._font_xs = ctk.CTkFont(size=FONTS["size_xs"])
+        self._font_xs = ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"])
+        self._font_xs_bold = ctk.CTkFont(
+            family=FONTS["family"], size=FONTS["size_xs"], weight="bold"
+        )
+        self._font_md_bold = ctk.CTkFont(
+            family=FONTS["family"], size=FONTS["size_md"], weight="bold"
+        )
+        self._font_lg_bold = ctk.CTkFont(
+            family=FONTS["family"], size=FONTS["size_lg"], weight="bold"
+        )
+        self._font_mono_xs = ctk.CTkFont(family=FONTS["family_mono"], size=FONTS["size_xs"])
+        self._font_mono_sm_bold = ctk.CTkFont(
+            family=FONTS["family_mono"], size=FONTS["size_sm"], weight="bold"
+        )
         self._font_xl_bold = ctk.CTkFont(
             family=FONTS["family"], size=FONTS["size_xl"], weight="bold"
+        )
+        # Shared widget kwargs (STYLE SPEC). Every dropdown / entry / checkbox
+        # in the main window splats one of these so they cannot drift apart.
+        # Override a key with dict(self.ENTRY_KW, height=32) - never by
+        # passing it twice.
+        self.DROPDOWN_KW = dict(
+            height=UI["control_height"],
+            corner_radius=UI["button_corner_radius"],
+            fg_color=COLORS["bg_dark"],
+            button_color=COLORS["bg_light"],
+            button_hover_color=COLORS["bg_lighter"],
+            dropdown_fg_color=COLORS["bg_medium"],
+            dropdown_hover_color=COLORS["bg_light"],
+            text_color=COLORS["text_primary"],
+            font=self._font_sm,
+            dropdown_font=self._font_sm,
+        )
+        self.ENTRY_KW = dict(
+            height=UI["control_height"],
+            corner_radius=UI["button_corner_radius"],
+            fg_color=COLORS["bg_dark"],
+            border_color=COLORS["border"],
+            text_color=COLORS["text_primary"],
+            placeholder_text_color=COLORS["text_muted"],
+            font=self._font_sm,
+        )
+        self.CHECKBOX_KW = dict(
+            corner_radius=4,
+            border_width=2,
+            fg_color=COLORS["blurple"],
+            hover_color=COLORS["blurple_hover"],
+            text_color=COLORS["text_primary"],
+            font=self._font_sm,
         )
         # Tab labels keep the same font size as before; the sidebar itself
         # is wider so titles fit without ellipsization on most names.
@@ -2481,6 +2595,20 @@ class SoundboardApp:
         self._scheduler_row_widgets: List[Any] = []
         self._scheduler_drag_index: Optional[int] = None
         self._scheduler_drag_target: Optional[int] = None
+
+        # ---- Universal PTT (all-apps mic gate) ----------------------------
+        # One global key push-to-talks EVERY app that uses the virtual cable
+        # as its mic (Zoom/WhatsApp/Slack/Discord on voice-activity). Managed
+        # from the 🌐 PTT button in the bottom status bar; the controller owns
+        # the key poll thread + cue beeps, these vars mirror it for the
+        # manager dialog + config persistence. MUST exist before _create_ui()
+        # (status bar reads them) and _load_config() (which sets them).
+        self.uptt = UniversalPTT()
+        self.uptt.on_state = self._on_uptt_state  # fired from the poll thread
+        self.uptt_enabled_var = tk.BooleanVar(value=False)
+        self.uptt_key_var = tk.StringVar(value="")
+        self.uptt_cues_var = tk.BooleanVar(value=True)
+        self.uptt_cue_volume_var = tk.DoubleVar(value=60.0)
 
         # Ensure images directory exists
         Path(IMAGES_DIR).mkdir(exist_ok=True)
@@ -3117,13 +3245,20 @@ class SoundboardApp:
             fg_color=COLORS["bg_medium"],
             hover_color=COLORS["bg_light"],
             text_color=COLORS["text_secondary"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            font=self._font_sm,
             corner_radius=UI["button_corner_radius"],
-            height=32,
+            height=UI["toolbar_height"],
             anchor="w",
             width=140,
         )
         self.toggle_audio_btn.pack(side=tk.LEFT)
+        # Pin the inner text label to a constant character width so flipping
+        # the chevron can never shrink it and leave stale glyph pixels behind
+        # (the "Audio Optionss" ghost seen at runtime).
+        try:
+            self.toggle_audio_btn._text_label.configure(width=16, anchor="w")
+        except Exception:
+            pass
 
         # Collapsible content frame - fixed height so the soundboard grid
         # below stays visible. Inside it lives a CTkScrollableFrame so the
@@ -3145,6 +3280,7 @@ class SoundboardApp:
         device_frame = ctk.CTkScrollableFrame(
             self.audio_options_frame,
             fg_color=COLORS["bg_dark"],
+            scrollbar_fg_color=COLORS["bg_dark"],
             scrollbar_button_color=COLORS["bg_light"],
             scrollbar_button_hover_color=COLORS["bg_lighter"],
         )
@@ -3159,9 +3295,51 @@ class SoundboardApp:
             (i, d["name"]) for i, d in enumerate(devices) if d["max_output_channels"] > 0
         ]
 
+        # ==============================================================
+        # Card helper - tiny inline factory so every section has the same
+        # look (rounded card, header with emoji + bold title, optional
+        # subtitle). Returns the inner body frame to pack rows into.
+        # Title = "<emoji> Title" (single space), sm bold text_primary;
+        # subtitle = xs text_muted.
+        # ==============================================================
+        def _make_card(parent, title, subtitle="", title_color=None):
+            card = ctk.CTkFrame(
+                parent,
+                fg_color=COLORS["bg_medium"],
+                corner_radius=UI["corner_radius"],
+            )
+            card.pack(fill=tk.X, pady=(10, 0))
+            header = ctk.CTkFrame(card, fg_color="transparent")
+            header.pack(fill=tk.X, padx=12, pady=(8, 2))
+            ctk.CTkLabel(
+                header,
+                text=title,
+                font=self._font_sm_bold,
+                text_color=title_color or COLORS["text_primary"],
+            ).pack(side=tk.LEFT)
+            if subtitle:
+                ctk.CTkLabel(
+                    header,
+                    text=subtitle,
+                    font=self._font_xs,
+                    text_color=COLORS["text_muted"],
+                ).pack(side=tk.LEFT, padx=(8, 0))
+            body = ctk.CTkFrame(card, fg_color="transparent")
+            body.pack(fill=tk.X, padx=12, pady=(2, 10))
+            return body
+
+        # ============================================================
+        # CARD: Devices - microphone in, virtual cable out
+        # ============================================================
+        dev_body = _make_card(
+            device_frame,
+            "🎛 Devices",
+            "(microphone in → virtual cable out to Discord)",
+        )
+
         # Device selection row
-        device_row = ctk.CTkFrame(device_frame, fg_color="transparent")
-        device_row.pack(fill=tk.X, pady=(0, 10))
+        device_row = ctk.CTkFrame(dev_body, fg_color="transparent")
+        device_row.pack(fill=tk.X)
 
         # Input device selector
         input_frame = ctk.CTkFrame(device_row, fg_color="transparent")
@@ -3170,7 +3348,7 @@ class SoundboardApp:
         ctk.CTkLabel(
             input_frame,
             text="🎤 Microphone",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"], weight="bold"),
+            font=self._font_sm,
             text_color=COLORS["text_secondary"],
         ).pack(anchor="w")
 
@@ -3180,15 +3358,8 @@ class SoundboardApp:
             variable=self.input_var,
             values=[f"{i}: {name}" for i, name in input_devices],
             width=280,
-            height=32,
-            fg_color=COLORS["bg_medium"],
             border_color=COLORS["border"],
-            button_color=COLORS["bg_light"],
-            button_hover_color=COLORS["bg_lighter"],
-            dropdown_fg_color=COLORS["bg_medium"],
-            dropdown_hover_color=COLORS["bg_light"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
-            corner_radius=UI["button_corner_radius"],
+            **self.DROPDOWN_KW,
         )
         if input_devices:
             self.input_combo.set(f"{input_devices[0][0]}: {input_devices[0][1]}")
@@ -3201,7 +3372,7 @@ class SoundboardApp:
         ctk.CTkLabel(
             output_frame,
             text="🔊 Virtual Cable Output",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"], weight="bold"),
+            font=self._font_sm,
             text_color=COLORS["text_secondary"],
         ).pack(anchor="w")
 
@@ -3211,15 +3382,8 @@ class SoundboardApp:
             variable=self.output_var,
             values=[f"{i}: {name}" for i, name in output_devices],
             width=280,
-            height=32,
-            fg_color=COLORS["bg_medium"],
             border_color=COLORS["border"],
-            button_color=COLORS["bg_light"],
-            button_hover_color=COLORS["bg_lighter"],
-            dropdown_fg_color=COLORS["bg_medium"],
-            dropdown_hover_color=COLORS["bg_light"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
-            corner_radius=UI["button_corner_radius"],
+            **self.DROPDOWN_KW,
         )
 
         # Auto-select virtual cable if found
@@ -3238,46 +3402,13 @@ class SoundboardApp:
         self.input_var.trace_add("write", lambda *_: self._update_status_bar())
         self.output_var.trace_add("write", lambda *_: self._update_status_bar())
 
-        # ==============================================================
-        # Card helper - tiny inline factory so every section has the same
-        # look (rounded card, header with emoji + bold title, optional
-        # subtitle). Returns the inner body frame to pack rows into.
-        # ==============================================================
-        def _make_card(parent, title, subtitle="", title_color=None):
-            card = ctk.CTkFrame(
-                parent,
-                fg_color=COLORS["bg_medium"],
-                corner_radius=UI["corner_radius"],
-            )
-            card.pack(fill=tk.X, pady=(10, 0))
-            header = ctk.CTkFrame(card, fg_color="transparent")
-            header.pack(fill=tk.X, padx=12, pady=(8, 2))
-            ctk.CTkLabel(
-                header,
-                text=title,
-                font=ctk.CTkFont(
-                    family=FONTS["family"], size=FONTS["size_sm"], weight="bold"
-                ),
-                text_color=title_color or COLORS["text_primary"],
-            ).pack(side=tk.LEFT)
-            if subtitle:
-                ctk.CTkLabel(
-                    header,
-                    text=subtitle,
-                    font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
-                    text_color=COLORS["text_muted"],
-                ).pack(side=tk.LEFT, padx=(8, 0))
-            body = ctk.CTkFrame(card, fg_color="transparent")
-            body.pack(fill=tk.X, padx=12, pady=(2, 10))
-            return body
-
         # ============================================================
         # CARD: Stream control - the big start/stop button + quick
         # mic/monitor toggles. The most-used controls live up top.
         # ============================================================
         stream_card = _make_card(
             device_frame,
-            "🎚  Stream",
+            "🎚 Stream",
             "(start the audio stream to Discord)",
         )
         stream_row = ctk.CTkFrame(stream_card, fg_color="transparent")
@@ -3289,9 +3420,9 @@ class SoundboardApp:
             command=self._toggle_stream,
             fg_color=COLORS["green"],
             hover_color=COLORS["green_hover"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_md"], weight="bold"),
+            font=self._font_md_bold,
             corner_radius=UI["button_corner_radius"],
-            height=36,
+            height=UI["toolbar_height"],
             width=140,
         )
         self.toggle_btn.pack(side=tk.LEFT, padx=(0, 16))
@@ -3299,13 +3430,12 @@ class SoundboardApp:
         self.mic_mute_var = tk.BooleanVar(value=False)
         self.mic_mute_checkbox = ctk.CTkCheckBox(
             stream_row,
-            text="Mute Mic",
+            text="Mute mic",
             variable=self.mic_mute_var,
             command=self._toggle_mic_mute,
-            fg_color=COLORS["red"],
-            hover_color=COLORS["red_hover"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
-            corner_radius=4,
+            # Red check = "mic is muted" warning state (the one semantic
+            # exception to the blurple checkbox accent).
+            **dict(self.CHECKBOX_KW, fg_color=COLORS["red"], hover_color=COLORS["red_hover"]),
         )
         self.mic_mute_checkbox.pack(side=tk.LEFT, padx=(0, 16))
 
@@ -3316,28 +3446,30 @@ class SoundboardApp:
         self.duck_mic_var = tk.BooleanVar(value=True)
         self.duck_mic_checkbox = ctk.CTkCheckBox(
             stream_row,
-            text="🤫 Mic muted during sounds",
+            text="Mic muted during sounds",
             variable=self.duck_mic_var,
             command=self._toggle_duck_mic,
-            fg_color=COLORS["blurple"],
-            hover_color=COLORS["blurple_hover"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
-            corner_radius=4,
+            **self.CHECKBOX_KW,
         )
         self.duck_mic_checkbox.pack(side=tk.LEFT, padx=(0, 16))
+        _Tooltip.attach(
+            self.duck_mic_checkbox,
+            "🤫 Auto-mutes your live mic while a sound plays "
+            "(hold your own PTT key to talk over it)",
+        )
 
         self.monitor_var = tk.BooleanVar(value=True)
         self.monitor_checkbox = ctk.CTkCheckBox(
             stream_row,
-            text="🔊 Monitor (hear sounds locally)",
+            text="Monitor (hear sounds locally)",
             variable=self.monitor_var,
             command=self._toggle_monitor,
-            fg_color=COLORS["green"],
-            hover_color=COLORS["green_hover"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
-            corner_radius=4,
+            **self.CHECKBOX_KW,
         )
         self.monitor_checkbox.pack(side=tk.LEFT)
+        _Tooltip.attach(
+            self.monitor_checkbox, "🔊 Also play sounds on your own speakers / headphones"
+        )
 
         # ============================================================
         # CARD: Test Output - hear/record what Discord actually receives
@@ -3345,9 +3477,8 @@ class SoundboardApp:
         # ============================================================
         test_body = _make_card(
             device_frame,
-            "🎧  Test Output (Mic Test)",
-            "(plays / records the EXACT signal Discord receives)",
-            title_color=COLORS["blurple"],
+            "🎧 Test Output (Mic Test)",
+            "(plays / records the exact signal Discord receives)",
         )
 
         # Row 1: Live test + PTT-hold toggles
@@ -3357,26 +3488,20 @@ class SoundboardApp:
         self.test_live_var = tk.BooleanVar(value=False)
         self.test_live_checkbox = ctk.CTkCheckBox(
             test_row1,
-            text="🎧 Live Test (hear what Discord hears)",
+            text="Live test (hear what Discord hears)",
             variable=self.test_live_var,
             command=self._toggle_test_live,
-            fg_color=COLORS["blurple"],
-            hover_color=COLORS["blurple_hover"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
-            corner_radius=4,
+            **self.CHECKBOX_KW,
         )
         self.test_live_checkbox.pack(side=tk.LEFT, padx=(0, 16))
 
         self.test_ptt_var = tk.BooleanVar(value=True)
         self.test_ptt_checkbox = ctk.CTkCheckBox(
             test_row1,
-            text="🎙 Hold PTT during test",
+            text="Hold PTT during test",
             variable=self.test_ptt_var,
             command=self._toggle_test_ptt,
-            fg_color=COLORS["red"],
-            hover_color=COLORS["red_hover"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
-            corner_radius=4,
+            **self.CHECKBOX_KW,
         )
         self.test_ptt_checkbox.pack(side=tk.LEFT)
 
@@ -3386,8 +3511,8 @@ class SoundboardApp:
 
         ctk.CTkLabel(
             test_row2,
-            text="Duration:",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            text="Duration",
+            font=self._font_sm,
             text_color=COLORS["text_secondary"],
         ).pack(side=tk.LEFT, padx=(0, 6))
 
@@ -3397,11 +3522,7 @@ class SoundboardApp:
             values=["3s", "5s", "10s", "15s", "30s"],
             variable=self.test_duration_var,
             width=70,
-            height=28,
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
-            fg_color=COLORS["bg_dark"],
-            button_color=COLORS["bg_dark"],
-            button_hover_color=COLORS["bg_light"],
+            **self.DROPDOWN_KW,
         )
         self.test_duration_menu.pack(side=tk.LEFT, padx=(0, 10))
 
@@ -3411,7 +3532,7 @@ class SoundboardApp:
             command=self._toggle_test_record,
             fg_color=COLORS["red"],
             hover_color=COLORS["red_hover"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"], weight="bold"),
+            font=self._font_sm_bold,
             corner_radius=UI["button_corner_radius"],
             height=28,
             width=140,
@@ -3421,7 +3542,7 @@ class SoundboardApp:
         self.test_status_label = ctk.CTkLabel(
             test_row2,
             text="",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            font=self._font_sm,
             text_color=COLORS["text_muted"],
         )
         self.test_status_label.pack(side=tk.LEFT)
@@ -3433,7 +3554,7 @@ class SoundboardApp:
         # ============================================================
         # CARD: Volume - mic + master sliders side by side
         # ============================================================
-        vol_body = _make_card(device_frame, "🎚  Volume")
+        vol_body = _make_card(device_frame, "🔊 Volume")
 
         # Mic volume row
         mic_row = ctk.CTkFrame(vol_body, fg_color="transparent")
@@ -3444,7 +3565,7 @@ class SoundboardApp:
             text="🎤 Mic",
             width=70,
             anchor="w",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            font=self._font_sm,
             text_color=COLORS["text_secondary"],
         ).pack(side=tk.LEFT, padx=(0, 8))
 
@@ -3455,7 +3576,7 @@ class SoundboardApp:
             to=150,
             variable=self.mic_volume_var,
             command=self._update_mic_volume,
-            height=16,
+            height=14,
             fg_color=COLORS["bg_light"],
             progress_color=COLORS["blurple"],
             button_color=COLORS["text_primary"],
@@ -3466,7 +3587,7 @@ class SoundboardApp:
         self.mic_volume_label = ctk.CTkLabel(
             mic_row,
             text="100%",
-            font=ctk.CTkFont(family=FONTS["family_mono"], size=FONTS["size_xs"]),
+            font=self._font_mono_xs,
             text_color=COLORS["text_muted"],
             width=40,
         )
@@ -3482,7 +3603,7 @@ class SoundboardApp:
             text="🎵 Sounds",
             width=70,
             anchor="w",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            font=self._font_sm,
             text_color=COLORS["text_secondary"],
         ).pack(side=tk.LEFT, padx=(0, 8))
 
@@ -3493,7 +3614,7 @@ class SoundboardApp:
             to=150,
             variable=self.master_volume_var,
             command=self._update_master_volume,
-            height=16,
+            height=14,
             fg_color=COLORS["bg_light"],
             progress_color=COLORS["green"],
             button_color=COLORS["text_primary"],
@@ -3504,7 +3625,7 @@ class SoundboardApp:
         self.master_volume_label = ctk.CTkLabel(
             master_row,
             text="100%",
-            font=ctk.CTkFont(family=FONTS["family_mono"], size=FONTS["size_xs"]),
+            font=self._font_mono_xs,
             text_color=COLORS["text_muted"],
             width=40,
         )
@@ -3516,7 +3637,7 @@ class SoundboardApp:
         # ============================================================
         ptt_body = _make_card(
             device_frame,
-            "⌨  Push-to-Talk",
+            "⌨ Push-to-Talk",
             "(auto-presses Discord's PTT key while sounds play)",
         )
 
@@ -3526,13 +3647,10 @@ class SoundboardApp:
         self.ptt_enabled_var = tk.BooleanVar(value=False)
         self.ptt_checkbox = ctk.CTkCheckBox(
             ptt_top,
-            text="Enable Push-to-Talk",
+            text="Enable push-to-talk",
             variable=self.ptt_enabled_var,
             command=self._toggle_ptt_visibility,
-            fg_color=COLORS["blurple"],
-            hover_color=COLORS["blurple_hover"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
-            corner_radius=4,
+            **self.CHECKBOX_KW,
         )
         self.ptt_checkbox.pack(side=tk.LEFT)
 
@@ -3542,8 +3660,8 @@ class SoundboardApp:
 
         ctk.CTkLabel(
             self.ptt_frame,
-            text="PTT Key:",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            text="PTT key",
+            font=self._font_sm,
             text_color=COLORS["text_secondary"],
         ).pack(side=tk.LEFT, padx=(0, 8))
 
@@ -3552,11 +3670,7 @@ class SoundboardApp:
             self.ptt_frame,
             textvariable=self.ptt_key_var,
             width=120,
-            height=28,
-            fg_color=COLORS["bg_dark"],
-            border_color=COLORS["border"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
-            corner_radius=UI["button_corner_radius"],
+            **self.ENTRY_KW,
         )
         self.ptt_entry.pack(side=tk.LEFT, padx=(0, 8))
 
@@ -3566,7 +3680,7 @@ class SoundboardApp:
             command=self._record_ptt_key,
             fg_color=COLORS["blurple"],
             hover_color=COLORS["blurple_hover"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            font=self._font_sm,
             corner_radius=UI["button_corner_radius"],
             height=28,
             width=120,
@@ -3579,7 +3693,7 @@ class SoundboardApp:
             command=self._clear_ptt_key,
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            font=self._font_sm,
             corner_radius=UI["button_corner_radius"],
             height=28,
             width=60,
@@ -3589,7 +3703,7 @@ class SoundboardApp:
         self.ptt_status_label = ctk.CTkLabel(
             self.ptt_frame,
             text="",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            font=self._font_xs,
             text_color=COLORS["text_muted"],
         )
         self.ptt_status_label.pack(side=tk.LEFT, padx=10)
@@ -3600,7 +3714,7 @@ class SoundboardApp:
         # ============================================================
         hover_body = _make_card(
             device_frame,
-            "Hover Preview",
+            "🖱 Hover Preview",
             "(press the binding while hovering a sound to play it locally)",
         )
 
@@ -3609,8 +3723,8 @@ class SoundboardApp:
 
         ctk.CTkLabel(
             hover_row,
-            text="Binding:",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            text="Binding",
+            font=self._font_sm,
             text_color=COLORS["text_secondary"],
         ).pack(side=tk.LEFT, padx=(0, 8))
 
@@ -3618,11 +3732,7 @@ class SoundboardApp:
             hover_row,
             textvariable=self.hover_preview_key_var,
             width=120,
-            height=28,
-            fg_color=COLORS["bg_dark"],
-            border_color=COLORS["border"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
-            corner_radius=UI["button_corner_radius"],
+            **self.ENTRY_KW,
         )
         self.hover_preview_entry.pack(side=tk.LEFT, padx=(0, 8))
         self.hover_preview_entry.bind("<FocusOut>", lambda _e: self._apply_hover_preview_key())
@@ -3630,14 +3740,14 @@ class SoundboardApp:
 
         self.hover_preview_record_btn = ctk.CTkButton(
             hover_row,
-            text="Record Key",
+            text="⏺ Record Key",
             command=self._record_hover_preview_key,
             fg_color=COLORS["blurple"],
             hover_color=COLORS["blurple_hover"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            font=self._font_sm,
             corner_radius=UI["button_corner_radius"],
             height=28,
-            width=110,
+            width=120,
         )
         self.hover_preview_record_btn.pack(side=tk.LEFT, padx=(0, 8))
 
@@ -3647,7 +3757,7 @@ class SoundboardApp:
             command=self._clear_hover_preview_key,
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            font=self._font_sm,
             corner_radius=UI["button_corner_radius"],
             height=28,
             width=60,
@@ -3657,7 +3767,7 @@ class SoundboardApp:
         self.hover_preview_status_label = ctk.CTkLabel(
             hover_row,
             text="",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            font=self._font_xs,
             text_color=COLORS["text_muted"],
         )
         self.hover_preview_status_label.pack(side=tk.LEFT, padx=10)
@@ -3668,8 +3778,8 @@ class SoundboardApp:
         # ============================================================
         ns_body = _make_card(
             device_frame,
-            "🛡  Mic Processing",
-            "(Krisp replacement - bypassed when using a virtual cable)",
+            "🛡 Mic Processing",
+            "(Krisp replacement — cleans the live mic before it reaches the cable)",
         )
 
         ns_row = ctk.CTkFrame(ns_body, fg_color="transparent")
@@ -3678,55 +3788,48 @@ class SoundboardApp:
         self.noise_suppress_var = tk.BooleanVar(value=False)
         self.noise_suppress_checkbox = ctk.CTkCheckBox(
             ns_row,
-            text="Noise Suppression",
+            text="Noise suppression",
             variable=self.noise_suppress_var,
             command=self._toggle_noise_suppression,
-            fg_color=COLORS["blurple"],
-            hover_color=COLORS["blurple_hover"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
-            corner_radius=4,
+            **self.CHECKBOX_KW,
         )
         self.noise_suppress_checkbox.pack(side=tk.LEFT, padx=(0, 12))
 
-        # Engine selector: DeepFilterNet (Krisp-class DNN) vs RNNoise (light).
-        # Only offer engines that can actually load on this machine.
-        self._ns_backend_labels = {
-            "deepfilternet": "Best (DeepFilterNet)",
-            "rnnoise": "Light (RNNoise)",
-        }
+        # Engine selector - only engines that can actually load on this machine
+        # (Classic + Gate are pure NumPy, so there are always at least two).
+        # Labels/order come from audio.py so the GUI and engine catalogue can't
+        # drift apart.
+        self._ns_backend_labels = {k: NS_BACKEND_LABELS[k] for k in ns_available_backends()}
         self._ns_label_to_backend = {v: k for k, v in self._ns_backend_labels.items()}
-        _ns_values = []
-        if DEEPFILTERNET_AVAILABLE:
-            _ns_values.append(self._ns_backend_labels["deepfilternet"])
-        if RNNOISE_AVAILABLE:
-            _ns_values.append(self._ns_backend_labels["rnnoise"])
-        self.ns_backend_var = tk.StringVar(
-            value=_ns_values[0] if _ns_values else "Light (RNNoise)"
+        _ns_values = list(self._ns_backend_labels.values())
+        self.ns_backend_var = tk.StringVar(value=_ns_values[0] if _ns_values else "")
+        self.ns_backend_menu = ctk.CTkOptionMenu(
+            ns_row,
+            values=_ns_values,
+            variable=self.ns_backend_var,
+            command=self._on_ns_backend_change,
+            width=215,
+            **self.DROPDOWN_KW,
         )
-        if len(_ns_values) > 1:
-            self.ns_backend_menu = ctk.CTkOptionMenu(
-                ns_row,
-                values=_ns_values,
-                variable=self.ns_backend_var,
-                command=self._on_ns_backend_change,
-                width=170,
-                font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
-                fg_color=COLORS["bg_light"],
-                button_color=COLORS["blurple"],
-                button_hover_color=COLORS["blurple_hover"],
-            )
-            self.ns_backend_menu.pack(side=tk.LEFT, padx=(0, 12))
+        self.ns_backend_menu.pack(side=tk.LEFT, padx=(0, 12))
+
+        # Strength on its own row so the slider gets the full card width
+        # (same label column as the Volume card).
+        ns_strength_row = ctk.CTkFrame(ns_body, fg_color="transparent")
+        ns_strength_row.pack(fill=tk.X, pady=(6, 0))
 
         ctk.CTkLabel(
-            ns_row,
-            text="Strength:",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            ns_strength_row,
+            text="Strength",
+            width=70,
+            anchor="w",
+            font=self._font_sm,
             text_color=COLORS["text_secondary"],
-        ).pack(side=tk.LEFT, padx=(0, 6))
+        ).pack(side=tk.LEFT, padx=(0, 8))
 
         self.ns_strength_var = tk.DoubleVar(value=85)
         self.ns_strength_slider = ctk.CTkSlider(
-            ns_row,
+            ns_strength_row,
             from_=0,
             to=100,
             variable=self.ns_strength_var,
@@ -3739,6 +3842,32 @@ class SoundboardApp:
         )
         self.ns_strength_slider.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
+        # Row 2: low-cut toggle + live engine status (which engine is really
+        # running, its cost per block, and any fallback note - so "the filter
+        # does nothing" can never be silent again).
+        ns_row2 = ctk.CTkFrame(ns_body, fg_color="transparent")
+        ns_row2.pack(fill=tk.X, pady=(6, 0))
+        self.ns_lowcut_var = tk.BooleanVar(value=False)
+        self.ns_lowcut_checkbox = ctk.CTkCheckBox(
+            ns_row2,
+            text="Low-cut 80 Hz (rumble / thumps)",
+            variable=self.ns_lowcut_var,
+            command=self._toggle_ns_lowcut,
+            **self.CHECKBOX_KW,
+        )
+        self.ns_lowcut_checkbox.pack(side=tk.LEFT, padx=(0, 12))
+        self.ns_status_label = ctk.CTkLabel(
+            ns_row2,
+            text="",
+            font=self._font_xs,
+            text_color=COLORS["text_muted"],
+            anchor="w",
+            justify="left",
+        )
+        self.ns_status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self._ns_status_text = None
+        self.root.after(1200, self._refresh_ns_status)
+
         # NVIDIA Broadcast hint: if its virtual mic is installed, recommend
         # selecting it as Input for GPU-accelerated (top-tier) denoise; the
         # built-in engine can then be turned off. Text is filled in by
@@ -3746,7 +3875,7 @@ class SoundboardApp:
         self.ns_broadcast_hint = ctk.CTkLabel(
             ns_body,
             text="",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            font=self._font_xs,
             text_color=COLORS["text_muted"],
             anchor="w",
             justify="left",
@@ -3762,7 +3891,7 @@ class SoundboardApp:
         # ============================================================
         vc_body = _make_card(
             device_frame,
-            "🎙  Voice Changer",
+            "🎙 Voice Changer",
             "(modulates your live mic — Discord hears it)",
         )
 
@@ -3776,10 +3905,7 @@ class SoundboardApp:
             text="Enable",
             variable=self.voice_enabled_var,
             command=self._on_voice_master_toggle,
-            fg_color=COLORS["blurple"],
-            hover_color=COLORS["blurple_hover"],
-            font=self._font_sm,
-            corner_radius=4,
+            **self.CHECKBOX_KW,
         )
         self.voice_enabled_checkbox.pack(side=tk.LEFT, padx=(0, 12))
 
@@ -3787,13 +3913,13 @@ class SoundboardApp:
             vc_top,
             text="⚙ Advanced ▸",
             width=118,
-            height=26,
+            height=UI["control_height"],
             command=self._toggle_voice_advanced,
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
             text_color=COLORS["text_secondary"],
             font=self._font_xs,
-            corner_radius=6,
+            corner_radius=UI["button_corner_radius"],
         )
         self._voice_advanced_btn.pack(side=tk.RIGHT)
 
@@ -3822,13 +3948,13 @@ class SoundboardApp:
             btn = ctk.CTkButton(
                 preset_grid,
                 text=name,
-                height=26,
+                height=UI["control_height"],
                 command=lambda n=name: self._apply_voice_preset(n),
                 fg_color=COLORS["bg_light"],
                 hover_color=COLORS["bg_lighter"],
                 text_color=COLORS["text_primary"],
                 font=self._font_xs,
-                corner_radius=6,
+                corner_radius=UI["button_corner_radius"],
             )
             btn.grid(row=r, column=c, padx=3, pady=3, sticky="ew")
             self._voice_preset_buttons[name] = btn
@@ -3848,11 +3974,8 @@ class SoundboardApp:
             text="Pitch",
             variable=self.voice_pitch_enabled_var,
             command=self._on_voice_pitch_toggle,
-            fg_color=COLORS["blurple"],
-            hover_color=COLORS["blurple_hover"],
-            font=self._font_sm,
-            corner_radius=4,
             width=70,
+            **self.CHECKBOX_KW,
         ).pack(side=tk.LEFT, padx=(0, 10))
         self.voice_pitch_var = tk.DoubleVar(value=self.voice_fx.pitch_semitones)
         self.voice_pitch_slider = ctk.CTkSlider(
@@ -3888,14 +4011,14 @@ class SoundboardApp:
         fx_grid = ctk.CTkFrame(self._voice_advanced_frame, fg_color="transparent")
         fx_grid.pack(fill=tk.X)
         effect_toggles = [
-            ("robot", "🤖 Robot"),
-            ("radio", "📻 Radio"),
-            ("echo", "🔁 Echo"),
-            ("reverb", "🏛 Reverb"),
-            ("chorus", "🌊 Chorus"),
-            ("drive", "🎸 Drive"),
-            ("crush", "🕹 Bitcrush"),
-            ("tremolo", "📳 Tremolo"),
+            ("robot", "Robot"),
+            ("radio", "Radio"),
+            ("echo", "Echo"),
+            ("reverb", "Reverb"),
+            ("chorus", "Chorus"),
+            ("drive", "Drive"),
+            ("crush", "Bitcrush"),
+            ("tremolo", "Tremolo"),
         ]
         self.voice_fx_toggle_vars: Dict[str, tk.BooleanVar] = {}
         fx_per_row = 4
@@ -3908,10 +4031,7 @@ class SoundboardApp:
                 text=label,
                 variable=var,
                 command=lambda k=key: self._on_voice_effect_toggle(k),
-                fg_color=COLORS["blurple"],
-                hover_color=COLORS["blurple_hover"],
-                font=self._font_xs,
-                corner_radius=4,
+                **dict(self.CHECKBOX_KW, font=self._font_xs),
             ).grid(row=r, column=c, padx=4, pady=3, sticky="w")
 
         # Output level row.
@@ -3919,7 +4039,7 @@ class SoundboardApp:
         gain_row.pack(fill=tk.X, pady=(10, 0))
         ctk.CTkLabel(
             gain_row,
-            text="Output:",
+            text="Output",
             font=self._font_sm,
             text_color=COLORS["text_secondary"],
         ).pack(side=tk.LEFT, padx=(0, 6))
@@ -3943,9 +4063,8 @@ class SoundboardApp:
         # ============================================================
         rec_body = _make_card(
             device_frame,
-            "🔴  Call Recording",
-            "(use the ● Rec button in the action bar to start)",
-            title_color=COLORS["red"],
+            "🔴 Call Recording",
+            "(use the ⏺ Rec button in the action bar to start)",
         )
 
         rec_path_row = ctk.CTkFrame(rec_body, fg_color="transparent")
@@ -3957,16 +4076,13 @@ class SoundboardApp:
             text="Include mic",
             variable=self.recording_include_mic_var,
             command=self._save_config,
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
-            text_color=COLORS["text_secondary"],
-            checkbox_height=18,
-            checkbox_width=18,
+            **self.CHECKBOX_KW,
         ).pack(side=tk.LEFT, padx=(0, 12))
 
         ctk.CTkLabel(
             rec_path_row,
-            text="Save to:",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            text="Save to",
+            font=self._font_sm,
             text_color=COLORS["text_secondary"],
         ).pack(side=tk.LEFT, padx=(0, 6))
 
@@ -3975,8 +4091,7 @@ class SoundboardApp:
         self.recording_dir_entry = ctk.CTkEntry(
             rec_path_row,
             textvariable=self.recording_dir_var,
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
-            height=28,
+            **self.ENTRY_KW,
         )
         self.recording_dir_entry.pack(side=tk.LEFT, padx=(0, 6), fill=tk.X, expand=True)
         self.recording_dir_entry.bind("<FocusOut>", lambda e: self._save_config())
@@ -3987,7 +4102,7 @@ class SoundboardApp:
             command=self._browse_recording_dir,
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            font=self._font_sm,
             corner_radius=UI["button_corner_radius"],
             height=28,
             width=80,
@@ -3999,7 +4114,7 @@ class SoundboardApp:
             command=self._open_recording_dir,
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            font=self._font_sm,
             corner_radius=UI["button_corner_radius"],
             height=28,
             width=60,
@@ -4011,7 +4126,7 @@ class SoundboardApp:
             command=self._open_sounds_dir,
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            font=self._font_sm,
             corner_radius=UI["button_corner_radius"],
             height=28,
             width=110,
@@ -4021,9 +4136,10 @@ class SoundboardApp:
             rec_path_row,
             text="✎ Edit a recording",
             command=self._edit_a_recording,
-            fg_color=COLORS["blurple"],
-            hover_color=COLORS["blurple_hover"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"], weight="bold"),
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_lighter"],
+            text_color=COLORS["text_primary"],
+            font=self._font_sm,
             corner_radius=UI["button_corner_radius"],
             height=28,
             width=150,
@@ -4041,7 +4157,7 @@ class SoundboardApp:
         # ============================================================
         # CARD: App preferences
         # ============================================================
-        app_body = _make_card(device_frame, "⚙  App")
+        app_body = _make_card(device_frame, "⚙ App")
         app_row = ctk.CTkFrame(app_body, fg_color="transparent")
         app_row.pack(fill=tk.X)
 
@@ -4051,23 +4167,17 @@ class SoundboardApp:
             text="Auto-start stream on launch",
             variable=self.auto_start_var,
             command=self._save_config,
-            fg_color=COLORS["blurple"],
-            hover_color=COLORS["blurple_hover"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
-            corner_radius=4,
+            **self.CHECKBOX_KW,
         )
         self.auto_start_checkbox.pack(side=tk.LEFT, padx=(0, 16))
 
         self.minimize_to_tray_var = tk.BooleanVar(value=False)
         self.minimize_to_tray_checkbox = ctk.CTkCheckBox(
             app_row,
-            text="🔻 Minimize to tray",
+            text="Minimize to tray",
             variable=self.minimize_to_tray_var,
             command=self._on_toggle_tray_setting,
-            fg_color=COLORS["blurple"],
-            hover_color=COLORS["blurple_hover"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
-            corner_radius=4,
+            **self.CHECKBOX_KW,
         )
         self.minimize_to_tray_checkbox.pack(side=tk.LEFT)
 
@@ -4076,13 +4186,10 @@ class SoundboardApp:
         self.start_with_windows_var = tk.BooleanVar(value=_windows_startup_is_enabled())
         self.start_with_windows_checkbox = ctk.CTkCheckBox(
             app_row,
-            text="🪟 Start with Windows",
+            text="Start with Windows",
             variable=self.start_with_windows_var,
             command=self._on_toggle_start_with_windows,
-            fg_color=COLORS["blurple"],
-            hover_color=COLORS["blurple_hover"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
-            corner_radius=4,
+            **self.CHECKBOX_KW,
         )
         self.start_with_windows_checkbox.pack(side=tk.LEFT, padx=(16, 0))
 
@@ -4094,7 +4201,7 @@ class SoundboardApp:
             text="Scroll speed",
             width=90,
             anchor="w",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            font=self._font_sm,
             text_color=COLORS["text_secondary"],
         ).pack(side=tk.LEFT, padx=(0, 8))
 
@@ -4105,7 +4212,7 @@ class SoundboardApp:
             number_of_steps=49,
             variable=self.scroll_speed_var,
             command=self._update_scroll_speed_label,
-            height=16,
+            height=14,
             fg_color=COLORS["bg_light"],
             progress_color=COLORS["blurple"],
             button_color=COLORS["text_primary"],
@@ -4116,7 +4223,7 @@ class SoundboardApp:
         self._scroll_speed_label = ctk.CTkLabel(
             scroll_row,
             text=f"{self._get_scroll_speed_multiplier()}x",
-            font=ctk.CTkFont(family=FONTS["family_mono"], size=FONTS["size_xs"]),
+            font=self._font_mono_xs,
             text_color=COLORS["text_muted"],
             width=36,
         )
@@ -4208,7 +4315,7 @@ class SoundboardApp:
                         pass
                     self._recording_after_id = None
                 self.record_btn.configure(
-                    text="● Rec",
+                    text="⏺ Rec",
                     fg_color=COLORS["red"],
                     hover_color=COLORS["red_hover"],
                 )
@@ -4296,7 +4403,7 @@ class SoundboardApp:
             finally:
                 self.quick_sound_recorder = None
                 self.quick_record_btn.configure(
-                    text="Rec Sound",
+                    text="⏺ Rec Sound",
                     fg_color=COLORS["bg_light"],
                     hover_color=COLORS["bg_lighter"],
                 )
@@ -4376,12 +4483,14 @@ class SoundboardApp:
         if self.audio_options_expanded.get():
             self.audio_options_frame.pack_forget()
             self.toggle_audio_btn.configure(text="▶ Audio Options")
+            self._force_draw_subtree(self.toggle_audio_btn)
             self.audio_options_expanded.set(False)
         else:
             self.audio_options_frame.pack(
                 fill=tk.X, pady=(0, 8), after=self.toggle_audio_btn.master
             )
             self.toggle_audio_btn.configure(text="▼ Audio Options")
+            self._force_draw_subtree(self.toggle_audio_btn)
             self.audio_options_expanded.set(True)
             # Paint the freshly-shown panel immediately so the window's own
             # resize-defer (armed by the layout growing) can't leave it blank.
@@ -4425,14 +4534,14 @@ class SoundboardApp:
 
         self.add_tab_btn = ctk.CTkButton(
             header_frame,
-            text="+",
+            text="＋",
             command=self._add_new_tab,
             fg_color=COLORS["green"],
             hover_color=COLORS["green_hover"],
             font=self._font_sm_bold,
-            corner_radius=6,
-            height=26,
-            width=26,
+            corner_radius=UI["button_corner_radius"],
+            height=UI["icon_button"],
+            width=UI["icon_button"],
         )
         self.add_tab_btn.pack(side=tk.RIGHT, padx=(8, 0))
         _Tooltip.attach(self.add_tab_btn, "Create a new tab")
@@ -4444,12 +4553,38 @@ class SoundboardApp:
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
             font=self._font_sm_bold,
-            corner_radius=6,
-            height=26,
-            width=30,
+            corner_radius=UI["button_corner_radius"],
+            height=UI["icon_button"],
+            width=UI["icon_button"],
         )
         self.manage_tabs_btn.pack(side=tk.RIGHT, padx=(6, 0))
         _Tooltip.attach(self.manage_tabs_btn, "Reorder mode — drag tabs up/down to rearrange")
+
+        # ---- 💻 PC / 📱 Phone master sections ------------------------------
+        # Tabs carry a `section` field (models.py); the PC is the manager:
+        # tabs put in 📱 Phone are what the mobile companion shows by
+        # default. The switcher only FILTERS the sidebar — tab indices stay
+        # absolute everywhere (mobile/README.md §5.4).
+        self._active_section = getattr(self, "_active_section", "pc")
+        self.section_switcher = ctk.CTkSegmentedButton(
+            self.tabs_sidebar,
+            values=["💻 PC", "📱 Phone"],
+            command=self._on_section_switch,
+            font=self._font_xs,
+            height=UI["control_height"],
+            corner_radius=UI["button_corner_radius"],
+            border_width=2,
+            fg_color=COLORS["bg_medium"],
+            selected_color=COLORS["blurple"],
+            selected_hover_color=COLORS["blurple_hover"],
+            unselected_color=COLORS["bg_medium"],
+            unselected_hover_color=COLORS["bg_light"],
+            text_color=COLORS["text_primary"],
+        )
+        self.section_switcher.set("📱 Phone" if self._active_section == "phone" else "💻 PC")
+        self.section_switcher.pack(fill=tk.X, padx=8, pady=(0, 6))
+        # NO tooltip here: CTkSegmentedButton.bind() raises NotImplementedError
+        # (crashed startup once) — the labels speak for themselves.
 
         # Scrollable area for tab buttons
         self.tabs_canvas = tk.Canvas(
@@ -4488,6 +4623,181 @@ class SoundboardApp:
         # The handler checks _tabs_mousewheel_bound flag to only scroll when hovering.
         self._tabs_mousewheel_bound = False
         self.tabs_canvas.bind_all("<MouseWheel>", self._on_tabs_mousewheel, add="+")
+
+    # ---- yt-dlp helpers -------------------------------------------------
+
+    @staticmethod
+    def _sanitize_media_url(raw: str) -> str:
+        """Clean up whatever landed in the URL box.
+
+        Two real-world messes, both seen in the wild:
+
+        * **Doubled paste** — the box auto-fills from the clipboard, and the
+          user pastes the same link again, producing
+          ``https://…start_radio=1https://…start_radio=1``. Keep the first URL.
+        * **Radio / mix playlists** — a link copied from YouTube's player
+          carries ``&list=RD<id>&start_radio=1``. That is an auto-generated
+          infinite mix, not a playlist the user chose, and yt-dlp then walks
+          the mix instead of grabbing the video in front of them. Strip it so
+          a watch URL means "this video".
+        """
+        url = (raw or "").strip()
+        if not url:
+            return url
+        # Doubled paste: a second scheme means junk got appended.
+        second = url.find("http", 1)
+        if second > 0:
+            url = url[:second]
+        try:
+            from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+            parts = urlparse(url)
+            if "youtu" in parts.netloc and parts.query:
+                params = parse_qsl(parts.query, keep_blank_values=True)
+                listed = dict(params).get("list", "")
+                # RD… = radio/mix, UL… = "from this video" auto-list.
+                if listed.startswith(("RD", "UL")) and dict(params).get("v"):
+                    params = [
+                        (k, v) for k, v in params
+                        if k not in ("list", "start_radio", "index", "pp")
+                    ]
+                    url = urlunparse(parts._replace(query=urlencode(params)))
+        except Exception:
+            pass
+        return url
+
+    @staticmethod
+    def _is_browser_cookie_error(msg: str) -> bool:
+        """True when yt-dlp failed to READ browser cookies (not a real
+        download error). Chrome/Edge v127+ wrap the cookie DB in app-bound
+        encryption, so `--cookies-from-browser chrome` can no longer copy or
+        decrypt it (yt-dlp issue #7271); a locked DB (browser running) looks
+        the same. None of it means the video is unavailable.
+        """
+        low = msg.lower()
+        # yt-dlp's DPAPI failure text doesn't say "cookie" at all — it just
+        # points at issue 7271, which IS the browser-cookie issue.
+        if "dpapi" in low or "issues/7271" in low:
+            return True
+        if "cookie" not in low:
+            return False
+        return any(
+            marker in low
+            for marker in (
+                "could not copy",
+                "decrypt",
+                "unable to load",
+                "permission denied",
+                "database is locked",
+                "no such file",
+            )
+        )
+
+    def _ydl_run(
+        self,
+        yt_dlp_mod,
+        base_opts: Dict[str, Any],
+        url: str,
+        *,
+        download: bool,
+        cookies_path: str = "",
+        cookies_browser: str = "",
+        on_cookie_fallback=None,
+    ):
+        """Run yt-dlp once, retrying WITHOUT browser cookies if reading them
+        fails. Most videos need no cookies at all, so an unreadable Chrome
+        cookie DB must never abort the download — it just drops the
+        age-restricted/private capability for this run.
+        """
+        opts = dict(base_opts)
+        if cookies_path:
+            opts["cookiefile"] = cookies_path
+        if cookies_browser:
+            opts["cookiesfrombrowser"] = (cookies_browser,)
+        used_cookies = bool(cookies_path or cookies_browser)
+
+        def _extract(o):
+            with yt_dlp_mod.YoutubeDL(o) as ydl:  # type: ignore[arg-type]
+                return ydl.extract_info(url, download=download)
+
+        log = logging.getLogger("soundboard.youtube")
+        try:
+            return _extract(opts)
+        except Exception as first_error:
+            msg = re.sub(r"\x1b?\[[0-9;]*m", "", str(first_error))
+
+            # Retry ladder. Both rungs fix REAL, observed failures:
+            #
+            # 1) cookie-free — unreadable browser cookies (Chrome v127+) are
+            #    the obvious case, but an expired cookies.txt is nastier:
+            #    YouTube rejects the stale session and yt-dlp reports it as
+            #    "This video is not available". Cookies only ever ADD
+            #    capability, so dropping them can't lose anything.
+            # 2) explicit player clients — YouTube bot-checks a client and
+            #    returns a playability status with NO formats (yt-dlp's
+            #    raise_no_formats → same misleading "not available" text).
+            #    Different clients are accepted independently: verified live,
+            #    ['tv','ios'] failed on a video that ['android','ios','tv',
+            #    'web'] fetched with 4 formats.
+            retries = []
+            if used_cookies:
+                cookie_free = dict(opts)
+                cookie_free.pop("cookiesfrombrowser", None)
+                cookie_free.pop("cookiefile", None)
+                retries.append(("without cookies", cookie_free, True))
+            alt = dict(retries[0][1] if retries else opts)
+            alt["extractor_args"] = {
+                **(alt.get("extractor_args") or {}),
+                "youtube": {"player_client": ["android", "ios", "tv", "web"]},
+            }
+            retries.append(("alternate player clients", alt, False))
+
+            for label, retry_opts, is_cookie_drop in retries:
+                log.warning("failed (%s) — retrying %s", msg[:140], label)
+                if is_cookie_drop and on_cookie_fallback:
+                    try:
+                        on_cookie_fallback()
+                    except Exception:
+                        pass
+                try:
+                    result = _extract(retry_opts)
+                    log.info("recovered via %s", label)
+                    return result
+                except Exception:
+                    continue
+            # Everything failed: the ORIGINAL error is the useful one
+            # ("Sign in to confirm your age" means cookies were right and
+            # just need refreshing).
+            raise first_error
+
+    def _open_mobile_sync_dialog(self):
+        """📱 Send to Phone — serve/export a SoundPack for the Android app.
+
+        Flushes the config synchronously first so the pack builder (which
+        reads soundboard_config.json from disk) sees the current state.
+        """
+        existing = getattr(self, "_mobile_sync_dialog", None)
+        if existing is not None:
+            try:
+                if existing.is_active():
+                    existing.dialog.lift()
+                    existing.dialog.focus_force()
+                    return
+                # Server already stopped (sync done / idle timeout / bind
+                # failure) — discard the dead dialog and start fresh.
+                existing._close()
+            except Exception:
+                pass
+            self._mobile_sync_dialog = None
+        try:
+            self._flush_save_config()
+        except Exception:
+            logging.getLogger("soundboard.mobile").exception(
+                "mobile sync: config flush before export failed"
+            )
+        from .mobile_sync import MobileSyncDialog
+
+        self._mobile_sync_dialog = MobileSyncDialog(self)
 
     def _create_action_bar(self, parent):
         """Create the action bar with Move, Stop All, and Playing buttons."""
@@ -4542,6 +4852,21 @@ class SoundboardApp:
         )
         self.open_sounds_btn.pack(side=tk.LEFT, padx=(6, 0), pady=8)
 
+        # 📱 Send to Phone — export/serve a SoundPack for the Android
+        # companion app (mobile/README.md; soundboard/mobile_sync.py).
+        self.mobile_sync_btn = ctk.CTkButton(
+            left_section,
+            text="📱",
+            command=self._open_mobile_sync_dialog,
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_lighter"],
+            font=self._font_xs,
+            corner_radius=6,
+            height=32,
+            width=36,
+        )
+        self.mobile_sync_btn.pack(side=tk.LEFT, padx=(6, 0), pady=8)
+
         # ---- Call Recorder cluster (button + live timer) ----
         # Visually grouped so the timer reads as belonging to the record btn.
         rec_cluster = ctk.CTkFrame(
@@ -4553,11 +4878,11 @@ class SoundboardApp:
 
         self.record_btn = ctk.CTkButton(
             rec_cluster,
-            text="● Rec",
+            text="⏺ Rec",
             command=self._toggle_recording,
             fg_color=COLORS["red"],
             hover_color=COLORS["red_hover"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"], weight="bold"),
+            font=self._font_xs_bold,
             corner_radius=6,
             height=28,
             width=66,
@@ -4567,7 +4892,7 @@ class SoundboardApp:
         self.recording_timer_label = ctk.CTkLabel(
             rec_cluster,
             text="0:00",
-            font=ctk.CTkFont(family=FONTS["family_mono"], size=FONTS["size_sm"], weight="bold"),
+            font=self._font_mono_sm_bold,
             text_color=COLORS["text_muted"],
             width=58,
         )
@@ -4575,11 +4900,11 @@ class SoundboardApp:
 
         self.quick_record_btn = ctk.CTkButton(
             rec_cluster,
-            text="Rec Sound",
+            text="⏺ Rec Sound",
             command=self._toggle_quick_record_to_sound,
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"], weight="bold"),
+            font=self._font_xs_bold,
             corner_radius=6,
             height=28,
             width=86,
@@ -4601,12 +4926,12 @@ class SoundboardApp:
             command=self._stop_all_sounds,
             fg_color=COLORS["red"],
             hover_color=COLORS["red_hover"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"], weight="bold"),
+            font=self._font_xs_bold,
             corner_radius=6,
             height=32,
             width=66,
         )
-        self.stop_all_btn.pack(side=tk.LEFT, padx=(0, 5), pady=8)
+        self.stop_all_btn.pack(side=tk.LEFT, padx=(0, 6), pady=8)
 
         # Sound Scheduler / Queue button
         self.scheduler_btn = ctk.CTkButton(
@@ -4650,7 +4975,7 @@ class SoundboardApp:
             height=32,
             width=74,
         )
-        self.voice_picker_btn.pack(side=tk.LEFT, padx=(0, 5), pady=8)
+        self.voice_picker_btn.pack(side=tk.LEFT, padx=(0, 6), pady=8)
 
         # DJ Looper toggle button
         self.now_playing_btn = ctk.CTkButton(
@@ -4671,6 +4996,10 @@ class SoundboardApp:
         _Tooltip.attach(self.edit_mode_btn, "Drag-to-rearrange slots in the current tab")
         _Tooltip.attach(self.youtube_btn, "Download audio from a web page (YouTube, Vimeo, Twitter, TikTok, ...) as MP3")
         _Tooltip.attach(self.open_sounds_btn, "Open the local sounds folder")
+        _Tooltip.attach(
+            self.mobile_sync_btn,
+            "Send the sound library to the phone app (Wi-Fi QR or .zip)",
+        )
         _Tooltip.attach(self.record_btn, "Record a Discord call (others + optional mic) to MP3")
         _Tooltip.attach(self.quick_record_btn, "Record once, then add it as a new sound")
         _Tooltip.attach(self.stop_all_btn, "Stop every playing sound, preview and queue")
@@ -4814,17 +5143,41 @@ class SoundboardApp:
             except Exception:
                 self._tab_emoji_placeholder = None
 
+        # Device pixel size of a 22 px logical emoji at the current window
+        # scaling (33 px at 150%) - rendering at this size lets CTk show the
+        # glyph 1:1 instead of bicubic-upscaling a 22 px bitmap.
+        try:
+            _emoji_scaling = float(ctk.ScalingTracker.get_window_scaling(self.root))
+        except Exception:
+            _emoji_scaling = 1.0
+        if not _emoji_scaling or _emoji_scaling <= 0:
+            _emoji_scaling = 1.0
+        _emoji_px = max(1, round(22 * _emoji_scaling))
+
         def _tab_emoji_image(em: Optional[str]):
-            """Return a CTkImage for the tab's emoji, or None if no emoji."""
+            """Return a (shared, cached) CTkImage for the tab's emoji, or None.
+
+            Cached module-wide by (emoji, device_px); CTkImage objects are
+            meant to be shared - never .configure(size=) one of these.
+            """
             if not em:
                 return None
+            key = (em, _emoji_px)
+            cached = _TAB_EMOJI_IMAGE_CACHE.get(key)
+            if cached is not None:
+                _TAB_EMOJI_IMAGE_CACHE.move_to_end(key)
+                return cached
             try:
-                pil = _er.get_pil_image(em, 22)
+                pil = _er.get_pil_image(em, _emoji_px)
                 if pil is None:
                     return None
-                return ctk.CTkImage(light_image=pil, dark_image=pil, size=(22, 22))
+                img = ctk.CTkImage(light_image=pil, dark_image=pil, size=(22, 22))
             except Exception:
                 return None
+            _TAB_EMOJI_IMAGE_CACHE[key] = img
+            while len(_TAB_EMOJI_IMAGE_CACHE) > _TAB_EMOJI_IMAGE_CACHE_MAX:
+                _TAB_EMOJI_IMAGE_CACHE.popitem(last=False)
+            return img
 
         # ------------------------------------------------------------------
         # Each tab is a CTkFrame with a real 2-column grid:
@@ -5120,6 +5473,9 @@ class SoundboardApp:
             self._tabs_scroll_initialized = True
             self._schedule_tabs_scroll_update()
 
+        # Re-apply the 💻/📱 section filter (rebuild packs every row).
+        self._apply_section_visibility()
+
     @staticmethod
     def _truncate_tab_label(text: str, max_chars: int = 13) -> str:
         """Trim a tab label so the button text width stays predictable.
@@ -5147,6 +5503,14 @@ class SoundboardApp:
         if target is None:
             return
 
+        # A real tab is taking the stage — drop the empty-section hint.
+        ph = getattr(self, "_section_placeholder_frame", None)
+        if ph is not None:
+            try:
+                ph.grid_remove()
+            except Exception:
+                pass
+
         prev_idx = getattr(self, "_currently_shown_tab", None)
         if prev_idx is not None and prev_idx != tab_idx:
             prev_frame = self.tab_grid_frames.get(prev_idx)
@@ -5170,6 +5534,20 @@ class SoundboardApp:
         """Switch to a different tab using tkraise() for instant switching."""
         if tab_idx < 0 or tab_idx >= len(self.tabs):
             return
+
+        # Jumping to a tab in the other 💻/📱 section (search, restore, …)
+        # flips the section so the sidebar row is actually visible.
+        if not self._tab_in_active_section(tab_idx) and not getattr(
+            self, "_tab_reorder_mode", False
+        ):
+            self._active_section = getattr(self.tabs[tab_idx], "section", "pc") or "pc"
+            try:
+                self.section_switcher.set(
+                    "📱 Phone" if self._active_section == "phone" else "💻 PC"
+                )
+            except Exception:
+                pass
+            self._apply_section_visibility()
 
         # Check if we're in edit mode with a selected slot - move it to this tab
         if self._edit_mode and self._dragging_slot is not None and tab_idx != self.current_tab_idx:
@@ -5267,6 +5645,108 @@ class SoundboardApp:
 
         self.tabs_canvas.xview_moveto(scroll_fraction)
 
+    # ---- 💻/📱 master sections ------------------------------------------
+
+    def _tab_in_active_section(self, idx: int) -> bool:
+        if idx < 0 or idx >= len(self.tabs):
+            return False
+        section = getattr(self.tabs[idx], "section", "pc") or "pc"
+        return section == getattr(self, "_active_section", "pc")
+
+    def _on_section_switch(self, value: str):
+        """💻 PC / 📱 Phone switcher: filter the sidebar to one section."""
+        self._active_section = "phone" if "Phone" in value else "pc"
+        if not self._tab_in_active_section(self.current_tab_idx):
+            target = next(
+                (i for i in range(len(self.tabs)) if self._tab_in_active_section(i)),
+                None,
+            )
+            if target is not None:
+                self._switch_tab(target)
+            else:
+                # Empty section: NEVER leave the other section's grid on
+                # screen (looked like "Phone shows PC sounds").
+                self._show_section_placeholder()
+        self._apply_section_visibility()
+        self._save_config()
+
+    def _show_section_placeholder(self):
+        """Blank the board with a hint when the active section has no tabs."""
+        prev = getattr(self, "_currently_shown_tab", None)
+        if prev is not None:
+            frame = self.tab_grid_frames.get(prev)
+            if frame is not None:
+                try:
+                    frame.grid_remove()
+                except Exception:
+                    pass
+            self._currently_shown_tab = None
+        ph = getattr(self, "_section_placeholder_frame", None)
+        if ph is None or not ph.winfo_exists():
+            ph = ctk.CTkFrame(self.grid_frame, fg_color=COLORS["bg_dark"])
+            self._section_placeholder_label = ctk.CTkLabel(
+                ph, text="", font=self._font_sm,
+                text_color=COLORS["text_muted"], justify="center",
+            )
+            self._section_placeholder_label.pack(expand=True)
+            self._section_placeholder_frame = ph
+        section_label = "📱 Phone" if self._active_section == "phone" else "💻 PC"
+        try:
+            self._section_placeholder_label.configure(
+                text=f"No tabs in the {section_label} section yet.\n\n"
+                     "Right-click a tab → \"📱 Phone section\" to move it here,\n"
+                     "or press  +  to create a tab in this section."
+            )
+            self._section_placeholder_frame.grid(row=0, column=0, sticky="nsew")
+        except Exception:
+            pass
+
+    def _reconcile_section_view(self):
+        """Post-startup: the board must show a tab of the ACTIVE section
+        (a restored 'phone' section with the current tab in 'pc' would
+        otherwise show the wrong section's grid until the first click)."""
+        try:
+            if self._tab_in_active_section(self.current_tab_idx):
+                return
+            target = next(
+                (i for i in range(len(self.tabs)) if self._tab_in_active_section(i)),
+                None,
+            )
+            if target is not None:
+                self._switch_tab(target)
+            else:
+                self._show_section_placeholder()
+        except Exception:
+            logging.getLogger("soundboard.mobile").exception(
+                "section view reconcile failed"
+            )
+
+    def _apply_section_visibility(self):
+        """Pack only the active section's tab rows (ALL rows in reorder mode
+        — drag position math assumes every row is visible).
+
+        Rows are hidden with pack_forget and re-packed in list order, never
+        destroyed: `tab_buttons` must stay 1:1 with `tabs` because the
+        refresh/update path zips them (see _refresh_tab_bar).
+        """
+        buttons = getattr(self, "tab_buttons", [])
+        if len(buttons) != len(self.tabs):
+            return  # mid-rebuild; _refresh_tab_bar re-invokes us after
+        show_all = bool(getattr(self, "_tab_reorder_mode", False))
+        active = getattr(self, "_active_section", "pc")
+        for frame, tab in zip(buttons, self.tabs):
+            visible = show_all or (getattr(tab, "section", "pc") or "pc") == active
+            try:
+                frame.pack_forget()
+                if visible:
+                    frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 3))
+            except Exception:
+                pass
+        try:
+            self._schedule_tabs_scroll_update()
+        except Exception:
+            pass
+
     def _add_new_tab(self):
         """Add a new tab."""
         dialog, body, footer, _accent = self._scaffold_dialog(
@@ -5292,8 +5772,7 @@ class SoundboardApp:
         ).grid(row=0, column=0, sticky="w", pady=8, padx=(0, 8))
         name_var = tk.StringVar(value=f"Tab {len(self.tabs) + 1}")
         tab_name_entry = ctk.CTkEntry(
-            form, textvariable=name_var, height=32,
-            fg_color=COLORS["bg_dark"], border_color=COLORS["bg_light"],
+            form, textvariable=name_var, **dict(self.ENTRY_KW, height=32),
         )
         tab_name_entry.grid(row=0, column=1, columnspan=2, sticky="ew", pady=8)
         _bind_rtl_entry(tab_name_entry, name_var)
@@ -5305,8 +5784,7 @@ class SoundboardApp:
         ).grid(row=1, column=0, sticky="w", pady=8, padx=(0, 8))
         emoji_var = tk.StringVar(value="")
         ctk.CTkEntry(
-            form, textvariable=emoji_var, width=90, height=32,
-            fg_color=COLORS["bg_dark"], border_color=COLORS["bg_light"],
+            form, textvariable=emoji_var, width=90, **dict(self.ENTRY_KW, height=32),
         ).grid(row=1, column=1, sticky="w", pady=8)
 
         def pick_emoji():
@@ -5321,7 +5799,11 @@ class SoundboardApp:
         def save():
             name = name_var.get().strip() or f"Tab {len(self.tabs) + 1}"
             emoji = emoji_var.get().strip() or None
-            new_tab = SoundTab(name=name, emoji=emoji)
+            # New tabs land in whichever 💻/📱 section is active.
+            new_tab = SoundTab(
+                name=name, emoji=emoji,
+                section=getattr(self, "_active_section", "pc"),
+            )
             self.tabs.append(new_tab)
             new_tab_idx = len(self.tabs) - 1
             # Build widgets for the new tab
@@ -5370,7 +5852,7 @@ class SoundboardApp:
             card.pack(fill=tk.X, pady=(0, 12))
             ctk.CTkLabel(
                 card, text=heading, text_color=COLORS["text_secondary"],
-                font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"], weight="bold"),
+                font=self._font_xs_bold,
                 anchor="w",
             ).pack(fill=tk.X, padx=14, pady=(12, 4))
             return card
@@ -5396,8 +5878,7 @@ class SoundboardApp:
         ).grid(row=0, column=0, sticky="w", pady=8, padx=(0, 8))
         name_var = tk.StringVar(value=tab.name)
         edit_tab_name_entry = ctk.CTkEntry(
-            form, textvariable=name_var, height=32,
-            fg_color=COLORS["bg_dark"], border_color=COLORS["bg_light"],
+            form, textvariable=name_var, **dict(self.ENTRY_KW, height=32),
         )
         edit_tab_name_entry.grid(row=0, column=1, columnspan=2, sticky="ew", pady=8)
         _bind_rtl_entry(edit_tab_name_entry, name_var)
@@ -5408,8 +5889,7 @@ class SoundboardApp:
         ).grid(row=1, column=0, sticky="w", pady=8, padx=(0, 8))
         emoji_var = tk.StringVar(value=tab.emoji or "")
         ctk.CTkEntry(
-            form, textvariable=emoji_var, width=90, height=32,
-            fg_color=COLORS["bg_dark"], border_color=COLORS["bg_light"],
+            form, textvariable=emoji_var, width=90, **dict(self.ENTRY_KW, height=32),
         ).grid(row=1, column=1, sticky="w", pady=8)
         ctk.CTkButton(
             form, text="Choose Emoji", command=pick_emoji,
@@ -5417,7 +5897,21 @@ class SoundboardApp:
             width=130, height=32,
         ).grid(row=1, column=2, padx=(8, 0), pady=8, sticky="e")
 
-        # ---- Card 2: colour (modern picker) --------------------------------
+        # ---- Card 2: 💻/📱 section ----------------------------------------
+        section_card = _card(body, "SECTION")
+        section_row = ctk.CTkFrame(section_card, fg_color="transparent")
+        section_row.pack(fill=tk.X, padx=14, pady=(0, 12))
+        phone_section_var = tk.BooleanVar(
+            value=(getattr(tab, "section", "pc") or "pc") == "phone"
+        )
+        ctk.CTkSwitch(
+            section_row,
+            text="📱 Phone section (shown first on the phone app)",
+            variable=phone_section_var,
+            font=self._font_sm,
+        ).pack(side=tk.LEFT, pady=2)
+
+        # ---- Card 3: colour (modern picker) --------------------------------
         color_card = _card(body, "TAB COLOUR")
         tab_color_picker = SlickColorPicker(
             color_card, self, initial=tab.color, allow_none=True,
@@ -5429,8 +5923,10 @@ class SoundboardApp:
             tab.name = name_var.get().strip() or f"Tab {tab_idx + 1}"
             tab.emoji = emoji_var.get().strip() or None
             tab.color = tab_color_picker.get()
+            tab.section = "phone" if phone_section_var.get() else "pc"
             self._force_full_tab_reskin = True
             self._refresh_tab_bar()
+            self._apply_section_visibility()
             self._save_config()
             dialog.destroy()
 
@@ -5539,7 +6035,7 @@ class SoundboardApp:
         ctk.CTkLabel(
             header,
             text="Manage Tabs",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_lg"], weight="bold"),
+            font=self._font_lg_bold,
             text_color=COLORS["text_primary"],
             anchor="w",
         ).pack(fill=tk.X, padx=16, pady=(12, 2))
@@ -5725,6 +6221,9 @@ class SoundboardApp:
             )
         except Exception:
             pass
+        # Reorder mode shows ALL rows (drag math needs every row packed);
+        # leaving it restores the 💻/📱 section filter.
+        self._apply_section_visibility()
         # Cursor hint on every tab row.
         for frame in getattr(self, "tab_buttons", []):
             try:
@@ -5876,24 +6375,42 @@ class SoundboardApp:
         header_label = ctk.CTkLabel(
             header_frame,
             text="Soundboard",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"], weight="bold"),
+            font=self._font_sm_bold,
             text_color=COLORS["text_secondary"],
         )
         header_label.pack(side=tk.LEFT)
 
         # "People" hub — per-person mini-soundboards (pop-out windows).
-        ctk.CTkButton(
+        people_btn = ctk.CTkButton(
             header_frame,
             text="👥 People",
             width=92,
-            height=26,
+            height=UI["control_height"],
             command=self._open_person_hub,
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
             text_color=COLORS["text_primary"],
             font=self._font_sm_bold,
-            corner_radius=8,
-        ).pack(side=tk.LEFT, padx=(12, 0))
+            corner_radius=UI["button_corner_radius"],
+        )
+        people_btn.pack(side=tk.LEFT, padx=(12, 0))
+        _Tooltip.attach(people_btn, "People hub — per-person mini-soundboards")
+
+        # ⭐ Favorites — folders of favorite sounds (same board machinery).
+        favorites_btn = ctk.CTkButton(
+            header_frame,
+            text="⭐ Favorites",
+            width=100,
+            height=UI["control_height"],
+            command=self._open_favorites_window,
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_lighter"],
+            text_color=COLORS["text_primary"],
+            font=self._font_sm_bold,
+            corner_radius=UI["button_corner_radius"],
+        )
+        favorites_btn.pack(side=tk.LEFT, padx=(6, 0))
+        _Tooltip.attach(favorites_btn, "Favorites — folders of your favorite sounds")
 
         # Live grid-density control (how many slots appear per row). Lets the
         # user make the board denser (more, smaller slots) or roomier (fewer,
@@ -5909,14 +6426,14 @@ class SoundboardApp:
         self._grid_cols_minus_btn = ctk.CTkButton(
             density,
             text="−",
-            width=26,
-            height=24,
+            width=UI["icon_button"],
+            height=UI["icon_button"],
             command=lambda: self._apply_grid_columns(self.grid_columns - 1),
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
             text_color=COLORS["text_primary"],
             font=self._font_sm_bold,
-            corner_radius=6,
+            corner_radius=UI["button_corner_radius"],
         )
         self._grid_cols_minus_btn.pack(side=tk.LEFT)
         self._grid_cols_label = ctk.CTkLabel(
@@ -5930,14 +6447,14 @@ class SoundboardApp:
         self._grid_cols_plus_btn = ctk.CTkButton(
             density,
             text="+",
-            width=26,
-            height=24,
+            width=UI["icon_button"],
+            height=UI["icon_button"],
             command=lambda: self._apply_grid_columns(self.grid_columns + 1),
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
             text_color=COLORS["text_primary"],
             font=self._font_sm_bold,
-            corner_radius=6,
+            corner_radius=UI["button_corner_radius"],
         )
         self._grid_cols_plus_btn.pack(side=tk.LEFT)
 
@@ -5951,13 +6468,9 @@ class SoundboardApp:
             search_bar,
             textvariable=self._search_var,
             placeholder_text="🔍 Search sounds across all tabs...",
-            fg_color=COLORS["bg_medium"],
-            border_color=COLORS["border"],
-            text_color=COLORS["text_primary"],
-            placeholder_text_color=COLORS["text_muted"],
-            font=self._font_sm,
-            height=30,
-            corner_radius=6,
+            # Host is the bg_dark board, so the field steps UP to bg_medium
+            # (inside bg_medium cards it steps DOWN to bg_dark).
+            **dict(self.ENTRY_KW, fg_color=COLORS["bg_medium"]),
         )
         self._search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
         _bind_rtl_entry(self._search_entry, self._search_var)
@@ -5969,17 +6482,10 @@ class SoundboardApp:
             variable=self._filter_group_var,
             values=group_values,
             width=130,
-            height=30,
-            fg_color=COLORS["bg_medium"],
             border_color=COLORS["border"],
-            button_color=COLORS["bg_light"],
-            button_hover_color=COLORS["bg_lighter"],
-            dropdown_fg_color=COLORS["bg_medium"],
-            dropdown_hover_color=COLORS["bg_light"],
-            font=self._font_xs,
-            corner_radius=6,
             state="readonly",
             command=self._on_filter_changed,
+            **dict(self.DROPDOWN_KW, fg_color=COLORS["bg_medium"]),
         )
         self._group_combo.pack(side=tk.LEFT, padx=(0, 6))
 
@@ -5991,17 +6497,10 @@ class SoundboardApp:
             variable=self._filter_tab_var,
             values=["All Tabs"],
             width=130,
-            height=30,
-            fg_color=COLORS["bg_medium"],
             border_color=COLORS["border"],
-            button_color=COLORS["bg_light"],
-            button_hover_color=COLORS["bg_lighter"],
-            dropdown_fg_color=COLORS["bg_medium"],
-            dropdown_hover_color=COLORS["bg_light"],
-            font=self._font_xs,
-            corner_radius=6,
             state="readonly",
             command=self._on_tab_filter_changed,
+            **dict(self.DROPDOWN_KW, fg_color=COLORS["bg_medium"]),
         )
         self._tab_filter_combo.pack(side=tk.LEFT, padx=(0, 6))
 
@@ -6011,10 +6510,10 @@ class SoundboardApp:
             command=self._clear_search,
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
-            font=self._font_xs,
-            corner_radius=6,
-            width=30,
-            height=30,
+            font=self._font_sm_bold,
+            corner_radius=UI["button_corner_radius"],
+            width=UI["icon_button"],
+            height=UI["icon_button"],
         )
         self._clear_search_btn.pack(side=tk.LEFT, padx=(0, 6))
 
@@ -6024,10 +6523,10 @@ class SoundboardApp:
             command=lambda: self._show_manage_groups_dialog(),
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
-            font=self._font_xs,
-            corner_radius=6,
-            width=30,
-            height=30,
+            font=self._font_sm_bold,
+            corner_radius=UI["button_corner_radius"],
+            width=UI["icon_button"],
+            height=UI["icon_button"],
         ).pack(side=tk.LEFT)
 
         # Search results frame (shown when searching, replaces normal tab grid)
@@ -6043,6 +6542,7 @@ class SoundboardApp:
         self.scrollable_grid = ctk.CTkScrollableFrame(
             board_frame,
             fg_color=COLORS["bg_dark"],
+            scrollbar_fg_color=COLORS["bg_dark"],
             scrollbar_button_color=COLORS["bg_light"],
             scrollbar_button_hover_color=COLORS["bg_lighter"],
             corner_radius=0,
@@ -6447,6 +6947,174 @@ class SoundboardApp:
             if tab_idx == self.current_tab_idx:
                 self._schedule_cull(delay=40)
 
+    # ---- Suno upload prep ------------------------------------------------
+
+    #: Suno rejects/flags uploads whose audio carries embedded artwork or ID3
+    #: junk, so exports are re-encoded to a bare PCM WAV. Above this length an
+    #: export would also blow RAM (float32 @48k stereo is ~23 MB/min) and be
+    #: past Suno's upload limit anyway — trim it first instead.
+    SUNO_MAX_SECONDS = 12 * 60
+
+    @staticmethod
+    def _desktop_dir() -> Path:
+        """The user's real Desktop (asks the shell, so OneDrive redirection
+        is handled instead of guessing ~/Desktop)."""
+        try:
+            import ctypes
+            from uuid import UUID
+
+            class _GUID(ctypes.Structure):
+                _fields_ = [
+                    ("Data1", ctypes.c_ulong),
+                    ("Data2", ctypes.c_ushort),
+                    ("Data3", ctypes.c_ushort),
+                    ("Data4", ctypes.c_ubyte * 8),
+                ]
+
+                def __init__(self, u: UUID):
+                    super().__init__()
+                    self.Data1, self.Data2, self.Data3 = u.fields[0], u.fields[1], u.fields[2]
+                    for i, b in enumerate(u.bytes[8:]):
+                        self.Data4[i] = b
+
+            desktop = UUID("{B4BFCC3A-DB2C-424C-B029-7FE99A87C641}")  # FOLDERID_Desktop
+            out = ctypes.c_wchar_p()
+            if ctypes.windll.shell32.SHGetKnownFolderPath(
+                ctypes.byref(_GUID(desktop)), 0, None, ctypes.byref(out)
+            ) == 0:
+                path = Path(out.value)
+                ctypes.windll.ole32.CoTaskMemFree(out)
+                if path.is_dir():
+                    return path
+        except Exception:
+            pass
+        for cand in (Path.home() / "OneDrive" / "Desktop", Path.home() / "Desktop"):
+            if cand.is_dir():
+                return cand
+        return Path.home()
+
+    @staticmethod
+    def _suno_safe_name(raw: str) -> str:
+        """Filename Suno (and every OS) is happy with.
+
+        Keeps letters/digits in ANY script — Hebrew titles stay readable —
+        and drops the brackets, quotes and punctuation that make uploads and
+        URLs awkward. Whitespace collapses to single dashes.
+        """
+        cleaned = re.sub(r"[^\w\s-]", " ", raw or "", flags=re.UNICODE)
+        cleaned = re.sub(r"[\s_]+", " ", cleaned).strip()
+        cleaned = re.sub(r"\s", "-", cleaned)[:60].strip("-")
+        return cleaned or "suno-upload"
+
+    def _export_for_suno(self, slot) -> None:
+        """Write a clean, metadata-free WAV copy to Desktop\\Suno upload.
+
+        Re-decoding and re-writing through soundfile is the point: the output
+        is a bare RIFF/PCM file, so any cover art or ID3 tag that would trip
+        Suno's copyright false-positives simply cannot survive. The original
+        slot and its file are untouched.
+        """
+        raw = (getattr(slot, "file_path", "") or "").strip()
+        if not raw:
+            self.status_var.set("No file on this slot")
+            return
+        src = Path(raw)
+        if not src.is_absolute():
+            src = Path.cwd() / src
+        if not src.is_file():
+            messagebox.showwarning("Suno upload", "That sound's file is missing on disk.")
+            return
+
+        try:
+            duration = probe_duration(str(src))
+        except Exception:
+            duration = 0.0
+        if duration and duration > self.SUNO_MAX_SECONDS:
+            messagebox.showwarning(
+                "Suno upload",
+                f"This sound is {duration / 60:.0f} minutes long.\n\n"
+                "Trim it first (right-click - Edit) and export the cut: Suno only "
+                "takes short uploads, and converting something this long would eat "
+                "gigabytes of RAM.",
+            )
+            return
+
+        def worker():
+            try:
+                data, sr = read_audio_file(str(src))
+                out_dir = self._desktop_dir() / "Suno upload"
+                out_dir.mkdir(parents=True, exist_ok=True)
+                base = self._suno_safe_name(getattr(slot, "name", "") or src.stem)
+                dest = out_dir / f"{base}.wav"
+                n = 2
+                while dest.exists():
+                    dest = out_dir / f"{base}-{n}.wav"
+                    n += 1
+                import soundfile as sf
+
+                # PCM_16: the plainest thing a WAV can be - no tags, no art.
+                sf.write(str(dest), data, sr, subtype="PCM_16")
+                self.root.after(0, lambda d=dest: self._suno_export_done(d))
+            except Exception as e:
+                logging.getLogger("soundboard").exception("suno export failed")
+                self.root.after(
+                    0, lambda err=e: messagebox.showerror(
+                        "Suno upload", f"Could not prepare the file:\n{err}"
+                    )
+                )
+
+        self.status_var.set("Preparing Suno upload...")
+        threading.Thread(target=worker, name="SunoExport", daemon=True).start()
+
+    def _suno_export_done(self, dest: Path) -> None:
+        """Report the finished export (and reveal the folder the first time,
+        so the user knows where it landed without being nagged after that)."""
+        self.status_var.set(f"Suno upload ready: {dest.name}  ->  {dest.parent}")
+        if not getattr(self, "_suno_folder_revealed", False):
+            self._suno_folder_revealed = True
+            try:
+                subprocess.run(["explorer", "/select,", str(dest)])
+            except Exception:
+                pass
+
+    def _export_slot_for_suno(self, tab_idx: int, slot_idx: int) -> None:
+        try:
+            slot = self.tabs[tab_idx].slots[slot_idx]
+        except (IndexError, KeyError, AttributeError):
+            return
+        self._export_for_suno(slot)
+
+    def _copy_slot_file_path(self, tab_idx: int, slot_idx: int):
+        """Put the sound's FULL path on the clipboard.
+
+        Paths are stored relative (``sounds\\name.wav``), which is useless
+        when pasting into Explorer, a terminal, or a chat — so this always
+        resolves to an absolute path. The file not existing is not a reason
+        to refuse: a dangling slot's path is exactly what you want to copy
+        when you go looking for what happened to it.
+        """
+        try:
+            slot = self.tabs[tab_idx].slots[slot_idx]
+        except (IndexError, KeyError, AttributeError):
+            return
+        raw = (slot.file_path or "").strip()
+        if not raw:
+            self.status_var.set("No file on this slot")
+            return
+        p = Path(raw)
+        full = str(p if p.is_absolute() else (Path.cwd() / p).resolve())
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(full)
+            # No update() (banned re-entrant pump): Tk owns the clipboard as
+            # soon as clipboard_append returns and renders on request from
+            # the normal mainloop.
+            missing = "" if os.path.exists(full) else "  (file is missing!)"
+            self.status_var.set(f"Copied path: {os.path.basename(full)}{missing}")
+        except Exception:
+            logging.getLogger("soundboard").exception("copy file path failed")
+            self.status_var.set("Could not copy the path")
+
     def _show_slot_menu(self, tab_idx: int, slot_idx: int):
         """Show a popup menu with Preview and Edit options for a slot.
 
@@ -6471,6 +7139,33 @@ class SoundboardApp:
                     label="📋 Add to Queue",
                     command=lambda: self._scheduler_add(tab_idx, slot_idx),
                 )
+                # ⭐ Add to Favorites → pick a folder (or create one).
+                fav_menu = tk.Menu(menu, tearoff=0)
+                folders = self._favorite_folders()
+                for fid, fname in folders:
+                    fav_menu.add_command(
+                        label=_fix_rtl_text(fname),
+                        command=lambda f=fid: self._add_slot_to_favorites(tab_idx, slot_idx, f),
+                    )
+                if folders:
+                    fav_menu.add_separator()
+                fav_menu.add_command(
+                    label="＋ New folder…",
+                    command=lambda: self._add_slot_to_favorites(tab_idx, slot_idx, None),
+                )
+                menu.add_cascade(label="⭐ Add to Favorites", menu=fav_menu)
+                menu.add_command(
+                    label="🔍 Pick from title…",
+                    command=lambda: self._pick_from_title(tab.slots[slot_idx].name),
+                )
+                menu.add_command(
+                    label="📄 Copy full path",
+                    command=lambda: self._copy_slot_file_path(tab_idx, slot_idx),
+                )
+                menu.add_command(
+                    label="🎼 Prep for Suno upload",
+                    command=lambda: self._export_slot_for_suno(tab_idx, slot_idx),
+                )
                 menu.add_separator()
                 menu.add_command(
                     label="📋 Paste Image from Clipboard",
@@ -6483,8 +7178,11 @@ class SoundboardApp:
                         label="🗑 Clear Image",
                         command=lambda: self._clear_slot_image(tab_idx, slot_idx),
                     )
-        except (IndexError, AttributeError):
-            pass
+        except IndexError:
+            pass  # no such tab — bare menu
+        except AttributeError:
+            # A programming error here used to silently drop half the menu.
+            logging.getLogger("soundboard").exception("slot menu build failed")
         # Position the menu at the current mouse pointer. The slot's ⋯
         # button is drawn directly on the SlotWidget Canvas (not a real
         # widget), so `winfo_rootx/y` of the proxy returns the canvas
@@ -7016,7 +7714,7 @@ class SoundboardApp:
         ctk.CTkLabel(
             dialog,
             text="Manage Sound Groups",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_md"], weight="bold"),
+            font=self._font_md_bold,
             text_color=COLORS["text_primary"],
         ).pack(padx=16, pady=(16, 4))
 
@@ -7345,11 +8043,15 @@ class SoundboardApp:
         stop_btn = entry["stop_btn"]
 
         if slot is not None:
-            # Prefer showing the file's basename so names match the actual file
-            try:
-                display_name = Path(slot.file_path).stem if slot.file_path else slot.name
-            except Exception:
-                display_name = slot.name
+            # The slot's NAME — the same title as on the board. (This used to
+            # show the file's basename, so a slot named "Trexon Key" came up in
+            # search as "yt_KWvtoxjrBPw_0fa00a53…".)
+            display_name = (slot.name or "").strip()
+            if not display_name:
+                try:
+                    display_name = Path(slot.file_path).stem if slot.file_path else "Unknown"
+                except Exception:
+                    display_name = "Unknown"
             display_text = _format_slot_display_text(display_name, slot.hotkey, slot.loop)
             photo = None
             if slot.image_path and os.path.exists(slot.image_path):
@@ -7380,14 +8082,22 @@ class SoundboardApp:
             except Exception:
                 pass
 
-            # Stop button: visible while playing; progress reflects elapsed
+            # Stop button while playing OR previewing (the overlay offered no
+            # way to stop a preview); progress reflects elapsed time.
             try:
+                info = None
                 if is_playing:
+                    info = self.playing_slots[slot_idx]
+                elif is_previewing:
+                    info = self.preview_slots[slot_idx]
+                if info is not None:
                     stop_btn.pack(side=tk.LEFT, padx=(0, 2))
-                    play_info = self.playing_slots[slot_idx]
-                    duration = play_info.get("duration", 0) or 0
+                    progress.configure(
+                        progress_color=COLORS["preview"] if is_previewing else COLORS["playing"]
+                    )
+                    duration = info.get("duration", 0) or 0
                     if duration > 0:
-                        elapsed = time.time() - play_info["start_time"]
+                        elapsed = time.time() - info["start_time"]
                         progress.set(min(elapsed / duration, 1.0))
                 else:
                     stop_btn.pack_forget()
@@ -7601,6 +8311,8 @@ class SoundboardApp:
                 loop=slot.loop,
                 loop_count=slot.loop_count,
                 loop_delay=slot.loop_delay,
+                display_name=slot.name,
+                emoji=slot.emoji,
             )
             self.playing_slots[slot_idx] = {
                 "start_time": time.time(),
@@ -7681,67 +8393,46 @@ class SoundboardApp:
             parent,
             fg_color=COLORS["bg_dark"],
             corner_radius=UI["button_corner_radius"],
-            height=30,
+            height=UI["toolbar_height"],
         )
         status_frame.pack(fill=tk.X, pady=(8, 0))
         status_frame.pack_propagate(False)
 
-        font_xs = ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"])
-        font_xs_bold = ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"], weight="bold")
+        font_xs = self._font_xs
+        font_xs_bold = self._font_xs_bold
 
-        # Stream indicator (colored dot + label)
-        self.status_stream_label = ctk.CTkLabel(
+        # ---- Build badge (leftmost so long device names can never push it
+        # off screen). PROD = the packaged EXE; DEV = running from source.
+        # Telling them apart at a glance matters: only a re-deploy moves
+        # source changes into PROD, and a stale EXE once wiped config fields.
+        from . import __version__ as _app_version
+
+        is_frozen = bool(getattr(sys, "frozen", False))
+        self.status_version_label = ctk.CTkLabel(
             status_frame,
-            text="● Stopped",
+            text=(f"v{_app_version}" if is_frozen else f"v{_app_version} DEV"),
             font=font_xs_bold,
-            text_color=COLORS["text_muted"],
+            text_color=(COLORS["text_muted"] if is_frozen else COLORS["bg_darkest"]),
+            fg_color=("transparent" if is_frozen else COLORS["yellow"]),
+            corner_radius=4,
         )
-        self.status_stream_label.pack(side=tk.LEFT, padx=(10, 8), pady=4)
-
-        # Mic device
-        self.status_mic_label = ctk.CTkLabel(
-            status_frame,
-            text="🎤 —",
-            font=font_xs,
-            text_color=COLORS["text_secondary"],
+        self.status_version_label.pack(side=tk.LEFT, padx=(10, 4), pady=4)
+        _Tooltip.attach(
+            self.status_version_label,
+            (
+                f"LocalSoundBoard v{_app_version} — "
+                + ("PROD (packaged EXE from dist\\)" if is_frozen
+                   else "DEV (running from source)")
+                + "\nDeploy new version rebuilds the EXE and bumps this number."
+            ),
         )
-        self.status_mic_label.pack(side=tk.LEFT, padx=(0, 6), pady=4)
 
-        ctk.CTkLabel(
-            status_frame,
-            text="→",
-            font=font_xs,
-            text_color=COLORS["text_muted"],
-        ).pack(side=tk.LEFT, padx=(0, 6), pady=4)
-
-        # Output device
-        self.status_output_label = ctk.CTkLabel(
-            status_frame,
-            text="🔊 —",
-            font=font_xs,
-            text_color=COLORS["text_secondary"],
-        )
-        self.status_output_label.pack(side=tk.LEFT, padx=(0, 12), pady=4)
-
-        # PTT info
-        self.status_ptt_label = ctk.CTkLabel(
-            status_frame,
-            text="",
-            font=font_xs,
-            text_color=COLORS["text_muted"],
-        )
-        self.status_ptt_label.pack(side=tk.LEFT, padx=(0, 12), pady=4)
-
-        # Recording info (separate from action-bar timer; shown only while recording)
-        self.status_rec_label = ctk.CTkLabel(
-            status_frame,
-            text="",
-            font=font_xs_bold,
-            text_color=COLORS["red"],
-        )
-        self.status_rec_label.pack(side=tk.LEFT, padx=(0, 12), pady=4)
-
-        # Right-hand free-form status message
+        # ---- Right-hand cluster is packed FIRST ----------------------------
+        # Tk's packer hands out space in pack order, so packing these before
+        # the device labels guarantees the status text, the 🌐 PTT button and
+        # its on-air label are never clipped or pushed off screen by long
+        # device names - the LEFT labels are the ones that give way (and they
+        # are already truncated to 28 chars, full name in a tooltip).
         self.status_var = tk.StringVar(value="Ready")
         self._last_status_text = self.status_var.get()
         _orig_status_set = self.status_var.set
@@ -7761,6 +8452,89 @@ class SoundboardApp:
             anchor="e",
         )
         self.status_label.pack(side=tk.RIGHT, padx=10, pady=4)
+
+        # --- Universal PTT (bottom-right) -----------------------------------
+        # The 🌐 PTT button only OPENS the manager dialog — a stray click can
+        # never toggle the feature itself (the on/off switch lives inside the
+        # dialog). The label next to it is the live on-air indicator.
+        self.uptt_manage_btn = ctk.CTkButton(
+            status_frame,
+            text="🌐 PTT",
+            width=64,
+            height=UI["compact_height"],
+            corner_radius=UI["button_corner_radius"],
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_lighter"],
+            text_color=COLORS["text_primary"],
+            font=font_xs_bold,
+            command=self._open_universal_ptt_dialog,
+        )
+        self.uptt_manage_btn.pack(side=tk.RIGHT, padx=(0, 12), pady=4)
+
+        self.status_uptt_label = ctk.CTkLabel(
+            status_frame,
+            text="",
+            font=font_xs_bold,
+            text_color=COLORS["text_muted"],
+        )
+        self.status_uptt_label.pack(side=tk.RIGHT, padx=(0, 8), pady=4)
+
+        # ---- Left-hand live indicators -------------------------------------
+        # Stream indicator: same ● glyph in both states, colour carries the
+        # state (muted grey = stopped, green = live).
+        self.status_stream_label = ctk.CTkLabel(
+            status_frame,
+            text="● Stopped",
+            font=font_xs_bold,
+            text_color=COLORS["text_muted"],
+        )
+        self.status_stream_label.pack(side=tk.LEFT, padx=(10, 8), pady=4)
+
+        # Mic device (truncated to 28 chars; full name in the tooltip)
+        self.status_mic_label = ctk.CTkLabel(
+            status_frame,
+            text="🎤 —",
+            font=font_xs,
+            text_color=COLORS["text_secondary"],
+        )
+        self.status_mic_label.pack(side=tk.LEFT, padx=(0, 6), pady=4)
+        self._status_mic_tip = _Tooltip.attach(self.status_mic_label, "Microphone: —")
+
+        ctk.CTkLabel(
+            status_frame,
+            text="→",
+            font=font_xs,
+            text_color=COLORS["text_muted"],
+        ).pack(side=tk.LEFT, padx=(0, 6), pady=4)
+
+        # Output device (truncated to 28 chars; full name in the tooltip)
+        self.status_output_label = ctk.CTkLabel(
+            status_frame,
+            text="🔊 —",
+            font=font_xs,
+            text_color=COLORS["text_secondary"],
+        )
+        self.status_output_label.pack(side=tk.LEFT, padx=(0, 12), pady=4)
+        self._status_output_tip = _Tooltip.attach(self.status_output_label, "Output: —")
+
+        # PTT info
+        self.status_ptt_label = ctk.CTkLabel(
+            status_frame,
+            text="",
+            font=font_xs,
+            text_color=COLORS["text_muted"],
+        )
+        self.status_ptt_label.pack(side=tk.LEFT, padx=(0, 12), pady=4)
+
+        # Recording info (separate from action-bar timer; shown only while recording)
+        self.status_rec_label = ctk.CTkLabel(
+            status_frame,
+            text="",
+            font=font_xs_bold,
+            text_color=COLORS["red"],
+        )
+        self.status_rec_label.pack(side=tk.LEFT, padx=(0, 12), pady=4)
+        self._update_uptt_indicator()
 
     def _short_device_name(self, raw: str, max_len: int = 28) -> str:
         """Strip the leading 'NN: ' device-index prefix and trim to max_len."""
@@ -7789,13 +8563,20 @@ class SoundboardApp:
         if running:
             self.status_stream_label.configure(text="● Live", text_color=COLORS["green"])
         else:
-            self.status_stream_label.configure(text="○ Stopped", text_color=COLORS["text_muted"])
+            self.status_stream_label.configure(text="● Stopped", text_color=COLORS["text_muted"])
 
         # --- Devices ---
         mic_raw = self.input_var.get() if hasattr(self, "input_var") else ""
         out_raw = self.output_var.get() if hasattr(self, "output_var") else ""
         mic_short = self._short_device_name(mic_raw)
         out_short = self._short_device_name(out_raw)
+        # Full (untruncated) device names live in the tooltips.
+        mic_tip = getattr(self, "_status_mic_tip", None)
+        if mic_tip is not None:
+            mic_tip.text = f"Microphone: {mic_raw or '—'}"
+        out_tip = getattr(self, "_status_output_tip", None)
+        if out_tip is not None:
+            out_tip.text = f"Output: {out_raw or '—'}"
 
         muted = bool(self.mixer and self.mixer.mic_muted)
         mic_text = f"🔇 {mic_short}" if muted else f"🎤 {mic_short}"
@@ -7836,6 +8617,342 @@ class SoundboardApp:
         else:
             self.status_rec_label.configure(text="")
 
+        # --- Universal PTT (bottom-right indicator) ---
+        self._update_uptt_indicator()
+
+    # ------------------------------------------------------------------
+    # Universal PTT (all-apps mic gate) — managed from the bottom bar
+    # ------------------------------------------------------------------
+    def _on_uptt_state(self, transmitting: bool):
+        """UniversalPTT poll-thread callback → marshal UI update to Tk."""
+        try:
+            self.root.after(0, self._update_uptt_indicator)
+        except RuntimeError:
+            pass  # app shutting down
+
+    def _update_uptt_indicator(self):
+        """Refresh the bottom-bar Universal PTT indicator (+ dialog mirror).
+
+        States: hidden (feature off) → "set a key" warning → gated (idle)
+        → ON AIR (key held, mic flowing to the cable). The manage button
+        turns green while transmitting so it's visible from across the room.
+        """
+        if not hasattr(self, "status_uptt_label"):
+            return
+        enabled = self.uptt_enabled_var.get()
+        key = self.uptt_key_var.get().strip().lower()
+        on_air = enabled and bool(key) and self.uptt.transmitting
+
+        if not enabled:
+            text, color = "", COLORS["text_muted"]
+        elif not key:
+            text, color = "🌐 PTT: set a key", COLORS["yellow"]
+        elif not self.uptt.enabled:
+            # Controller refused to arm (key didn't resolve to a VK code).
+            text, color = f"🌐 PTT: key '{key}' not usable — re-record", COLORS["yellow"]
+        elif on_air:
+            text, color = f"🟢 ON AIR — {key}", COLORS["green"]
+        else:
+            text, color = f"🔇 mic gated — hold {key}", COLORS["text_muted"]
+
+        self.status_uptt_label.configure(text=text, text_color=color)
+        self.uptt_manage_btn.configure(
+            fg_color=COLORS["green"] if on_air else COLORS["bg_light"],
+            text_color="#ffffff" if on_air else COLORS["text_primary"],
+        )
+
+        # Mirror into the manager dialog's live row when it's open.
+        lbl = getattr(self, "_uptt_dialog_live_label", None)
+        if lbl is not None:
+            try:
+                if lbl.winfo_exists():
+                    if not enabled:
+                        lbl.configure(text="○ Disabled", text_color=COLORS["text_muted"])
+                    elif not key:
+                        lbl.configure(
+                            text="⚠ Record a key below to arm PTT",
+                            text_color=COLORS["yellow"],
+                        )
+                    elif on_air:
+                        lbl.configure(
+                            text=f"🟢 ON AIR — transmitting mic (holding {key})",
+                            text_color=COLORS["green"],
+                        )
+                    else:
+                        lbl.configure(
+                            text=f"🔇 Armed — mic muted until you hold {key}",
+                            text_color=COLORS["text_secondary"],
+                        )
+            except Exception:
+                pass
+
+    def _apply_uptt_settings(self, save: bool = True):
+        """Push the GUI vars into the UniversalPTT controller and refresh UI."""
+        self.uptt.cues_enabled = bool(self.uptt_cues_var.get())
+        try:
+            self.uptt.cue_volume = max(
+                0.0, min(1.0, float(self.uptt_cue_volume_var.get()) / 100.0)
+            )
+        except Exception:
+            pass
+        self.uptt.configure(
+            enabled=bool(self.uptt_enabled_var.get()),
+            key=self.uptt_key_var.get(),
+        )
+        self.uptt.attach_mixer(self.mixer)
+        self._update_uptt_indicator()
+        if save:
+            self._save_config()
+
+    def _open_universal_ptt_dialog(self):
+        """The Universal PTT manager (opened from the bottom-bar 🌐 button).
+
+        The bottom-bar button ONLY opens this window, so a misclick can never
+        toggle the feature — the actual on/off switch lives in here.
+        """
+        dialog, body, footer, _accent = self._scaffold_dialog(
+            "Universal PTT — one key for every app",
+            600,
+            640,
+            subtitle="Zoom · WhatsApp · Slack · Discord — any app that uses the virtual mic",
+            accent=COLORS["green"],
+            modal=False,
+        )
+
+        def _card(title, subtitle=""):
+            card = ctk.CTkFrame(
+                body, fg_color=COLORS["bg_medium"], corner_radius=UI["corner_radius"]
+            )
+            card.pack(fill=tk.X, pady=(0, 10))
+            inner = ctk.CTkFrame(card, fg_color="transparent")
+            inner.pack(fill=tk.X, padx=14, pady=12)
+            ctk.CTkLabel(
+                inner, text=title, font=self._font_sm_bold,
+                text_color=COLORS["text_primary"], anchor="w",
+            ).pack(fill=tk.X)
+            if subtitle:
+                ctk.CTkLabel(
+                    inner, text=subtitle, font=self._font_xs,
+                    text_color=COLORS["text_muted"], anchor="w",
+                    justify=tk.LEFT, wraplength=500,
+                ).pack(fill=tk.X, pady=(2, 0))
+            return inner
+
+        # ---- Card 1: master switch + live state ---------------------------
+        c1 = _card(
+            "Push-to-Talk for all apps",
+            "While enabled, your mic reaches the virtual cable ONLY while you "
+            "hold the key below. Sounds always pass. Apps just use the cable "
+            "as a normal always-on mic — this window is their PTT.",
+        )
+        row1 = ctk.CTkFrame(c1, fg_color="transparent")
+        row1.pack(fill=tk.X, pady=(10, 0))
+        ctk.CTkSwitch(
+            row1,
+            text="Enable Universal PTT",
+            variable=self.uptt_enabled_var,
+            command=lambda: self._apply_uptt_settings(),
+            font=self._font_sm_bold,
+            progress_color=COLORS["green"],
+        ).pack(side=tk.LEFT)
+        self._uptt_dialog_live_label = ctk.CTkLabel(
+            c1, text="", font=self._font_xs, anchor="w",
+        )
+        self._uptt_dialog_live_label.pack(fill=tk.X, pady=(8, 0))
+
+        # ---- Card 2: the key ----------------------------------------------
+        c2 = _card(
+            "PTT key",
+            "Works globally — hold it in any app. Pick a key you never type "
+            "with (mouse side buttons or F13–F24 are ideal). Left/right mouse "
+            "buttons are not allowed.",
+        )
+        row2 = ctk.CTkFrame(c2, fg_color="transparent")
+        row2.pack(fill=tk.X, pady=(10, 0))
+        ctk.CTkEntry(
+            row2, textvariable=self.uptt_key_var, width=140,
+            state="readonly", **self.ENTRY_KW,
+        ).pack(side=tk.LEFT, padx=(0, 8))
+        self.uptt_record_btn = ctk.CTkButton(
+            row2, text="⏺ Record Key", width=120,
+            fg_color=COLORS["blurple"], hover_color=COLORS["blurple_hover"],
+            font=self._font_sm, command=self._record_uptt_key,
+        )
+        self.uptt_record_btn.pack(side=tk.LEFT, padx=(0, 8))
+        ctk.CTkButton(
+            row2, text="Clear", width=64,
+            fg_color=COLORS["bg_light"], hover_color=COLORS["bg_lighter"],
+            font=self._font_sm,
+            command=lambda: (self.uptt_key_var.set(""), self._apply_uptt_settings()),
+        ).pack(side=tk.LEFT)
+
+        # ---- Card 3: cue beeps ----------------------------------------------
+        c3 = _card(
+            "Cue sounds",
+            "A short local beep when you press (rising) and release (falling) "
+            "the key — heard on YOUR speakers only, never sent to the call.",
+        )
+        row3 = ctk.CTkFrame(c3, fg_color="transparent")
+        row3.pack(fill=tk.X, pady=(10, 0))
+        ctk.CTkCheckBox(
+            row3, text="Beep on press / release",
+            variable=self.uptt_cues_var,
+            command=lambda: self._apply_uptt_settings(),
+            **self.CHECKBOX_KW,
+        ).pack(side=tk.LEFT, padx=(0, 16))
+        vol_label = ctk.CTkLabel(
+            row3, text=f"{int(self.uptt_cue_volume_var.get())}%",
+            font=self._font_xs, text_color=COLORS["text_secondary"], width=38,
+        )
+
+        def _on_cue_vol(_=None):
+            vol_label.configure(text=f"{int(self.uptt_cue_volume_var.get())}%")
+            self.uptt.cue_volume = self.uptt_cue_volume_var.get() / 100.0
+            self._save_config()
+
+        ctk.CTkSlider(
+            row3, from_=0, to=100, variable=self.uptt_cue_volume_var,
+            command=_on_cue_vol, width=140, height=14,
+            fg_color=COLORS["bg_light"],
+            progress_color=COLORS["blurple"],
+            button_color=COLORS["text_primary"],
+            button_hover_color=COLORS["blurple"],
+        ).pack(side=tk.LEFT, padx=(0, 6))
+        vol_label.pack(side=tk.LEFT, padx=(0, 12))
+        ctk.CTkButton(
+            row3, text="▶ Test", width=60,
+            fg_color=COLORS["bg_light"], hover_color=COLORS["bg_lighter"],
+            font=self._font_sm, command=self._test_uptt_cues,
+        ).pack(side=tk.LEFT)
+
+        # ---- Card 4: how to set up ------------------------------------------
+        _card(
+            "How to use with Zoom / WhatsApp / Slack / Discord",
+            "1.  In the app's audio settings, pick the virtual cable "
+            "(e.g. \"CABLE Output (VB-Audio…)\") as the MICROPHONE.\n"
+            "2.  Use plain voice-activity there — turn the app's own "
+            "push-to-talk OFF and disable its noise gate if it has one.\n"
+            "3.  Start the stream here, then hold your PTT key to talk "
+            "anywhere. Sounds play to the call even while the mic is gated.",
+        )
+
+        # ---- Footer ----------------------------------------------------------
+        def _close():
+            self._uptt_dialog_live_label = None
+            dialog.destroy()
+
+        dialog.protocol("WM_DELETE_WINDOW", _close)
+        dialog.bind("<Destroy>", lambda e: (
+            setattr(self, "_uptt_dialog_live_label", None) if e.widget is dialog else None
+        ), add="+")
+        ctk.CTkButton(
+            footer, text="Done", width=110,
+            fg_color=COLORS["green"], hover_color=COLORS["green_hover"],
+            font=self._font_sm_bold, command=_close,
+        ).pack(side=tk.RIGHT, padx=14, pady=10)
+
+        self._update_uptt_indicator()
+
+    def _record_uptt_key(self):
+        """Capture the Universal PTT key (keyboard or mouse 3/4/5, 5s window)."""
+        if not HOTKEYS_AVAILABLE:
+            messagebox.showwarning(
+                "Keyboard Module Required",
+                "The keyboard module is required to record a PTT key.\n"
+                "Install it with: pip install keyboard",
+            )
+            return
+
+        btn = self.uptt_record_btn
+        btn.configure(text="Press key…", fg_color=COLORS["red"])
+        hook_refs = {"keyboard": None, "mouse": None, "timeout": None, "live": True}
+
+        def _cleanup():
+            hook_refs["live"] = False
+            if hook_refs["keyboard"] is not None:
+                try:
+                    keyboard.unhook(hook_refs["keyboard"])
+                except Exception:
+                    pass
+            if hook_refs["mouse"] is not None:
+                try:
+                    import mouse  # type: ignore[import-untyped]
+
+                    mouse.unhook(hook_refs["mouse"])
+                except Exception:
+                    pass
+            if hook_refs["timeout"] is not None:
+                try:
+                    self.root.after_cancel(hook_refs["timeout"])
+                except Exception:
+                    pass
+
+        def finish(key_name):
+            if not hook_refs["live"]:
+                return
+
+            def update_ui():
+                _cleanup()
+                try:
+                    if btn.winfo_exists():
+                        btn.configure(text="⏺ Record Key", fg_color=COLORS["blurple"])
+                except Exception:
+                    pass
+                if key_name:
+                    self.uptt_key_var.set(key_name)
+                self._apply_uptt_settings()
+
+            try:
+                self.root.after(0, update_ui)
+            except RuntimeError:
+                pass
+
+        def on_key(event):
+            name = str(event.name).lower()
+            if name == "esc":
+                finish(None)  # Escape cancels
+            else:
+                finish(name)
+            return False
+
+        def on_mouse_event(event):
+            event_type = getattr(event, "event_type", None)
+            button = getattr(event, "button", None)
+            if event_type == "down" and button:
+                key = _mouse_button_to_key_name(button)
+                # Left/right click as global PTT would fire on every normal
+                # click in every app — refuse them.
+                if key in ("mouse1", "mouse2"):
+                    return
+                finish(key)
+
+        try:
+            hook_refs["keyboard"] = keyboard.on_press(on_key)
+        except Exception:
+            hook_refs["keyboard"] = None
+        try:
+            import mouse  # type: ignore[import-untyped]
+
+            hook_refs["mouse"] = mouse.hook(on_mouse_event)
+        except Exception:
+            hook_refs["mouse"] = None
+
+        if hook_refs["keyboard"] is None and hook_refs["mouse"] is None:
+            btn.configure(text="⏺ Record Key", fg_color=COLORS["blurple"])
+            messagebox.showwarning("Unavailable", "Input hooks are unavailable.")
+            return
+
+        hook_refs["timeout"] = self.root.after(5000, lambda: finish(None))
+
+    def _test_uptt_cues(self):
+        """Preview the press + release beeps at the current cue volume."""
+        try:
+            self.uptt.cue_volume = self.uptt_cue_volume_var.get() / 100.0
+        except Exception:
+            pass
+        self.uptt.play_cue(press=True)
+        self.root.after(400, lambda: self.uptt.play_cue(press=False))
+
     def _toggle_stream(self):
         """Start or stop the audio stream."""
         if self.mixer and self.mixer.running:
@@ -7863,14 +8980,15 @@ class SoundboardApp:
                 # Apply noise suppression settings (engine backend first, then
                 # enabled + strength so the chosen backend is the live one).
                 if hasattr(self, "noise_suppress_var"):
-                    self.mixer.noise_suppressor.set_backend(self._selected_ns_backend())
-                    self.mixer.noise_suppressor.enabled = self.noise_suppress_var.get()
-                    self.mixer.noise_suppressor.set_strength(self.ns_strength_var.get() / 100.0)
+                    self._apply_ns_to_mixer()
                 # Apply mic mute + auto-PTT mic duck (fresh mixer per start).
                 if hasattr(self, "mic_mute_var"):
                     self.mixer.mic_muted = self.mic_mute_var.get()
                 if hasattr(self, "duck_mic_var"):
                     self.mixer.duck_mic_during_sounds = self.duck_mic_var.get()
+                # Point the Universal PTT gate at the fresh mixer (fresh mixer
+                # per start — the controller re-pushes enabled + open flags).
+                self.uptt.attach_mixer(self.mixer)
                 # Apply voice changer settings (mirror GUI model into the mixer).
                 self._sync_voice_fx()
                 self.mixer.start()
@@ -8142,30 +9260,93 @@ class SoundboardApp:
         self.test_status_label.configure(text="Done.", text_color=COLORS["text_muted"])
         self.root.after(1500, lambda: self.test_status_label.configure(text=""))
 
+    def _apply_ns_to_mixer(self, reset: bool = False, retry: bool = False):
+        """Push the NS card's state (engine, strength, low-cut, on/off) into the
+        live mixer. Engines load on a background thread; until one lands the mic
+        passes through, and the status line shows which engine is really live.
+        `retry` (explicit dropdown pick) re-attempts an engine that failed to
+        load earlier instead of staying on its fallback."""
+        m = self.mixer
+        if not m:
+            return
+        ns = m.noise_suppressor
+        ns.set_backend(self._selected_ns_backend(), retry=retry)
+        ns.set_strength(self.ns_strength_var.get() / 100.0)
+        if hasattr(self, "ns_lowcut_var"):
+            ns.lowcut = bool(self.ns_lowcut_var.get())
+        ns.enabled = bool(self.noise_suppress_var.get())
+        if reset:
+            # Drop stale ring/engine state so toggling never replays old audio.
+            ns.reset()
+
     def _toggle_noise_suppression(self):
         """Toggle mic noise suppression (Krisp replacement)."""
-        enabled = self.noise_suppress_var.get()
-        if self.mixer:
-            self.mixer.noise_suppressor.set_backend(self._selected_ns_backend())
-            self.mixer.noise_suppressor.enabled = enabled
-            self.mixer.noise_suppressor.set_strength(self.ns_strength_var.get() / 100.0)
-            # Reset context buffer so we don't carry stale audio when toggling
-            self.mixer.noise_suppressor.reset()
+        self._apply_ns_to_mixer(reset=True)
+        self._refresh_ns_status(once=True)
         self._save_config()
 
     def _selected_ns_backend(self) -> str:
         """The backend name for the current engine dropdown selection."""
         label = self.ns_backend_var.get() if hasattr(self, "ns_backend_var") else ""
-        return getattr(self, "_ns_label_to_backend", {}).get(label, "deepfilternet")
+        labels = getattr(self, "_ns_backend_labels", {}) or {}
+        fallback = next(iter(labels), "deepfilternet")
+        return getattr(self, "_ns_label_to_backend", {}).get(label, fallback)
 
     def _on_ns_backend_change(self, _value=None):
-        """Engine dropdown changed (DeepFilterNet <-> RNNoise)."""
-        if self.mixer:
-            self.mixer.noise_suppressor.set_backend(self._selected_ns_backend())
-            # Re-apply enabled + strength so the freshly built backend is live.
-            self.mixer.noise_suppressor.enabled = self.noise_suppress_var.get()
-            self.mixer.noise_suppressor.set_strength(self.ns_strength_var.get() / 100.0)
+        """Engine dropdown changed (an explicit pick also retries a failed engine)."""
+        self._apply_ns_to_mixer(retry=True)
+        self._refresh_ns_status(once=True)
         self._save_config()
+
+    def _toggle_ns_lowcut(self):
+        """80 Hz low-cut ahead of the denoiser toggled."""
+        self._apply_ns_to_mixer()
+        self._refresh_ns_status(once=True)
+        self._save_config()
+
+    def _refresh_ns_status(self, once: bool = False):
+        """Keep the NS status line current: the engine REALLY running, its
+        ms/block, low-cut, and any fallback note. Polls once a second while the
+        Audio Options panel is open; a text compare keeps idle ticks free."""
+        lbl = getattr(self, "ns_status_label", None)
+        if lbl is None:
+            return
+        try:
+            if not lbl.winfo_exists():
+                return
+        except Exception:
+            return
+        expanded = True
+        try:
+            expanded = bool(self.audio_options_expanded.get())
+        except Exception:
+            pass
+        if expanded or once:
+            m = self.mixer
+            sel = self._selected_ns_backend()
+            if m and getattr(m, "running", False):
+                text = m.noise_suppressor.status_text()
+            elif self.noise_suppress_var.get():
+                text = NS_BACKEND_BLURBS.get(sel, "") + "  ·  live once the stream starts"
+            else:
+                text = "Off — " + NS_BACKEND_BLURBS.get(sel, "")
+            if text != getattr(self, "_ns_status_text", None):
+                self._ns_status_text = text
+                if text.startswith("⚠"):
+                    color = COLORS["yellow"]
+                elif text.startswith("✓"):
+                    color = COLORS["green"]
+                else:
+                    color = COLORS["text_muted"]
+                try:
+                    lbl.configure(text=text, text_color=color)
+                except Exception:
+                    pass
+        if not once:
+            try:
+                self.root.after(1000, self._refresh_ns_status)
+            except Exception:
+                pass
 
     def _refresh_broadcast_hint(self):
         """Show a hint if the NVIDIA Broadcast virtual mic is installed — it's a
@@ -8421,7 +9602,7 @@ class SoundboardApp:
         header.pack(fill=tk.X, padx=14, pady=(12, 2))
         ctk.CTkLabel(
             header, text="🎙 Voice",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_md"], weight="bold"),
+            font=self._font_md_bold,
             text_color=COLORS["text_primary"], anchor="w",
         ).pack(side=tk.LEFT)
 
@@ -8852,13 +10033,25 @@ class SoundboardApp:
         if slot_idx not in tab.slots:
             return
 
+        try:
+            drop_widget = self.root.winfo_containing(x_root, y_root)
+        except Exception:
+            drop_widget = None
+
+        # Cross-window drop: did the slot land on a ⭐ Favorites folder?
+        # Favoriting always COPIES (no "remove original?" prompt — the point
+        # of a favorite is that the original stays where it was).
+        fctx = getattr(self, "_favorites_ctx", None)
+        if fctx is not None and drop_widget is not None:
+            hit = fctx.find_drop_target(drop_widget)
+            if hit is not None:
+                _fav_person, fav_group = hit
+                self._add_favorite_copy(tab.slots[slot_idx], fav_group.id)
+                return
+
         # Cross-window drop: did the slot land on a Person group (hub/pop-out)?
         pctx = getattr(self, "_person_ctx", None)
         if pctx is not None:
-            try:
-                drop_widget = self.root.winfo_containing(x_root, y_root)
-            except Exception:
-                drop_widget = None
             hit = pctx.find_drop_target(drop_widget) if drop_widget is not None else None
             if hit is not None:
                 person, group = hit
@@ -9116,7 +10309,7 @@ class SoundboardApp:
         ctk.CTkLabel(
             header,
             text="📋 Sound Queue",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_lg"], weight="bold"),
+            font=self._font_lg_bold,
             text_color=COLORS["text_primary"],
         ).pack(side=tk.LEFT)
 
@@ -9125,7 +10318,7 @@ class SoundboardApp:
         ctk.CTkLabel(
             header,
             textvariable=self._scheduler_status_var,
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            font=self._font_xs,
             text_color=COLORS["text_muted"],
         ).pack(side=tk.RIGHT)
 
@@ -9135,7 +10328,7 @@ class SoundboardApp:
         ctk.CTkLabel(
             delay_row,
             text="Delay between sounds:",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            font=self._font_sm,
             text_color=COLORS["text_secondary"],
         ).pack(side=tk.LEFT)
 
@@ -9188,7 +10381,7 @@ class SoundboardApp:
             command=self._scheduler_toggle_play,
             fg_color=COLORS["green"],
             hover_color=COLORS.get("green_hover", COLORS["green"]),
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"], weight="bold"),
+            font=self._font_sm_bold,
             corner_radius=6,
             height=34,
         )
@@ -9200,7 +10393,7 @@ class SoundboardApp:
             command=self._scheduler_clear,
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            font=self._font_sm,
             corner_radius=6,
             height=34,
             width=80,
@@ -9239,7 +10432,7 @@ class SoundboardApp:
             ctk.CTkLabel(
                 frame,
                 text="Queue is empty.\nUse a slot's ⋯ menu → 'Add to Queue'.",
-                font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+                font=self._font_sm,
                 text_color=COLORS["text_muted"],
                 justify="center",
             ).pack(pady=24)
@@ -9363,7 +10556,7 @@ class SoundboardApp:
         grip = ctk.CTkLabel(
             row,
             text=f"\u2630  {index + 1}",  # ≡ + number
-            font=ctk.CTkFont(family=FONTS["family_mono"], size=FONTS["size_sm"], weight="bold"),
+            font=self._font_mono_sm_bold,
             text_color=COLORS["text_muted"],
             width=46,
             cursor="fleur",
@@ -9389,7 +10582,7 @@ class SoundboardApp:
         name_lbl = ctk.CTkLabel(
             text_box,
             text=label_text,
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"], weight="bold"),
+            font=self._font_sm_bold,
             text_color=COLORS["text_primary"],
             anchor="w",
             cursor="fleur",
@@ -9400,7 +10593,7 @@ class SoundboardApp:
             sub_lbl = ctk.CTkLabel(
                 text_box,
                 text=sub_text,
-                font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+                font=self._font_xs,
                 text_color=COLORS["text_muted"],
                 anchor="w",
                 cursor="fleur",
@@ -9413,7 +10606,7 @@ class SoundboardApp:
             w.bind("<B1-Motion>", self._scheduler_drag_motion)
             w.bind("<ButtonRelease-1>", self._scheduler_drag_release)
 
-        btn_font = ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"])
+        btn_font = self._font_xs
 
         up_btn = ctk.CTkButton(
             row,
@@ -9727,7 +10920,7 @@ class SoundboardApp:
 
             def update_ui():
                 self.hover_preview_record_btn.configure(
-                    text="Record Key",
+                    text="⏺ Record Key",
                     fg_color=COLORS["blurple"],
                 )
                 if not key_name:
@@ -9774,7 +10967,7 @@ class SoundboardApp:
 
         if hook_refs["keyboard"] is None and hook_refs["mouse"] is None:
             self.hover_preview_record_btn.configure(
-                text="Record Key",
+                text="⏺ Record Key",
                 fg_color=COLORS["blurple"],
             )
             self.hover_preview_status_label.configure(
@@ -10341,6 +11534,8 @@ class SoundboardApp:
                 loop=slot.loop,
                 loop_count=slot.loop_count,
                 loop_delay=slot.loop_delay,
+                display_name=slot.name,
+                emoji=slot.emoji,
             )
             loop_text = " (looping)" if slot.loop else ""
             self.status_var.set(f"Playing: {slot.name}{loop_text}")
@@ -10418,19 +11613,19 @@ class SoundboardApp:
             self.status_var.set("Failed to load sound for preview")
             return
 
-        try:
-            # Stop any currently playing preview on other slots
-            self._stop_all_previews()
+        # Stop any currently playing preview on other slots
+        self._stop_all_previews()
 
-            # Calculate duration
-            duration = len(data) / self.sound_cache.sample_rate
-
-            # Play through default speakers (not the virtual cable)
-            sd.play(data * slot.volume, samplerate=self.sound_cache.sample_rate, device=None)
-            self.status_var.set(f"Preview: {slot.name}")
-
-            # Track preview progress
-            if duration > 0:
+        def _start(out):
+            """Main thread: play the rendered preview and light the slot up."""
+            try:
+                sr = self.sound_cache.sample_rate
+                duration = len(out) / sr
+                # Play through default speakers (not the virtual cable)
+                sd.play(out, samplerate=sr, device=None)
+                self.status_var.set(f"Preview: {slot.name}")
+                if duration <= 0:
+                    return
                 self.preview_slots[slot_idx] = {
                     "start_time": time.time(),
                     "duration": duration,
@@ -10449,11 +11644,77 @@ class SoundboardApp:
                     self.tab_slot_stop_buttons[tab_idx][slot_idx].pack()
                 if self._search_slot_widgets and (tab_idx, slot_idx) in self._search_slot_widgets:
                     self._paint_search_slot(tab_idx, slot_idx)
-        except Exception as e:
-            self.status_var.set(f"Preview error: {e}")
+            except Exception as e:
+                self.status_var.set(f"Preview error: {e}")
+
+        self._start_preview_render(slot, data, _start)
+
+    def _render_preview_audio(self, slot: SoundSlot, data):
+        """The buffer the local preview plays = what Discord would receive for
+        this slot: the SAME speed/pitch transform as the live path
+        (audio.apply_speed — previews used to ignore a slot's speed/pitch),
+        slot volume × master volume, and the mixer's soft-clip."""
+        sr = self.sound_cache.sample_rate
+        out = data
+        try:
+            if slot.speed and abs(float(slot.speed) - 1.0) > 1e-6:
+                out = apply_speed(out, float(slot.speed), bool(slot.preserve_pitch), sr)
+        except Exception:
+            logging.getLogger("soundboard").exception("preview speed render failed")
+            out = data
+        try:
+            master = float(self.master_volume_var.get()) / 100.0
+        except Exception:
+            master = 1.0
+        out = out * (float(slot.volume) * master)
+        try:
+            if self.mixer is not None:
+                out = self.mixer._soft_clip(out)
+            else:
+                out = out.clip(-1.0, 1.0)
+        except Exception:
+            try:
+                out = out.clip(-1.0, 1.0)
+            except Exception:
+                pass
+        return out
+
+    def _start_preview_render(self, slot: SoundSlot, data, on_ready):
+        """Render a preview and hand it to *on_ready(out)* on the main thread.
+
+        Speed 1.0 is instant and synchronous. A speed change is a librosa
+        time-stretch (seconds for a 1:30 sound) — exactly what the Discord path
+        does on a worker thread — so it renders off-thread and is DROPPED if
+        another preview/stop happened meanwhile (generation counter)."""
+        self._preview_gen = getattr(self, "_preview_gen", 0) + 1
+        gen = self._preview_gen
+        if not slot.speed or abs(float(slot.speed) - 1.0) <= 1e-6:
+            on_ready(self._render_preview_audio(slot, data))
+            return
+        self.status_var.set(f"Preview: rendering {slot.name} at {float(slot.speed):.2f}×…")
+
+        def _work():
+            try:
+                out = self._render_preview_audio(slot, data)
+            except Exception:
+                logging.getLogger("soundboard").exception("preview render failed")
+                return
+
+            def _deliver():
+                if gen != getattr(self, "_preview_gen", 0):
+                    return  # superseded by a newer preview / a stop
+                on_ready(out)
+
+            try:
+                self.root.after(0, _deliver)
+            except Exception:
+                pass
+
+        threading.Thread(target=_work, name="PreviewRender", daemon=True).start()
 
     def _stop_preview(self, slot_idx: int):
         """Stop a specific preview sound and reset its UI state."""
+        self._preview_gen = getattr(self, "_preview_gen", 0) + 1  # drop any in-flight render
         sd.stop()
 
         if slot_idx in self.preview_slots:
@@ -10472,6 +11733,7 @@ class SoundboardApp:
 
     def _stop_all_previews(self):
         """Stop all currently playing previews and reset their UI state."""
+        self._preview_gen = getattr(self, "_preview_gen", 0) + 1  # drop any in-flight render
         sd.stop()
 
         for slot_idx in list(self.preview_slots.keys()):
@@ -10538,133 +11800,108 @@ class SoundboardApp:
 
         popup.after(10, activate_popup)
 
-        # Position popup near the click location
+        # Position near the click. Fixed LOGICAL size sized for the grid below
+        # (the old 380x368 squeezed the sliders to 120 px and left a dead band
+        # under three ragged button rows).
         x = event.x_root + 10
         y = event.y_root + 10
-        popup.geometry(f"380x320+{x}+{y}")
+        popup.geometry(f"424x262+{x}+{y}")
 
-        # Main frame with rounded corners
-        main_frame = ctk.CTkFrame(popup, fg_color=COLORS["bg_medium"], corner_radius=12)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
+        main_frame = ctk.CTkFrame(
+            popup, fg_color=COLORS["bg_medium"], corner_radius=12,
+            border_width=1, border_color=COLORS["bg_light"],
+        )
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        main_frame.grid_columnconfigure(1, weight=1)
+        _h = UI["control_height"]
+        _ib = UI["icon_button"]
+        _cr = UI["button_corner_radius"]
+        _ICON_KW = dict(
+            width=_ib, height=_ib, corner_radius=_cr, fg_color="transparent",
+            hover_color=COLORS["bg_lighter"], text_color=COLORS["text_muted"],
+            font=self._font_sm_bold,
+        )
+        _SLIDER_KW = dict(
+            height=14, fg_color=COLORS["bg_dark"], progress_color=COLORS["blurple"],
+            button_color=COLORS["blurple"], button_hover_color=COLORS["blurple_hover"],
+        )
 
-        # Header with slot name
-        header = ctk.CTkLabel(
+        # -- header: sound name + close ------------------------------------
+        _name = slot.name or ""
+        ctk.CTkLabel(
             main_frame,
-            text=_fix_rtl_text(slot.name[:20] + "…" if len(slot.name) > 20 else slot.name),
-            text_color=COLORS["text_primary"],
-            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text=_fix_rtl_text(_name[:34] + "…" if len(_name) > 34 else _name),
+            text_color=COLORS["text_primary"], font=self._font_md_bold, anchor="w",
+        ).grid(row=0, column=0, columnspan=3, sticky="ew", padx=(16, 4), pady=(12, 6))
+        ctk.CTkButton(main_frame, text="✕", command=close_popup, **_ICON_KW).grid(
+            row=0, column=3, padx=(0, 10), pady=(10, 4)
         )
-        header.pack(fill=tk.X, padx=12, pady=(12, 8))
 
-        # Volume control
-        vol_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        vol_frame.pack(fill=tk.X, padx=12, pady=4)
+        def _row_label(r: int, text: str):
+            ctk.CTkLabel(
+                main_frame, text=text, text_color=COLORS["text_primary"],
+                font=self._font_sm, anchor="w", width=84,
+            ).grid(row=r, column=0, sticky="w", padx=(16, 6), pady=4)
 
-        ctk.CTkLabel(
-            vol_frame,
-            text="🔊 Volume:",
-            text_color=COLORS["text_primary"],
-            width=80,
-            anchor="w",
-        ).pack(side=tk.LEFT)
-
+        # -- volume ----------------------------------------------------------
+        _row_label(1, "🔊 Volume")
         volume_var = tk.IntVar(value=int(slot.volume * 100))
-        volume_slider = ctk.CTkSlider(
-            vol_frame,
-            from_=0,
-            to=150,
-            variable=volume_var,
-            width=120,
-            fg_color=COLORS["bg_dark"],
-            progress_color=COLORS["blurple"],
-            button_color=COLORS["blurple"],
-            button_hover_color=COLORS["blurple_hover"],
+        vol_val = ctk.CTkLabel(
+            main_frame, text=f"{volume_var.get()}%", width=52, anchor="e",
+            text_color=COLORS["text_muted"], font=self._font_sm,
         )
-        volume_slider.pack(side=tk.LEFT, padx=5)
+        ctk.CTkSlider(
+            main_frame, from_=0, to=150, variable=volume_var,
+            command=lambda v: vol_val.configure(text=f"{int(float(v))}%"), **_SLIDER_KW,
+        ).grid(row=1, column=1, sticky="ew", padx=4, pady=4)
+        vol_val.grid(row=1, column=2, padx=(0, 4))
 
-        ctk.CTkButton(
-            vol_frame,
-            text="↺",
-            command=lambda: volume_var.set(100),
-            fg_color=COLORS["bg_light"],
-            hover_color=COLORS["bg_lighter"],
-            width=28,
-            height=28,
-        ).pack(side=tk.RIGHT)
+        def _reset_volume():
+            volume_var.set(100)
+            vol_val.configure(text="100%")
 
-        # Speed control
-        speed_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        speed_frame.pack(fill=tk.X, padx=12, pady=4)
+        _rv = ctk.CTkButton(main_frame, text="↺", command=_reset_volume, **_ICON_KW)
+        _rv.grid(row=1, column=3, padx=(0, 10))
+        _Tooltip.attach(_rv, "Reset volume to 100%")
 
-        ctk.CTkLabel(
-            speed_frame,
-            text="⚡ Speed:",
-            text_color=COLORS["text_primary"],
-            width=80,
-            anchor="w",
-        ).pack(side=tk.LEFT)
-
+        # -- speed -----------------------------------------------------------
+        _row_label(2, "⚡ Speed")
         speed_var = tk.IntVar(value=int(slot.speed * 100))
-        speed_slider = ctk.CTkSlider(
-            speed_frame,
-            from_=50,
-            to=200,
-            variable=speed_var,
-            width=120,
-            fg_color=COLORS["bg_dark"],
-            progress_color=COLORS["blurple"],
-            button_color=COLORS["blurple"],
-            button_hover_color=COLORS["blurple_hover"],
+        spd_val = ctk.CTkLabel(
+            main_frame, text=f"{speed_var.get() / 100:.2f}×", width=52, anchor="e",
+            text_color=COLORS["text_muted"], font=self._font_sm,
         )
-        speed_slider.pack(side=tk.LEFT, padx=5)
+        ctk.CTkSlider(
+            main_frame, from_=50, to=200, variable=speed_var,
+            command=lambda v: spd_val.configure(text=f"{float(v) / 100:.2f}×"), **_SLIDER_KW,
+        ).grid(row=2, column=1, sticky="ew", padx=4, pady=4)
+        spd_val.grid(row=2, column=2, padx=(0, 4))
 
-        ctk.CTkButton(
-            speed_frame,
-            text="↺",
-            command=lambda: speed_var.set(100),
-            fg_color=COLORS["bg_light"],
-            hover_color=COLORS["bg_lighter"],
-            width=28,
-            height=28,
-        ).pack(side=tk.RIGHT)
+        def _reset_speed():
+            speed_var.set(100)
+            spd_val.configure(text="1.00×")
 
-        # Preserve pitch checkbox
-        pitch_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        pitch_frame.pack(fill=tk.X, padx=12, pady=4)
+        _rs = ctk.CTkButton(main_frame, text="↺", command=_reset_speed, **_ICON_KW)
+        _rs.grid(row=2, column=3, padx=(0, 10))
+        _Tooltip.attach(_rs, "Reset speed to 1.00×")
 
+        # -- toggles ---------------------------------------------------------
+        toggles = ctk.CTkFrame(main_frame, fg_color="transparent")
+        toggles.grid(row=3, column=0, columnspan=4, sticky="ew", padx=16, pady=(6, 8))
         preserve_pitch_var = tk.BooleanVar(value=slot.preserve_pitch)
-        pitch_check = ctk.CTkCheckBox(
-            pitch_frame,
-            text="🎵 Preserve pitch",
-            variable=preserve_pitch_var,
-            fg_color=COLORS["blurple"],
-            hover_color=COLORS["blurple_hover"],
-            text_color=COLORS["text_primary"],
+        _pp = ctk.CTkCheckBox(
+            toggles, text="Preserve pitch", variable=preserve_pitch_var, **self.CHECKBOX_KW
         )
-        pitch_check.pack(side=tk.LEFT)
-
-        # Loop checkbox (DJ-style quick toggle)
-        loop_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        loop_frame.pack(fill=tk.X, padx=12, pady=4)
-
+        _pp.pack(side=tk.LEFT)
+        _Tooltip.attach(_pp, "Keep the voice's pitch when the speed changes (off = chipmunk / deep voice)")
         loop_var = tk.BooleanVar(value=slot.loop)
-        loop_check = ctk.CTkCheckBox(
-            loop_frame,
-            text="🔁 Loop",
-            variable=loop_var,
-            fg_color=COLORS["blurple"],
-            hover_color=COLORS["blurple_hover"],
-            text_color=COLORS["text_primary"],
-        )
-        loop_check.pack(side=tk.LEFT)
+        _lp = ctk.CTkCheckBox(toggles, text="Loop", variable=loop_var, **self.CHECKBOX_KW)
+        _lp.pack(side=tk.LEFT, padx=(20, 0))
+        _Tooltip.attach(_lp, "Repeat until stopped")
 
-        # Button frame
-        btn_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        btn_frame.pack(fill=tk.X, padx=12, pady=(8, 12))
-        primary_btn_row = ctk.CTkFrame(btn_frame, fg_color="transparent")
-        primary_btn_row.pack(fill=tk.X)
-        secondary_btn_row = ctk.CTkFrame(btn_frame, fg_color="transparent")
-        secondary_btn_row.pack(fill=tk.X, pady=(6, 0))
+        ctk.CTkFrame(main_frame, fg_color=COLORS["bg_light"], height=1, corner_radius=0).grid(
+            row=4, column=0, columnspan=4, sticky="ew", padx=12
+        )
 
         def apply_changes():
             """Apply the volume/speed/pitch/loop changes."""
@@ -10724,68 +11961,54 @@ class SoundboardApp:
             except Exception as e:
                 messagebox.showerror("Copy File", f"Could not copy file:\n{e}")
 
+        # -- actions: what you do to THIS sound (one even row) ---------------
+        actions = ctk.CTkFrame(main_frame, fg_color="transparent")
+        actions.grid(row=5, column=0, columnspan=4, sticky="ew", padx=12, pady=(10, 4))
+        for c in range(3):
+            actions.grid_columnconfigure(c, weight=1, uniform="act")
+        _BTN = dict(height=_h, corner_radius=_cr, font=self._font_sm_bold)
+        _NEUTRAL = dict(
+            _BTN, fg_color=COLORS["bg_light"], hover_color=COLORS["bg_lighter"],
+            text_color=COLORS["text_primary"],
+        )
         ctk.CTkButton(
-            primary_btn_row,
-            text="Apply",
-            command=apply_changes,
-            fg_color=COLORS["green"],
-            hover_color=COLORS["green_hover"],
-            width=70,
-        ).pack(side=tk.LEFT, padx=2)
+            actions, text="✓ Apply", command=apply_changes,
+            **dict(_BTN, fg_color=COLORS["green"], hover_color=COLORS["green_hover"]),
+        ).grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        ctk.CTkButton(actions, text="Edit", command=open_full_edit, **_NEUTRAL).grid(
+            row=0, column=1, sticky="ew", padx=4
+        )
+        _cl = ctk.CTkButton(actions, text="Clone", command=clone_for_retrim, **_NEUTRAL)
+        _cl.grid(row=0, column=2, sticky="ew", padx=4)
+        _Tooltip.attach(_cl, "Copy this sound to a new slot to re-trim it")
+        _del = ctk.CTkButton(
+            actions, text="🗑", command=delete_sound, width=_ib, height=_h, corner_radius=_cr,
+            fg_color="transparent", hover_color=COLORS["red"], text_color=COLORS["red"],
+            font=self._font_sm_bold,
+        )
+        _del.grid(row=0, column=3, padx=(4, 0))
+        _Tooltip.attach(_del, "Delete this sound")
 
-        ctk.CTkButton(
-            secondary_btn_row,
-            text="Open Location",
-            command=open_file_location,
-            fg_color=COLORS["bg_light"],
-            hover_color=COLORS["bg_lighter"],
-            width=110,
-        ).pack(side=tk.LEFT, padx=2)
-
-        ctk.CTkButton(
-            secondary_btn_row,
-            text="Copy File",
-            command=copy_file_to_folder,
-            fg_color=COLORS["bg_light"],
-            hover_color=COLORS["bg_lighter"],
-            width=90,
-        ).pack(side=tk.LEFT, padx=2)
-
-        ctk.CTkButton(
-            primary_btn_row,
-            text="Edit",
-            command=open_full_edit,
-            fg_color=COLORS["blurple"],
-            hover_color=COLORS["blurple_hover"],
-            width=70,
-        ).pack(side=tk.LEFT, padx=2)
-
-        ctk.CTkButton(
-            primary_btn_row,
-            text="📋 Clone",
-            command=clone_for_retrim,
-            fg_color=COLORS["bg_light"],
-            hover_color=COLORS["bg_lighter"],
-            width=70,
-        ).pack(side=tk.LEFT, padx=2)
-
-        ctk.CTkButton(
-            primary_btn_row,
-            text="🗑️",
-            command=delete_sound,
-            fg_color=COLORS["red"],
-            hover_color=COLORS["red_hover"],
-            width=32,
-        ).pack(side=tk.LEFT, padx=2)
-
-        ctk.CTkButton(
-            primary_btn_row,
-            text="✕",
-            command=close_popup,
-            fg_color=COLORS["bg_light"],
-            hover_color=COLORS["bg_lighter"],
-            width=32,
-        ).pack(side=tk.RIGHT, padx=2)
+        # -- file utilities: quiet, equal, one row -----------------------------
+        files = ctk.CTkFrame(main_frame, fg_color="transparent")
+        files.grid(row=6, column=0, columnspan=4, sticky="ew", padx=12, pady=(4, 12))
+        for c in range(4):
+            files.grid_columnconfigure(c, weight=1, uniform="file")
+        _QUIET = dict(
+            height=_h, corner_radius=_cr, font=self._font_sm, fg_color="transparent",
+            hover_color=COLORS["bg_light"], text_color=COLORS["text_muted"],
+            border_width=1, border_color=COLORS["bg_light"],
+        )
+        for c, (label, cmd, tip) in enumerate((
+            ("📂 Show file", open_file_location, "Open the folder and select the file"),
+            ("📋 Copy file", copy_file_to_folder, "Copy the audio file to a folder…"),
+            ("📄 Copy path", lambda: self._copy_slot_file_path(self.current_tab_idx, slot_idx),
+             "Copy the full path to the clipboard"),
+            ("🎼 Suno", lambda: self._export_for_suno(slot), "Prep for Suno upload"),
+        )):
+            _b = ctk.CTkButton(files, text=label, command=cmd, **_QUIET)
+            _b.grid(row=0, column=c, sticky="ew", padx=(0 if c == 0 else 4, 0))
+            _Tooltip.attach(_b, tip)
 
         popup.bind("<Escape>", lambda _e: close_popup())
 
@@ -11001,7 +12224,7 @@ class SoundboardApp:
             header,
             text=f"Slot {slot_idx + 1}",
             text_color=COLORS["text_primary"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_lg"], weight="bold"),
+            font=self._font_lg_bold,
             anchor="w",
         ).grid(row=0, column=1, sticky="sw", pady=(8, 0))
         subtitle_text = existing.name if existing and existing.name else "Empty slot"
@@ -11009,7 +12232,7 @@ class SoundboardApp:
             header,
             text=subtitle_text,
             text_color=COLORS["text_muted"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            font=self._font_xs,
             anchor="w",
         ).grid(row=1, column=1, sticky="nw", pady=(0, 8))
 
@@ -11040,7 +12263,7 @@ class SoundboardApp:
                 card,
                 text=title,
                 text_color=COLORS["text_secondary"],
-                font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"], weight="bold"),
+                font=self._font_xs_bold,
                 anchor="w",
             ).grid(row=0, column=0, columnspan=4, sticky="ew", padx=14, pady=(10, 6))
             return card
@@ -11606,7 +12829,7 @@ class SoundboardApp:
             hover_color=COLORS["green_hover"],
             width=120,
             height=36,
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"], weight="bold"),
+            font=self._font_sm_bold,
         ).pack(side=tk.LEFT)
 
         # Click outside the dialog (on the main window) auto-saves & closes it,
@@ -12207,6 +13430,11 @@ class SoundboardApp:
                 scroll_units=self._get_scroll_units_per_notch,
                 get_geometry=self._get_person_window_geometry,
                 set_geometry=self._set_person_window_geometry,
+                # ⭐ hooks: People chips get an "Add to Favorites" menu entry.
+                list_favorite_folders=self._favorite_folders,
+                add_favorite=self._add_favorite_copy,
+                search_title=self._pick_from_title,
+                export_suno=self._export_for_suno,
             )
             self._person_ctx = ctx
         return ctx
@@ -12275,6 +13503,8 @@ class SoundboardApp:
             loop=slot.loop,
             loop_count=slot.loop_count,
             loop_delay=slot.loop_delay,
+            display_name=slot.name,
+            emoji=slot.emoji,
         )
         if duration and duration > 0:
             self.status_var.set(f"Playing: {slot.name}")
@@ -12311,34 +13541,28 @@ class SoundboardApp:
             if data is None:
                 self.status_var.set("Failed to load sound for preview")
                 return 0.0
-            try:
-                master = float(self.master_volume_var.get()) / 100.0
-            except Exception:
-                master = 1.0
-            out = data * (slot.volume * master)
-            # Mirror the mixer's soft-clip so loud sounds don't preview hotter
-            # than Discord (which clips the mix). Use the ndarray's own .clip()
-            # (numpy isn't imported in this module) so the fallback can't raise —
-            # this path runs when the stream isn't started yet (mixer is None).
-            try:
-                if self.mixer is not None:
-                    out = self.mixer._soft_clip(out)
-                else:
-                    out = out.clip(-1.0, 1.0)
-            except Exception:
-                try:
-                    out = out.clip(-1.0, 1.0)
-                except Exception:
-                    pass
+            sr = self.sound_cache.sample_rate
             sd.stop()
-            sd.play(out, samplerate=self.sound_cache.sample_rate, device=None)
-            self.status_var.set(f"Preview: {slot.name}")
-            return len(data) / self.sound_cache.sample_rate
+
+            def _start(out):
+                try:
+                    sd.play(out, samplerate=sr, device=None)
+                    self.status_var.set(f"Preview: {slot.name}")
+                except Exception as e:
+                    self.status_var.set(f"Preview error: {e}")
+
+            # Same speed/pitch + loudness rendering as the main board (and as
+            # Discord). Returns the EXPECTED duration up front so the chip's
+            # progress strip can start even while a slow stretch renders.
+            self._start_preview_render(slot, data, _start)
+            speed = float(slot.speed) if slot.speed else 1.0
+            return (len(data) / sr) / max(0.25, speed)
         except Exception as e:
             self.status_var.set(f"Preview error: {e}")
             return 0.0
 
     def _stop_person_preview(self):
+        self._preview_gen = getattr(self, "_preview_gen", 0) + 1  # drop any in-flight render
         try:
             sd.stop()
         except Exception:
@@ -12422,6 +13646,226 @@ class SoundboardApp:
         except Exception:
             pass
         self._person_popouts[key] = PersonPopout(self.root, person, self._person_context())
+
+    # ------------------------------------------------------------------
+    # ⭐ Favorites — folders of favorite sounds, rendered by the same
+    # PersonPanel machinery as People (one solo pseudo-person whose groups
+    # are the folders). Add from any main-board slot's ⋯ menu or any People
+    # chip's ⋮ menu; drag main-board slots onto the window to add; drag
+    # chips between folders / right-click → Move to folder to reorganize.
+    # ------------------------------------------------------------------
+    def _favorites_context(self) -> PersonContext:
+        """Lazily build the solo PersonContext driving the Favorites board."""
+        ctx = getattr(self, "_favorites_ctx", None)
+        if ctx is None:
+            ctx = PersonContext(
+                root=self.root,
+                persons=[self.favorites_person],
+                play=self._play_person_sound,
+                is_running=lambda: bool(self.mixer and self.mixer.running),
+                get_main_sounds=self._get_main_sounds_for_person,
+                persist=self._save_config,
+                choose_color=self._choose_person_color,
+                stop=self._stop_person_sound,
+                preview=self._preview_person_sound,
+                stop_preview=self._stop_person_preview,
+                set_volume=self._set_person_sound_volume,
+                scroll_units=self._get_scroll_units_per_notch,
+                # Namespaced keys: favorites remembers its own window size and
+                # UI prefs independently of person pop-outs.
+                get_geometry=lambda k: self._get_person_window_geometry("fav_" + k),
+                set_geometry=lambda k, g: self._set_person_window_geometry("fav_" + k, g),
+                solo=True,
+                # No favorite-hooks here: you can't favorite a favorite.
+                search_title=self._pick_from_title,
+                export_suno=self._export_for_suno,
+            )
+            self._favorites_ctx = ctx
+        return ctx
+
+    def _open_favorites_window(self):
+        """Open (or re-show) the ⭐ Favorites window. Persistent like the
+        People windows: close hides it, so reopening is instant."""
+        win = getattr(self, "_favorites_win", None)
+        try:
+            if win is not None and win.winfo_exists():
+                win.reopen()
+                return
+        except Exception:
+            pass
+        ctx = self._favorites_context()
+        if not self.favorites_person.groups:
+            # First open ever: seed one folder so there's a visible drop target.
+            ctx.add_shared_group("Favorites", "⭐", None)
+        self._favorites_win = FavoritesWindow(self.root, self.favorites_person, ctx)
+        try:
+            win = self._favorites_win
+            win.lift()
+            win.focus_force()
+        except Exception:
+            pass
+
+    def _favorite_folders(self):
+        """[(folder_id, name)] for the Add-to-Favorites cascades."""
+        p = getattr(self, "favorites_person", None)
+        return [(g.id, g.name) for g in (p.groups if p else [])]
+
+    def _add_favorite_copy(self, slot: SoundSlot, folder_id):
+        """Deep-copy ``slot`` into a favorites folder. ``folder_id`` None →
+        prompt for a new folder name. Shared by the main-board slot ⋯ menu,
+        the People chip ⋮ menu, and drag-drops onto the Favorites window."""
+        ctx = self._favorites_context()
+        person = self.favorites_person
+        group = None
+        if folder_id is None:
+            dlg = ctk.CTkInputDialog(title="New favorites folder",
+                                     text="Name for the new folder:")
+            name = (dlg.get_input() or "").strip()
+            if not name:
+                return
+            ctx.add_shared_group(name, None, None)  # dedup-guarded, persists
+            key = name.lower()
+            group = next((g for g in person.groups
+                          if (g.name or "").strip().lower() == key), None)
+        else:
+            group = next((g for g in person.groups if g.id == folder_id), None)
+        if group is None:
+            # Folder vanished (deleted meanwhile) / empty board: use a default.
+            ctx.add_shared_group("Favorites", "⭐", None)
+            group = person.groups[-1] if person.groups else None
+            if group is None:
+                return
+        group.sounds.append(SoundSlot.from_dict(slot.to_dict()))
+        ctx.changed(person)  # persists + refreshes an open Favorites window
+        self.status_var.set(f"⭐ Added {slot.name} → {group.name}")
+
+    def _add_slot_to_favorites(self, tab_idx: int, slot_idx: int, folder_id):
+        try:
+            slot = self.tabs[tab_idx].slots[slot_idx]
+        except Exception:
+            return
+        self._add_favorite_copy(slot, folder_id)
+
+    # ------------------------------------------------------------------
+    # 🔍 Pick from title — show a sound's title in a selectable field so the
+    # user can mark any part of it (e.g. the artist in a YouTube title) and
+    # search it: in this app, on Google, or with a user-configured engine
+    # (config key "custom_search_url", %s = the query).
+    # ------------------------------------------------------------------
+    def _pick_from_title(self, title: str):
+        title = (title or "").strip()
+        if not title:
+            return
+        dlg = ctk.CTkToplevel(self.root)
+        dlg.title("🔍 Pick from title")
+        dlg.configure(fg_color=COLORS["bg_dark"])
+        dlg.resizable(True, False)
+        self._center_dialog_over_root(dlg, 560, 170)
+        dlg.bind("<Escape>", lambda _e: dlg.destroy())
+
+        ctk.CTkLabel(
+            dlg,
+            text="Select part of the title, then right-click it — or use the buttons.\n"
+                 "No selection = the whole title.",
+            font=self._font_xs, text_color=COLORS["text_muted"], justify="left",
+        ).pack(anchor="w", padx=14, pady=(12, 4))
+
+        # Plain tk.Entry: reliable text selection + native copy. readonly still
+        # allows selecting. (Known app-wide limit: editable/selectable widgets
+        # don't BiDi-reorder Hebrew — display-only widgets do.)
+        entry = tk.Entry(
+            dlg, bg=COLORS["bg_medium"], fg=COLORS["text_primary"],
+            insertbackground=COLORS["text_primary"], relief="flat",
+            font=(FONTS["family"], FONTS["size_sm"]),
+        )
+        entry.insert(0, title)
+        entry.configure(state="readonly", readonlybackground=COLORS["bg_medium"])
+        entry.pack(fill=tk.X, padx=14, ipady=6)
+        entry.select_range(0, tk.END)
+        entry.focus_set()
+
+        def picked() -> str:
+            try:
+                sel = entry.selection_get()
+                if sel and sel.strip():
+                    return sel.strip()
+            except Exception:
+                pass
+            return title
+
+        def run(action):
+            text = picked()
+            dlg.destroy()
+            action(text)
+
+        row = ctk.CTkFrame(dlg, fg_color="transparent")
+        row.pack(fill=tk.X, padx=14, pady=12)
+        ctk.CTkButton(row, text="🔎 Search this app", width=140, height=30,
+                      command=lambda: run(self._search_text_in_app),
+                      fg_color=COLORS["blurple"], hover_color=COLORS["blurple_hover"],
+                      font=self._font_sm_bold, corner_radius=8).pack(side=tk.LEFT)
+        ctk.CTkButton(row, text="🌐 Google", width=110, height=30,
+                      command=lambda: run(self._search_text_google),
+                      fg_color=COLORS["bg_light"], hover_color=COLORS["bg_lighter"],
+                      font=self._font_sm_bold, corner_radius=8).pack(side=tk.LEFT, padx=(8, 0))
+        if (getattr(self, "_custom_search_url", "") or "").strip():
+            ctk.CTkButton(row, text="🔗 Custom search", width=130, height=30,
+                          command=lambda: run(self._search_text_custom),
+                          fg_color=COLORS["bg_light"], hover_color=COLORS["bg_lighter"],
+                          font=self._font_sm_bold, corner_radius=8).pack(side=tk.LEFT, padx=(8, 0))
+        ctk.CTkButton(row, text="Close", width=70, height=30, command=dlg.destroy,
+                      fg_color=COLORS["bg_light"], hover_color=COLORS["bg_lighter"],
+                      font=self._font_sm, corner_radius=8).pack(side=tk.RIGHT)
+
+        def context_menu(event):
+            menu = tk.Menu(dlg, tearoff=0)
+            menu.add_command(label="🔎 Search this app",
+                             command=lambda: run(self._search_text_in_app))
+            menu.add_command(label="🌐 Search Google",
+                             command=lambda: run(self._search_text_google))
+            if (getattr(self, "_custom_search_url", "") or "").strip():
+                menu.add_command(label="🔗 Custom search",
+                                 command=lambda: run(self._search_text_custom))
+            try:
+                menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                menu.grab_release()
+            return "break"
+
+        entry.bind("<Button-3>", context_menu)
+
+    def _search_text_in_app(self, text: str):
+        """Run the main cross-tab search for ``text`` (debounced downstream)."""
+        try:
+            self.root.deiconify()
+            self.root.lift()
+        except Exception:
+            pass
+        try:
+            self._search_var.set(text)
+            self._search_entry.focus_set()
+        except Exception:
+            pass
+
+    def _search_text_google(self, text: str):
+        try:
+            webbrowser.open("https://www.google.com/search?q="
+                            + urllib.parse.quote_plus(text))
+        except Exception:
+            pass
+
+    def _search_text_custom(self, text: str):
+        """Open the user-configured search engine (config "custom_search_url",
+        e.g. "https://example.com/search?q=%s"). %s → the URL-encoded query;
+        no %s → the query is appended."""
+        url = (getattr(self, "_custom_search_url", "") or "").strip()
+        if not url:
+            return
+        q = urllib.parse.quote_plus(text)
+        try:
+            webbrowser.open(url.replace("%s", q) if "%s" in url else url + q)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Edit a recording — browse a recording, trim/cut it, optionally tag
@@ -13209,6 +14653,8 @@ class SoundboardApp:
                 loop=slot.loop,
                 loop_count=slot.loop_count,
                 loop_delay=slot.loop_delay,
+                display_name=slot.name,
+                emoji=slot.emoji,
             )
 
             # Always track playing state so progress shows when switching tabs
@@ -13301,15 +14747,25 @@ class SoundboardApp:
             font=ctk.CTkFont(family=FONTS["family"], size=16, weight="bold"),
             anchor="w",
         ).pack(anchor="w")
+        # The bundled yt-dlp version is shown because a STALE one is the #1
+        # cause of "This video is not available" on perfectly fine videos —
+        # YouTube breaks old releases and reports it as an availability error.
+        try:
+            from yt_dlp.version import __version__ as _ytdlp_version  # type: ignore
+        except Exception:
+            _ytdlp_version = "?"
         ctk.CTkLabel(
             header,
             text=(
                 "YouTube, Vimeo, Twitter, TikTok, SoundCloud, Facebook + ~1000 other sites.\n"
-                "If the page has several videos you'll get to pick which ones to grab."
+                "If the page has several videos you'll get to pick which ones to grab.\n"
+                f"engine: yt-dlp {_ytdlp_version}  ·  if downloads start failing, "
+                "Deploy new version (it refreshes this)"
             ),
             text_color=COLORS["text_muted"],
             font=ctk.CTkFont(family=FONTS["family"], size=11),
             anchor="w",
+            justify="left",
         ).pack(anchor="w", pady=(2, 0))
 
         def _section_card(parent, title: str) -> ctk.CTkFrame:
@@ -13386,7 +14842,9 @@ class SoundboardApp:
             cookies_card,
             text=(
                 "⚠  Chrome v127+ / recent Edge / Brave use app-bound encryption — "
-                "yt-dlp can't read them. Use Firefox, or export a cookies.txt below."
+                "yt-dlp can't read them, so the download just continues WITHOUT "
+                "cookies (fine for normal videos). Only age-restricted or private "
+                "ones need Firefox or a cookies.txt below."
             ),
             text_color=COLORS["text_muted"],
             font=ctk.CTkFont(family=FONTS["family"], size=10),
@@ -13458,10 +14916,14 @@ class SoundboardApp:
         btn_row.pack(fill=tk.X, side=tk.BOTTOM, pady=(8, 0))
 
         def start():
-            url = url_var.get().strip()
+            url = self._sanitize_media_url(url_var.get())
             if not url:
                 messagebox.showwarning("Download", "Please paste a page URL.")
                 return
+            # Show the user what actually gets fetched when we cleaned it up
+            # (doubled paste / radio-mix strip) — silent rewrites are worse.
+            if url != url_var.get().strip():
+                url_var.set(url)
             cookies_path = cookies_var.get().strip() or None
             if cookies_path and not os.path.isfile(cookies_path):
                 messagebox.showwarning("Download", "Cookies file not found.")
@@ -13553,13 +15015,11 @@ class SoundboardApp:
                 "extract_flat": "in_playlist",  # fast: don't resolve each entry
                 "noplaylist": False,
             }
-            if cookies_path:
-                opts["cookiefile"] = cookies_path
-            if cookies_browser:
-                opts["cookiesfrombrowser"] = (cookies_browser,)
             try:
-                with yt_dlp.YoutubeDL(opts) as ydl:  # type: ignore[arg-type]
-                    info = ydl.extract_info(url, download=False)
+                info = self._ydl_run(
+                    yt_dlp, opts, url, download=False,
+                    cookies_path=cookies_path, cookies_browser=cookies_browser,
+                )
                 if info is None:
                     probe_result["error"] = "No video info returned."
                     return
@@ -13859,33 +15319,59 @@ class SoundboardApp:
                 }
                 if ffmpeg_dir:
                     ydl_opts["ffmpeg_location"] = ffmpeg_dir
-                if cookies_path:
-                    ydl_opts["cookiefile"] = cookies_path
-                if cookies_browser:
-                    ydl_opts["cookiesfrombrowser"] = (cookies_browser,)
 
                 try:
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:  # type: ignore[arg-type]
-                        info = ydl.extract_info(url, download=True)
-                        if info and "entries" in info:
-                            ents = [e for e in (info.get("entries") or []) if e]  # type: ignore[union-attr]
-                            info = ents[0] if ents else None
-                        if not info:
-                            errors.append(f"Item {item_no}: no info returned")
-                            continue
-                        vid = info.get("id", "")
-                        title = info.get("title", "Sound") or "Sound"
-                        final_path = str(Path(SOUNDS_DIR).absolute() / f"yt_{vid}.mp3")
-                        if not os.path.exists(final_path):
-                            cands = list(Path(SOUNDS_DIR).glob(f"yt_{vid}.*"))
-                            if cands:
-                                final_path = str(cands[0].absolute())
-                        downloaded.append({"path": final_path, "title": title})
+                    def _note_cookie_fallback():
+                        self.root.after(
+                            0,
+                            lambda: status_var.set(
+                                "Browser cookies unreadable — continuing without them…"
+                            ),
+                        )
+
+                    info = self._ydl_run(
+                        yt_dlp, ydl_opts, url, download=True,
+                        cookies_path=cookies_path, cookies_browser=cookies_browser,
+                        on_cookie_fallback=_note_cookie_fallback,
+                    )
+                    if info and "entries" in info:
+                        ents = [e for e in (info.get("entries") or []) if e]  # type: ignore[union-attr]
+                        info = ents[0] if ents else None
+                    if not info:
+                        errors.append(f"Item {item_no}: no info returned")
+                        continue
+                    vid = info.get("id", "")
+                    title = info.get("title", "Sound") or "Sound"
+                    final_path = str(Path(SOUNDS_DIR).absolute() / f"yt_{vid}.mp3")
+                    if not os.path.exists(final_path):
+                        cands = list(Path(SOUNDS_DIR).glob(f"yt_{vid}.*"))
+                        if cands:
+                            final_path = str(cands[0].absolute())
+                    downloaded.append({"path": final_path, "title": title})
                 except Exception as e:
                     if cancel_flag["cancel"]:
                         break
                     msg = re.sub(r"\x1b?\[[0-9;]*m", "", str(e))
                     low = msg.lower()
+                    # Full diagnostics to debug.log: web-download failures are
+                    # near-impossible to reproduce outside the frozen app, and
+                    # the dialog only shows one sanitized line. Record what the
+                    # engine actually was and what it was asked to do.
+                    try:
+                        from yt_dlp.version import __version__ as _ytv  # type: ignore
+                    except Exception:
+                        _ytv = "?"
+                    logging.getLogger("soundboard.youtube").error(
+                        "web download failed | yt-dlp=%s frozen=%s url=%s item=%s "
+                        "cookies=%s | %s",
+                        _ytv,
+                        bool(getattr(sys, "frozen", False)),
+                        url,
+                        item_no,
+                        ("file" if cookies_path else (cookies_browser or "none")),
+                        msg,
+                        exc_info=True,
+                    )
                     if "failed to decrypt with dpapi" in low or (
                         "decrypt" in low and "cookie" in low
                     ):
@@ -13904,6 +15390,13 @@ class SoundboardApp:
                         msg = (
                             "Site is asking for sign-in to confirm your age. Pick a browser you're "
                             "logged into in the dropdown, or supply a fresh cookies.txt."
+                        )
+                    elif "not available" in low or "unavailable" in low:
+                        msg = (
+                            f"{msg}\n\nyt-dlp {_ytv} couldn't fetch it. If the video plays "
+                            "fine in a browser this is usually YouTube throttling repeated "
+                            "requests — wait a minute and retry. Full details were written "
+                            "to debug.log."
                         )
                     errors.append(f"Item {item_no}: {msg}")
 
@@ -14088,11 +15581,21 @@ class SoundboardApp:
             if rw <= 1 or rh <= 1:  # not realized yet — fall back to screen center
                 rx, ry = 0, 0
                 rw, rh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-            x = rx + (rw - w) // 2
-            y = ry + (rh - h) // 3  # a touch above true-center reads better
+            # winfo_* values are DEVICE pixels while w/h are LOGICAL (CTk
+            # scales the WxH part of the geometry string, not the +x+y part),
+            # so centre/clamp with the device-pixel size of the dialog.
+            try:
+                s = float(ctk.ScalingTracker.get_window_scaling(self.root))
+            except Exception:
+                s = 1.0
+            if not s or s <= 0:
+                s = 1.0
+            pw, ph = round(w * s), round(h * s)
+            x = rx + (rw - pw) // 2
+            y = ry + (rh - ph) // 3  # a touch above true-center reads better
             vx, vy, vw, vh = self._virtual_screen_bounds()
-            x = max(vx, min(x, vx + vw - w))
-            y = max(vy, min(y, vy + vh - h))
+            x = max(vx, min(x, vx + vw - pw))
+            y = max(vy, min(y, vy + vh - ph))
             dialog.geometry(f"{w}x{h}+{x}+{y}")
         except Exception:
             try:
@@ -14164,7 +15667,7 @@ class SoundboardApp:
         )
         accent_bar.grid(row=0, column=0, rowspan=2, sticky="ns", padx=(16, 12), pady=14)
 
-        title_font = ctk.CTkFont(family=FONTS["family"], size=FONTS["size_lg"], weight="bold")
+        title_font = self._font_lg_bold
         title_lbl = ctk.CTkLabel(
             header, text=title, font=title_font,
             text_color=COLORS["text_primary"], anchor="w",
@@ -14374,12 +15877,34 @@ class SoundboardApp:
             except Exception:
                 pass
 
+        # DATA SAFETY (favorites): same idea as persons above, scoped to the
+        # transient-bug class only — if the attribute itself is missing (a
+        # crash before __init__ finished), preserve whatever is on disk.
+        # Deliberate edits (deleting folders/sounds down to empty) save fine
+        # because favorites_person always exists once __init__ ran.
+        _fav_person = getattr(self, "favorites_person", None)
+        if _fav_person is not None:
+            favorites_out = _fav_person.to_dict()
+        else:
+            favorites_out = None
+            try:
+                with open(CONFIG_FILE, encoding="utf-8") as _ff:
+                    favorites_out = json.load(_ff).get("favorites_board")
+            except Exception:
+                pass
+
         config = {
             "tabs": [t.to_dict() for t in self.tabs],
             "persons": persons_out,
+            "favorites_board": favorites_out,
             "current_tab": self.current_tab_idx,
             "ptt_enabled": self.ptt_enabled_var.get(),
             "ptt_key": self.ptt_key_var.get().strip() if self.ptt_key_var.get().strip() else None,
+            # Universal PTT (all-apps mic gate — bottom-bar 🌐 button)
+            "universal_ptt_enabled": self.uptt_enabled_var.get(),
+            "universal_ptt_key": self.uptt_key_var.get().strip() or None,
+            "universal_ptt_cues": self.uptt_cues_var.get(),
+            "universal_ptt_cue_volume": int(self.uptt_cue_volume_var.get()),
             "hover_preview_key": (
                 self.hover_preview_key_var.get().strip()
                 if self.hover_preview_key_var.get().strip()
@@ -14401,9 +15926,12 @@ class SoundboardApp:
             ),
             "custom_groups": self._custom_groups,
             "custom_colors": list(getattr(self, "_custom_colors", []) or []),
+            # 💻/📱 master-section last selection (view state, desktop-local).
+            "active_section": getattr(self, "_active_section", "pc"),
             "window_geometry": self._current_window_geometry(),
             # People hub / pop-out sizes & positions, so they reopen as left.
             "person_windows": dict(getattr(self, "_person_window_geometry", {}) or {}),
+            "custom_search_url": getattr(self, "_custom_search_url", "") or "",
             "youtube_cookies_path": getattr(self, "_youtube_cookies_path", "") or "",
             "youtube_cookies_browser": getattr(self, "_youtube_cookies_browser", "") or "",
             "noise_suppression": (
@@ -14412,9 +15940,14 @@ class SoundboardApp:
             "noise_suppression_strength": (
                 self.ns_strength_var.get() if hasattr(self, "ns_strength_var") else 85
             ),
-            # Which denoiser engine: "deepfilternet" (best) or "rnnoise" (light).
+            # Which denoiser engine (see audio.NS_BACKEND_LABELS): deepfilternet /
+            # max / classic / rnnoise / gate.
             "noise_suppression_backend": (
                 self._selected_ns_backend() if hasattr(self, "ns_backend_var") else "deepfilternet"
+            ),
+            # 80 Hz low-cut ahead of the denoiser.
+            "noise_suppression_lowcut": (
+                bool(self.ns_lowcut_var.get()) if hasattr(self, "ns_lowcut_var") else False
             ),
             # Mute the live mic while sounds auto-hold PTT (see _toggle_duck_mic).
             "duck_mic_during_sounds": (
@@ -14572,6 +16105,18 @@ class SoundboardApp:
             except Exception:
                 self.persons = []
 
+            # ⭐ Favorites board (a single Person-shaped record of folders).
+            try:
+                fav_raw = config.get("favorites_board")
+                if fav_raw:
+                    fav = Person.from_dict(fav_raw)
+                    fav.name = "Favorites"  # identity is fixed; never user-renamed
+                    if not fav.emoji:
+                        fav.emoji = "⭐"
+                    self.favorites_person = fav
+            except Exception:
+                pass  # keep the empty default from __init__
+
             # Ensure at least one tab exists
             if not self.tabs:
                 self.tabs = [SoundTab(name="Main", emoji="🎵")]
@@ -14591,6 +16136,19 @@ class SoundboardApp:
             if ptt_enabled:
                 self.ptt_enabled_var.set(True)
                 self.ptt_frame.pack(fill=tk.X, pady=(8, 0))  # Show PTT settings
+
+            # Universal PTT (all-apps mic gate). Applied without saving —
+            # we're loading the very config we'd be writing back.
+            self.uptt_enabled_var.set(bool(config.get("universal_ptt_enabled", False)))
+            self.uptt_key_var.set(str(config.get("universal_ptt_key") or "").strip().lower())
+            self.uptt_cues_var.set(bool(config.get("universal_ptt_cues", True)))
+            try:
+                self.uptt_cue_volume_var.set(
+                    max(0, min(100, int(config.get("universal_ptt_cue_volume", 60))))
+                )
+            except Exception:
+                self.uptt_cue_volume_var.set(60)
+            self._apply_uptt_settings(save=False)
 
             hover_preview_key = config.get("hover_preview_key", "mouse3") or ""
             self.hover_preview_key_var.set(str(hover_preview_key).strip().lower())
@@ -14639,14 +16197,15 @@ class SoundboardApp:
             # Restore the chosen denoiser engine (default DeepFilterNet), but
             # only if that engine is actually available on this machine.
             ns_backend = str(config.get("noise_suppression_backend", "deepfilternet"))
-            if hasattr(self, "ns_backend_var") and ns_backend in getattr(self, "_ns_backend_labels", {}):
-                avail = []
-                if DEEPFILTERNET_AVAILABLE:
-                    avail.append("deepfilternet")
-                if RNNOISE_AVAILABLE:
-                    avail.append("rnnoise")
-                if ns_backend in avail:
-                    self.ns_backend_var.set(self._ns_backend_labels[ns_backend])
+            if hasattr(self, "ns_backend_var"):
+                # _ns_backend_labels holds only the engines loadable on THIS
+                # machine; an unavailable saved engine keeps the best available
+                # (the status line + fallback note explain what is running).
+                labels = getattr(self, "_ns_backend_labels", {}) or {}
+                if ns_backend in labels:
+                    self.ns_backend_var.set(labels[ns_backend])
+            if hasattr(self, "ns_lowcut_var"):
+                self.ns_lowcut_var.set(bool(config.get("noise_suppression_lowcut", False)))
 
             # Auto-PTT mic duck (default ON — people heard the live mic
             # alongside every sound otherwise).
@@ -14690,6 +16249,23 @@ class SoundboardApp:
             self._custom_groups = config.get("custom_groups", [])
             self._refresh_group_combo()
 
+            # 💻/📱 master-section view state (sidebar switcher may not be
+            # built yet at load time — sync it when it exists).
+            self._active_section = config.get("active_section") or "pc"
+            try:
+                self.section_switcher.set(
+                    "📱 Phone" if self._active_section == "phone" else "💻 PC"
+                )
+                self._apply_section_visibility()
+            except Exception:
+                pass
+            # Once the deferred widget build settles, make the board show a
+            # tab that actually belongs to the restored section.
+            try:
+                self.root.after(1500, self._reconcile_section_view)
+            except Exception:
+                pass
+
             # Load saved custom colors (hand-mixed colours kept for reuse).
             saved_colors = config.get("custom_colors", []) or []
             if isinstance(saved_colors, list):
@@ -14709,6 +16285,9 @@ class SoundboardApp:
             # Load YouTube downloader cookies path
             self._youtube_cookies_path = config.get("youtube_cookies_path", "") or ""
             self._youtube_cookies_browser = config.get("youtube_cookies_browser", "") or ""
+            # Optional third engine for "Pick from title" searches
+            # (e.g. "https://example.com/search?q=%s"; empty = hidden).
+            self._custom_search_url = config.get("custom_search_url", "") or ""
 
             # Load recording settings
             rec_dir = config.get("recording_dir", "") or ""
@@ -14811,7 +16390,8 @@ class SoundboardApp:
         # Warming them here means person sounds are decode-cached to storage at
         # launch too, exactly like main-board sounds. (Duplicates that point at
         # the same file as a main slot are skipped by `seen`.)
-        for person in getattr(self, "persons", []):
+        fav = getattr(self, "favorites_person", None)
+        for person in list(getattr(self, "persons", [])) + ([fav] if fav else []):
             for group in getattr(person, "groups", []):
                 for slot in getattr(group, "sounds", []):
                     fp = getattr(slot, "file_path", None)
@@ -14907,6 +16487,11 @@ class SoundboardApp:
 
     def _real_quit(self):
         """Actual shutdown — releases PTT, stops mixer, destroys window."""
+        # Retire the Universal PTT poll thread and close the mic gate.
+        try:
+            self.uptt.shutdown()
+        except Exception:
+            pass
         # Tear down the persistent People hub first so every cached panel's
         # after-timers are cancelled deterministically (the <Destroy> backstops
         # would cover it, but this keeps shutdown order explicit).
@@ -15274,7 +16859,7 @@ class SoundboardApp:
         ctk.CTkLabel(
             body,
             text="💤 AFK Mode",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_md"], weight="bold"),
+            font=self._font_md_bold,
             text_color=COLORS["text_primary"],
             anchor="w",
         ).pack(fill=tk.X, padx=12, pady=(10, 6))
@@ -15285,7 +16870,7 @@ class SoundboardApp:
         ctk.CTkLabel(
             pick_row,
             text="Sound:",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            font=self._font_sm,
             text_color=COLORS["text_secondary"],
             width=56,
             anchor="w",
@@ -15300,8 +16885,8 @@ class SoundboardApp:
             button_color=COLORS["bg_light"],
             button_hover_color=COLORS["bg_lighter"],
             dropdown_fg_color=COLORS["bg_medium"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
-            dropdown_font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            font=self._font_sm,
+            dropdown_font=self._font_sm,
             corner_radius=6,
             height=28,
         )
@@ -15318,7 +16903,7 @@ class SoundboardApp:
             ),
             fg_color=COLORS["bg_light"],
             hover_color=COLORS["bg_lighter"],
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"], weight="bold"),
+            font=self._font_sm_bold,
             corner_radius=6,
             width=28,
             height=28,
@@ -15332,7 +16917,7 @@ class SoundboardApp:
         ctk.CTkLabel(
             int_row,
             text="Every:",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
+            font=self._font_sm,
             text_color=COLORS["text_secondary"],
             width=56,
             anchor="w",
@@ -15356,7 +16941,7 @@ class SoundboardApp:
         ctk.CTkLabel(
             int_row,
             text="min",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            font=self._font_xs,
             text_color=COLORS["text_muted"],
         ).pack(side=tk.LEFT, padx=(0, 8))
 
@@ -15378,7 +16963,7 @@ class SoundboardApp:
         ctk.CTkLabel(
             int_row,
             text="sec",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            font=self._font_xs,
             text_color=COLORS["text_muted"],
         ).pack(side=tk.LEFT)
 
@@ -15398,7 +16983,7 @@ class SoundboardApp:
             hover_color=(
                 COLORS["red_hover"] if self._afk_enabled else COLORS["green_hover"]
             ),
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"], weight="bold"),
+            font=self._font_sm_bold,
             corner_radius=6,
             height=30,
         )
@@ -15408,7 +16993,7 @@ class SoundboardApp:
         status_lbl = ctk.CTkLabel(
             body,
             text="Running…" if self._afk_enabled else "Idle",
-            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"]),
+            font=self._font_xs,
             text_color=COLORS["text_muted"],
             anchor="w",
         )

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "bl-20260815-refile-recovered-sounds-a3gt",
+  "title": "Re-file recovered sounds from the ♻ Recovered tab",
+  "description": "80 orphaned sounds (including Yair's lost ones from the 2026-06-08 wipe) sit in the ♻ Recovered tab. Git cannot attribute them; the user must recognize and drag them onto the right people. The 2 lost people's names are still unknown.",
+  "priority": "low",
+  "status": "backlog",
+  "tags": ["data-recovery", "user-task"],
+  "source": "agent:claude-code",
+  "createdAt": "2026-08-15T13:10:00Z",
+  "updatedAt": "2026-08-15T13:10:00Z"
+}

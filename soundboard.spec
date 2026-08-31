@@ -58,15 +58,24 @@ except Exception as _e:
     print(f"[spec] WARNING: static-ffmpeg fetch failed ({_e}); ffprobe will be missing in EXE")
     static_ffmpeg_dir = None
 
-# Locate pyrnnoise DLL (must be bundled or RNNoise won't load)
+# Locate pyrnnoise's rnnoise.dll WITHOUT importing the package: its __init__
+# drags in audiolab -> av (libav), a chain the frozen EXE never satisfied, which
+# is why "Light (RNNoise)" silently did nothing in prod. audio.py now binds the
+# DLL directly via ctypes, so the EXE needs ONLY this file (bundled below as
+# pyrnnoise/rnnoise.dll) and pyrnnoise/audiolab/av are excluded (-65 MB).
 try:
-    import pyrnnoise as _pyrnn_pkg
-    _pyrnn_dir = os.path.dirname(_pyrnn_pkg.__file__)
-    pyrnnoise_dll = os.path.join(_pyrnn_dir, 'rnnoise.dll')
-    if not os.path.exists(pyrnnoise_dll):
+    import importlib.util as _ilu
+    _pyrnn_spec = _ilu.find_spec('pyrnnoise')
+    _pyrnn_dir = os.path.dirname(_pyrnn_spec.origin) if (_pyrnn_spec and _pyrnn_spec.origin) else None
+    pyrnnoise_dll = os.path.join(_pyrnn_dir, 'rnnoise.dll') if _pyrnn_dir else None
+    if not (pyrnnoise_dll and os.path.exists(pyrnnoise_dll)):
         pyrnnoise_dll = None
 except Exception:
     pyrnnoise_dll = None
+if pyrnnoise_dll:
+    print(f"[spec] rnnoise.dll: {pyrnnoise_dll}")
+else:
+    print("[spec] WARNING: rnnoise.dll not found; the Light (RNNoise) engine will be unavailable in the EXE")
 
 a = Analysis(
     ['main.py'],
@@ -90,6 +99,17 @@ a = Analysis(
       + dfn_model_datas
       + ort_datas,
     hiddenimports=[
+        # Own package: soundboard/__init__.py is PEP-562 LAZY (no static
+        # imports), so PyInstaller no longer discovers these through it —
+        # without this list the frozen EXE dies on "from soundboard import
+        # SoundboardApp".
+        'soundboard.gui',
+        'soundboard.audio',
+        'soundboard.editor',
+        'soundboard.models',
+        'soundboard.mobile_sync',
+        'soundboard.perf_probe',
+
         # Core audio
         'sounddevice',
         '_sounddevice_data',
@@ -114,6 +134,10 @@ a = Analysis(
         'static_ffmpeg',
         'static_ffmpeg.run',
         'yt_dlp',
+
+        # 📱 Send to Phone (mobile companion sync — lazy-imported in mobile_sync.py)
+        'qrcode',
+        'qrcode.image.pil',
 
         # librosa and its dependencies
         'librosa',
@@ -141,9 +165,8 @@ a = Analysis(
         'emoji_data_python',
         'colour',
 
-        # RNNoise for mic noise suppression
-        'pyrnnoise',
-        'pyrnnoise.rnnoise',
+        # RNNoise: NOT imported as a package any more (audio.py binds
+        # pyrnnoise/rnnoise.dll via ctypes; the DLL ships through `datas`).
 
         # onnxruntime — DeepFilterNet noise-suppression backend
         'onnxruntime',
@@ -171,7 +194,9 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # pyrnnoise's Python side needs audiolab + av (libav, ~65 MB) that only its
+    # file-conversion CLI uses; nothing in the app imports them.
+    excludes=['pyrnnoise', 'audiolab', 'av'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "bl-20260815-action-bar-overflow-e5jd",
+  "title": "Action-bar overflow menu (bar clips at narrow widths)",
+  "description": "Pre-existing debt: the action bar clips at narrow window widths; the 📱 button added ~40 px. Refactor rarely-used actions into an overflow menu.",
+  "priority": "low",
+  "status": "backlog",
+  "tags": ["ui"],
+  "source": "agent:claude-code",
+  "createdAt": "2026-08-15T13:10:00Z",
+  "updatedAt": "2026-08-15T13:10:00Z"
+}

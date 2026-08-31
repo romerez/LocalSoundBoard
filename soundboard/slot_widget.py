@@ -15,12 +15,208 @@ Each proxy routes its calls to the appropriate setter on the underlying
 
 from __future__ import annotations
 
+import os
+import queue
+import threading
 import time
 import tkinter as tk
 from typing import Any, Callable, Optional
 
 from ._shared import RESIZE_STATE as _SHARED_RESIZE_STATE
-from .constants import COLORS
+from .constants import COLORS, UI
+
+# ---------------------------------------------------------------------------
+# DPI helpers
+# ---------------------------------------------------------------------------
+#
+# A tk.Canvas is a RAW Tk widget: its coordinates, PhotoImages and negative
+# font sizes are all DEVICE pixels, while every number handed to us by gui.py
+# (heights, font sizes, image sizes) is LOGICAL px that CTk would multiply by
+# the window's DPI factor. The widget resolves that factor once per instance.
+#
+# Two modes, selected by UI["slot_scale_geometry"] at construction time:
+# * False (default): the tile keeps its ORIGINAL on-screen size — the logical
+#   numbers are used directly as device px and text uses the CTkFont's
+#   .actual() point size / the original positive point sizes, exactly as the
+#   canvas widget always drew them — so the main board does not grow.
+# * True: geometry and fonts are multiplied by the DPI factor like CTk
+#   widgets (152 logical → 228 device px, -22 px main text at 150 %).
+# In BOTH modes the rasters are crisp: slot thumbnails are decoded at the
+# real device-pixel box (see below) and emoji glyphs at the device pixel
+# size of the (mode-dependent) box they are drawn in — never upscaled.
+
+
+def _window_scaling(widget: Any) -> float:
+    """CTk's DPI factor for the window *widget* lives in (1.0 fallback)."""
+    try:
+        from customtkinter import ScalingTracker  # type: ignore
+
+        top = widget.winfo_toplevel()
+        try:
+            return float(ScalingTracker.get_window_scaling(top))
+        except Exception:
+            # Window not (yet) registered with CTk — ask the OS directly.
+            return float(ScalingTracker.get_window_dpi_scaling(top)) * float(
+                getattr(ScalingTracker, "window_scaling", 1.0) or 1.0
+            )
+    except Exception:
+        pass
+    try:
+        return max(1.0, float(widget.winfo_fpixels("1i")) / 96.0)
+    except Exception:
+        return 1.0
+
+
+# ---------------------------------------------------------------------------
+# Device-size thumbnail decoding
+# ---------------------------------------------------------------------------
+#
+# gui.py's loader hands us a CTkImage whose PIL raster was thumbnailed at the
+# LOGICAL size (70x55); a canvas PhotoImage is blitted 1:1 in device px, so at
+# 150 % that raster would have to be upscaled (blurry) or drawn small. Instead
+# the slot re-decodes the file straight to DEVICE size. That costs ~0.5 s for
+# a 150-image library and every tab is prebuilt at startup, so the decode runs
+# on ONE daemon worker thread (pure PIL, never touches Tk); the slot paints an
+# immediate placeholder (the logical raster fitted to the device box — exactly
+# what CTk would show) and swaps in the crisp raster when it lands. Results
+# come back through a queue drained by a main-thread `after` poll, so there
+# are no cross-thread Tk calls (which raise if the mainloop isn't dispatching,
+# e.g. during the synchronous startup build).
+#
+# Cache: (path, mtime, dev_w, dev_h) -> ImageTk.PhotoImage (or _THUMB_FAILED).
+# Bounded; every widget holds its own ref in `_image_tk`, so a clear() can
+# never drop an image that is still on screen. Main thread only.
+_THUMB_CACHE: dict = {}
+_THUMB_CACHE_MAX = 512
+_THUMB_FAILED = object()  # negative cache marker: don't retry a broken file
+_PENDING: dict = {}  # key -> [SlotWidget, ...] waiting for that decode
+_PENDING_LOCK = threading.Lock()
+_DECODE_QUEUE: "queue.Queue" = queue.Queue()  # (key, path, dev) → worker
+_RESULT_QUEUE: "queue.Queue" = queue.Queue()  # (key, pil | None) ← worker
+_decoder: Optional[threading.Thread] = None
+_poll_scheduled = False
+_poll_host: Any = None  # the Tk ROOT the poll timer is armed on (outlives every slot)
+
+
+def _decode_device_thumb(path: str, dev: tuple) -> Any:
+    """Pure PIL: decode *path* to an aspect-kept raster fitting *dev* (device px).
+
+    ``draft()`` lets JPEGs decode at a reduced DCT scale (2x the target keeps
+    LANCZOS quality); ``thumbnail()`` never stretches. A source smaller than
+    the box in both dimensions is fitted up so it isn't a speck.
+    """
+    from PIL import Image, ImageOps  # type: ignore
+
+    src = Image.open(path)
+    try:
+        src.draft(None, (dev[0] * 2, dev[1] * 2))
+    except Exception:
+        pass
+    src.thumbnail(dev, Image.Resampling.LANCZOS)
+    src.load()
+    if src.size[0] < dev[0] and src.size[1] < dev[1]:
+        src = ImageOps.contain(src, dev, Image.Resampling.LANCZOS)
+    return src
+
+
+def _decode_worker() -> None:
+    while True:
+        key, path, dev = _DECODE_QUEUE.get()
+        try:
+            pil = _decode_device_thumb(path, dev)
+        except Exception:
+            pil = None
+        _RESULT_QUEUE.put((key, pil))
+
+
+def _ensure_decoder() -> None:
+    global _decoder
+    if _decoder is None or not _decoder.is_alive():
+        _decoder = threading.Thread(target=_decode_worker, name="SlotThumbDecoder", daemon=True)
+        _decoder.start()
+
+
+def _poll_host_alive() -> bool:
+    try:
+        return _poll_host is not None and bool(_poll_host.winfo_exists())
+    except Exception:
+        return False
+
+
+def _arm_poll() -> None:
+    global _poll_scheduled
+    try:
+        _poll_host.after(40, _poll_results)
+        _poll_scheduled = True
+    except Exception:
+        _poll_scheduled = False
+
+
+def _schedule_poll(widget: Any) -> None:
+    """Arm the main-thread result poll (idempotent; re-armed while work is in flight).
+
+    Armed on the Tk ROOT, never on a slot: tkinter deletes a widget's pending
+    ``after`` commands when that widget is destroyed, so a poll armed on a
+    slot that is rebuilt within 40 ms (Columns ±, tab delete, the search
+    overlay re-render) silently never fired and left ``_poll_scheduled`` stuck
+    True — no thumbnail was delivered again for the rest of the session.
+    (after() on an ALREADY-destroyed widget does not raise; destruction AFTER
+    arming is the hazard.) The host is re-resolved if it ever dies.
+    """
+    global _poll_scheduled, _poll_host
+    if not _poll_host_alive():
+        try:
+            _poll_host = widget._root()
+        except Exception:
+            try:
+                _poll_host = widget.winfo_toplevel()
+            except Exception:
+                _poll_host = widget
+        _poll_scheduled = False  # a timer armed on a dead host died with it
+    if _poll_scheduled:
+        return
+    _arm_poll()
+
+
+def _poll_results() -> None:
+    global _poll_scheduled
+    _poll_scheduled = False
+    while True:
+        try:
+            key, pil = _RESULT_QUEUE.get_nowait()
+        except queue.Empty:
+            break
+        _deliver_thumb(key, pil)
+    # Keep polling while decodes are still in flight — always from the root.
+    with _PENDING_LOCK:
+        busy = bool(_PENDING)
+    if busy and _poll_host_alive():
+        _arm_poll()
+
+
+def _deliver_thumb(key: tuple, pil: Any) -> None:
+    """Main thread: wrap the decoded raster ONCE, cache it, hand it to every
+    slot that asked for it (duplicates across tabs share the PhotoImage)."""
+    with _PENDING_LOCK:
+        waiters = _PENDING.pop(key, [])
+    photo: Any = _THUMB_FAILED
+    if pil is not None:
+        try:
+            from PIL import ImageTk  # type: ignore
+
+            photo = ImageTk.PhotoImage(pil)
+        except Exception:
+            photo = _THUMB_FAILED
+    if len(_THUMB_CACHE) >= _THUMB_CACHE_MAX:
+        _THUMB_CACHE.clear()
+    _THUMB_CACHE[key] = photo
+    if photo is _THUMB_FAILED:
+        return  # slots keep their placeholder
+    for w in waiters:
+        try:
+            w._apply_thumb(key, photo)
+        except Exception:
+            pass
 
 # ---------------------------------------------------------------------------
 # Color helpers
@@ -68,12 +264,13 @@ def _resolve_color(c: Any, fallback: str) -> str:
     return str(c)
 
 
-def _resolve_font(f: Any) -> Any:
-    """Resolve a font value to something Tk's create_text accepts.
+def _resolve_font_legacy(f: Any) -> Any:
+    """Original font resolution (UI["slot_scale_geometry"] == False).
 
-    CTkFont stores its actual values via .actual(); reach into that so
-    Canvas text renders at the configured family/size/weight rather than
-    Tk's default.
+    Verbatim pre-DPI behaviour so the rendered text is pixel-identical to
+    before: a CTkFont is read through .actual(), whose size is a POSITIVE
+    point size that Tk converts with its own scaling (≈15 px for the size-15
+    slot font at 150 %); plain tuples are handed to Tk untouched.
     """
     if f is None:
         return ("Segoe UI", 11)
@@ -94,6 +291,47 @@ def _resolve_font(f: Any) -> Any:
             return tuple(parts)
     except Exception:
         pass
+    return f
+
+
+def _resolve_font(f: Any, scaling: float = 1.0) -> Any:
+    """Resolve a font value to a Tk font tuple sized in DEVICE pixels
+    (UI["slot_scale_geometry"] == True).
+
+    CTkFont keeps its LOGICAL pixel size in ``.cget("size")``; its
+    ``.actual()`` reports a *point* size instead, which Tk then multiplies by
+    its own ``tk scaling`` — not CTk's DPI factor — so the canvas text used to
+    come out ~30 % smaller than the very same CTkFont on a CTkButton. A
+    NEGATIVE Tk font size is pixels, so ``-round(size * scaling)`` renders the
+    text exactly as CTk would. Plain ``(family, size, *style)`` tuples with a
+    positive (logical) size are converted the same way; a negative size is
+    taken as already-device px and passed through.
+    """
+    if f is None:
+        return ("Segoe UI", -max(1, round(11 * scaling)))
+    # CTkFont path (duck-typed: only CTkFont has create_scaled_tuple)
+    try:
+        if hasattr(f, "create_scaled_tuple") and callable(getattr(f, "cget", None)):
+            family = f.cget("family") or "Segoe UI"
+            size = abs(int(f.cget("size") or 11))
+            parts: list = [family, -max(1, round(size * scaling))]
+            if f.cget("weight") == "bold":
+                parts.append("bold")
+            if f.cget("slant") == "italic":
+                parts.append("italic")
+            return tuple(parts)
+    except Exception:
+        pass
+    # Plain tuple / list: (family, size, *style)
+    if isinstance(f, (tuple, list)) and len(f) >= 2:
+        try:
+            size = int(f[1])
+        except (TypeError, ValueError):
+            return f
+        if size > 0:
+            return (f[0], -max(1, round(size * scaling)), *f[2:])
+        return tuple(f)
+    # Anything else (named font, tkinter.font.Font) — hand to Tk untouched.
     return f
 
 
@@ -120,6 +358,13 @@ class SlotWidget(tk.Canvas):
     The bottom 32px is reserved for the progress bar and the stop / menu
     overlay buttons. Click hit-testing is done in `_on_click` based on
     pointer coordinates (cheaper than embedding child widgets).
+
+    All class constants and the ``height`` argument are in the tile's own
+    px units. With ``UI["slot_scale_geometry"]`` False (default) they are
+    used directly as device px — the original look; with it True they are
+    multiplied by the window's DPI factor once in ``__init__``. Either way
+    the resolved values (``self._bottom_strip`` …) are what every
+    ``create_*`` call and the hit-test use.
     """
 
     BOTTOM_STRIP = 30  # reserved height at bottom for stop+menu buttons
@@ -127,6 +372,7 @@ class SlotWidget(tk.Canvas):
     OVERLAY_BTN_H = 22
     OVERLAY_PAD = 5
     PROGRESS_H = 6  # thicker bar — closer to original CTkProgressBar look
+    EMOJI_PX = 22  # emoji glyph side (top-left badge)
 
     def __init__(
         self,
@@ -138,14 +384,62 @@ class SlotWidget(tk.Canvas):
         on_drag_drop: Optional[Callable[[int, int], None]] = None,
         height: int = 152,
     ) -> None:
+        # Real DPI factor of the window — always used for the thumbnail box
+        # (a canvas PhotoImage is blitted 1:1, so that raster must be device px).
+        s = _window_scaling(parent)
+        if not (0.4 <= s <= 8.0):
+            s = 1.0
+        self._s: float = s
+        # Geometry/font mode (see module notes). Default False keeps the
+        # original on-screen tile size; True scales like CTk widgets.
+        self._scale_geometry: bool = bool(UI.get("slot_scale_geometry", False))
+        sg = s if self._scale_geometry else 1.0
+        self._sg: float = sg
+
+        def _d(px: float) -> int:
+            return max(1, round(px * sg))
+
         super().__init__(
             parent,
             highlightthickness=0,
             bd=0,
             bg=COLORS["bg_medium"],
-            height=height,
+            height=_d(height),
             cursor="hand2",
         )
+
+        # Device-pixel geometry, computed once (no per-frame arithmetic /
+        # allocations — the progress animation redraws every playing slot
+        # each tick).
+        self._bottom_strip: int = _d(self.BOTTOM_STRIP)
+        self._ov_w: int = _d(self.OVERLAY_BTN_W)
+        self._ov_h: int = _d(self.OVERLAY_BTN_H)
+        self._ov_pad: int = _d(self.OVERLAY_PAD)
+        self._prog_h: int = _d(self.PROGRESS_H)
+        self._inset_min: int = _d(4)
+        self._img_dy: int = _d(14)  # image centre lift above content middle
+        self._text_dy: int = _d(6)  # text centre drop below content middle
+        self._text_img_dy: int = _d(22)  # text baseline offset when an image is shown
+        self._text_margin: int = _d(16)  # wrap width margin
+        self._emoji_px: int = _d(self.EMOJI_PX)
+        self._emoji_xy: int = _d(10)
+        self._vol_text_dy: int = _d(12)
+        self._font_emoji_fallback: tuple
+        self._font_vol: tuple
+        self._font_menu: tuple
+        self._font_stop: tuple
+        if self._scale_geometry:
+            # Raw-Tk fonts: NEGATIVE = device px, so they match CTk's sizing.
+            self._font_emoji_fallback = ("Segoe UI Emoji", -_d(14))
+            self._font_vol = ("Segoe UI", -_d(9), "bold")
+            self._font_menu = ("Segoe UI", -_d(11), "bold")
+            self._font_stop = ("Segoe UI", -_d(11))
+        else:
+            # Original positive point sizes — pixel-identical to before.
+            self._font_emoji_fallback = ("Segoe UI Emoji", 14)
+            self._font_vol = ("Segoe UI", 9, "bold")
+            self._font_menu = ("Segoe UI", 11, "bold")
+            self._font_stop = ("Segoe UI", 11)
 
         self._on_click_cb = on_click
         self._on_right_click_cb = on_right_click
@@ -161,7 +455,9 @@ class SlotWidget(tk.Canvas):
         self._text_color: str = COLORS["text_muted"]
         self._image: Any = None  # CTkImage or PhotoImage
         self._image_tk: Any = None  # Resolved Tk image (cached)
+        self._image_key: Optional[tuple] = None  # thumb-cache key of _image (None = n/a)
         self._font: Any = ("Segoe UI Emoji", 11)
+        self._font_tk: Any = self._resolve_font_mode(self._font)  # resolved once per set_font
         self._emoji: str = ""
         self._emoji_img: Any = None  # strong ref to current emoji PhotoImage
         self._progress: float = 0.0
@@ -203,8 +499,9 @@ class SlotWidget(tk.Canvas):
         self._press_y: int = 0
         self._press_active: bool = False
         # Drag detection: once motion exceeds threshold, the next release is
-        # treated as a drag-drop instead of a click.
-        self._drag_threshold: int = 8
+        # treated as a drag-drop instead of a click. Pointer deltas are device
+        # px, so the threshold is scaled like everything else.
+        self._drag_threshold: int = _d(8)
         self._drag_active: bool = False
 
     # ------------------------------------------------------------------
@@ -255,7 +552,15 @@ class SlotWidget(tk.Canvas):
         if font is self._font:
             return
         self._font = font
+        self._font_tk = self._resolve_font_mode(font)
         self._redraw_full()
+
+    def _resolve_font_mode(self, f: Any) -> Any:
+        """Mode-aware font resolution: original point-size path by default,
+        DPI-scaled negative-px path when UI["slot_scale_geometry"] is True."""
+        if self._scale_geometry:
+            return _resolve_font(f, self._s)
+        return _resolve_font_legacy(f)
 
     def set_emoji(self, emoji: str) -> None:
         e = emoji or ""
@@ -299,34 +604,112 @@ class SlotWidget(tk.Canvas):
     # ------------------------------------------------------------------
 
     def _resolve_image(self, image: Any) -> Any:
-        """Return a Tk-usable image from a CTkImage / PhotoImage / None."""
+        """Return a Tk PhotoImage for a CTkImage / PhotoImage / None, rasterised
+        at DEVICE size.
+
+        A PhotoImage on a tk.Canvas is drawn 1:1 in device pixels, so the
+        raster has to be ``round(logical * scaling)`` px: the old
+        ``pil.resize(size)`` drew the 70x55 LOGICAL raster (47x37 logical at
+        150 %) and stretched its aspect ratio on top. When the loader's raster
+        is smaller than the device box, the file (``pil.filename``) is
+        re-decoded at device size on the background worker (see module notes)
+        and this returns an immediate placeholder — the raster fitted to the
+        box, aspect kept — which ``_apply_thumb`` replaces once the crisp
+        version lands. Results are cached by (path, mtime, device size), so a
+        rebuild / tab switch never decodes twice.
+        """
+        self._image_key = None
         if image is None:
             return None
-        # CTkImage
         try:
             from customtkinter import CTkImage
-
-            if isinstance(image, CTkImage):
-                # Use the dark-mode PIL image to make a PhotoImage.
-                try:
-                    from PIL import ImageTk  # type: ignore
-
-                    pil = image._dark_image or image._light_image  # type: ignore[attr-defined]
-                    if pil is not None:
-                        # Resize to the configured size if available.
-                        size = getattr(image, "_size", None)
-                        if size:
-                            try:
-                                pil = pil.resize(size)
-                            except Exception:
-                                pass
-                        return ImageTk.PhotoImage(pil)
-                except Exception:
-                    return None
         except Exception:
+            return image
+        if not isinstance(image, CTkImage):
+            return image  # already a Tk PhotoImage
+        try:
+            from PIL import Image, ImageOps, ImageTk  # type: ignore
+        except Exception:
+            return None
+        try:
+            pil = image._dark_image or image._light_image  # type: ignore[attr-defined]
+        except Exception:
+            pil = None
+        if pil is None:
+            return None
+        size = getattr(image, "_size", None) or pil.size
+        # Box in DEVICE px. In the default (legacy-geometry) mode the box is the
+        # same 70x55 device px the tile has always reserved — decoded crisply
+        # and aspect-correct now, but no bigger, so a tall picture can't grow
+        # into the two-line name. Scaled mode uses the DPI-correct box.
+        s = self._s if self._scale_geometry else 1.0
+        dev = (max(1, round(size[0] * s)), max(1, round(size[1] * s)))
+
+        path = getattr(pil, "filename", None) or ""
+        key = None
+        if path:
+            try:
+                key = (path, os.path.getmtime(path), dev[0], dev[1])
+            except OSError:
+                key = None
+        failed = False
+        if key is not None:
+            cached = _THUMB_CACHE.get(key)
+            if cached is _THUMB_FAILED:
+                failed = True
+            elif cached is not None:
+                self._image_key = key
+                return cached
+
+        # Placeholder / direct result: fit the raster we already have into the
+        # device box (aspect kept — never stretched). Cheap (~0.1 ms).
+        try:
+            src = pil.copy()
+            src.thumbnail(dev, Image.Resampling.LANCZOS)
+            if src.size[0] < dev[0] and src.size[1] < dev[1]:
+                src = ImageOps.contain(src, dev, Image.Resampling.LANCZOS)
+            photo = ImageTk.PhotoImage(src)
+        except Exception:
+            return None
+
+        if key is None or failed:
+            return photo
+        self._image_key = key
+        if pil.size[0] < dev[0] and pil.size[1] < dev[1]:
+            # Loader raster is LOGICAL-sized (too small): queue a crisp
+            # device-size decode; the placeholder shows meanwhile.
+            with _PENDING_LOCK:
+                waiters = _PENDING.get(key)
+                if waiters is None:
+                    _PENDING[key] = [self]
+                    _DECODE_QUEUE.put((key, path, dev))
+                else:
+                    waiters.append(self)
+            _ensure_decoder()
+            _schedule_poll(self)
+        else:
+            # Raster already covers the device box (loader gave device px, or
+            # scaling is 1.0): the fitted copy IS the final result — cache it.
+            if len(_THUMB_CACHE) >= _THUMB_CACHE_MAX:
+                _THUMB_CACHE.clear()
+            _THUMB_CACHE[key] = photo
+        return photo
+
+    def _apply_thumb(self, key: tuple, photo: Any) -> None:
+        """Main thread: swap in the crisp device-size raster if this slot still
+        shows the image it was decoded for. Only the image item is touched —
+        no full redraw."""
+        if key != self._image_key:
+            return  # image changed / cleared while the decode was in flight
+        self._image_tk = photo
+        try:
+            if self.find_withtag("image"):
+                self.itemconfigure("image", image=photo)
+            elif self.winfo_width() > 1 and self.winfo_height() > 1:
+                self._redraw_full()
+            # else: not laid out yet — the Configure redraw will use _image_tk
+        except tk.TclError:
             pass
-        # Already a Tk PhotoImage
-        return image
 
     # ------------------------------------------------------------------
     # Drawing
@@ -398,21 +781,32 @@ class SlotWidget(tk.Canvas):
         self.delete("all")
         self._prog_fill_id = None  # all canvas items are gone
 
-        # Outer frame (canvas bg already set; draw border if any)
+        # Outer frame (canvas bg already set; draw border if any). Default
+        # mode: the original 1 px-inset rectangle at the given width. Scaled
+        # mode: width × DPI, outline centred on half its width so none of it
+        # is clipped.
+        bw = 0
+        o: float = 1
         if self._border_width > 0:
+            if self._scale_geometry:
+                bw = max(1, round(self._border_width * self._s))
+                o = bw / 2
+            else:
+                bw = int(self._border_width)
+        if bw > 0:
             self.create_rectangle(
-                1,
-                1,
-                w - 1,
-                h - 1,
+                o,
+                o,
+                w - o,
+                h - o,
                 outline=self._border_color,
-                width=self._border_width,
+                width=bw,
                 fill="",
                 tags="border",
             )
 
         # Inner button area (the "real" slot button bg)
-        inset = max(self._border_width, 4)
+        inset = max(bw, self._inset_min)
         bx0, by0 = inset, inset
         bx1, by1 = w - inset, h - inset
 
@@ -432,33 +826,34 @@ class SlotWidget(tk.Canvas):
                 tags="bg",
             )
 
-        content_h = h - self.BOTTOM_STRIP
+        content_h = h - self._bottom_strip
 
         # Image (centered above text if present)
-        text_cy = content_h // 2 + 6
+        text_cy = content_h // 2 + self._text_dy
         if self._image_tk is not None:
             try:
                 self.create_image(
                     w // 2,
-                    content_h // 2 - 14,
+                    content_h // 2 - self._img_dy,
                     image=self._image_tk,
                     tags="image",
                 )
-                text_cy = content_h - 22
+                text_cy = content_h - self._text_img_dy
             except tk.TclError:
                 pass
 
         # Main text
         if self._text:
+            wrap_w = max(self._text_margin + 4, w - self._text_margin)
             try:
                 self.create_text(
                     w // 2,
                     text_cy,
                     text=self._text,
                     fill=self._text_color,
-                    font=_resolve_font(self._font),
+                    font=self._font_tk,
                     anchor="center",
-                    width=max(20, w - 16),
+                    width=wrap_w,
                     justify="center",
                     tags="text",
                 )
@@ -470,21 +865,23 @@ class SlotWidget(tk.Canvas):
                     text=self._text,
                     fill=self._text_color,
                     anchor="center",
-                    width=max(20, w - 16),
+                    width=wrap_w,
                     justify="center",
                     tags="text",
                 )
 
         # Emoji top-left — try rendering as a true-color image first,
         # fall back to Tk's monochrome glyph if PIL/the font is unavailable.
+        # The glyph is rasterised at DEVICE px (a canvas PhotoImage is 1:1).
         if self._emoji:
             emoji_img = None
             try:
                 from . import emoji_render as _er
 
-                emoji_img = _er.get_tk_image(self._emoji, 22)
+                emoji_img = _er.get_tk_image(self._emoji, self._emoji_px)
             except Exception:
                 emoji_img = None
+            exy = self._emoji_xy
             if emoji_img is not None:
                 # Stash a ref on the widget too — the renderer cache holds
                 # the canonical reference but this also protects against
@@ -492,29 +889,29 @@ class SlotWidget(tk.Canvas):
                 self._emoji_img = emoji_img
                 try:
                     self.create_image(
-                        10,
-                        10,
+                        exy,
+                        exy,
                         image=emoji_img,
                         anchor="nw",
                         tags="emoji",
                     )
                 except tk.TclError:
                     self.create_text(
-                        10,
-                        10,
+                        exy,
+                        exy,
                         text=self._emoji,
                         fill=COLORS["text_primary"],
-                        font=("Segoe UI Emoji", 14),
+                        font=self._font_emoji_fallback,
                         anchor="nw",
                         tags="emoji",
                     )
             else:
                 self.create_text(
-                    10,
-                    10,
+                    exy,
+                    exy,
                     text=self._emoji,
                     fill=COLORS["text_primary"],
-                    font=("Segoe UI Emoji", 14),
+                    font=self._font_emoji_fallback,
                     anchor="nw",
                     tags="emoji",
                 )
@@ -536,10 +933,10 @@ class SlotWidget(tk.Canvas):
             self._prog_fill_id = None
             volume = max(0.0, min(1.5, self._volume_display))
             # Bar sits ABOVE the overlay button row, with a small gap.
-            bar_pad_left = self.OVERLAY_PAD
-            bar_pad_right = self.OVERLAY_PAD
-            y_bot = h - self.BOTTOM_STRIP - 2
-            y_top = y_bot - self.PROGRESS_H
+            bar_pad_left = self._ov_pad
+            bar_pad_right = self._ov_pad
+            y_bot = h - self._bottom_strip - 2
+            y_top = y_bot - self._prog_h
             track_x0 = bar_pad_left
             track_x1 = w - bar_pad_right
             # Track (background) — dark with a white border for visibility
@@ -571,10 +968,10 @@ class SlotWidget(tk.Canvas):
             volume_pct = int(round(volume * 100))
             self.create_text(
                 (track_x0 + track_x1) // 2,
-                y_top - 12,
+                y_top - self._vol_text_dy,
                 text=f"🔊 {volume_pct}%",
                 fill="#44ff44",
-                font=("Segoe UI", 9, "bold"),
+                font=self._font_vol,
                 anchor="center",
                 tags="progress",
             )
@@ -590,10 +987,10 @@ class SlotWidget(tk.Canvas):
                 self._prog_fill_id = None
             return
         # Bar sits ABOVE the overlay button row, with a small gap.
-        bar_pad_left = self.OVERLAY_PAD
-        bar_pad_right = self.OVERLAY_PAD
-        y_bot = h - self.BOTTOM_STRIP - 2
-        y_top = y_bot - self.PROGRESS_H
+        bar_pad_left = self._ov_pad
+        bar_pad_right = self._ov_pad
+        y_bot = h - self._bottom_strip - 2
+        y_top = y_bot - self._prog_h
         track_x0 = bar_pad_left
         track_x1 = w - bar_pad_right
         fill_w = max(0.0, (track_x1 - track_x0 - 2) * self._progress)
@@ -652,12 +1049,12 @@ class SlotWidget(tk.Canvas):
         if w <= 1:
             return
 
-        btn_y_top = h - self.OVERLAY_BTN_H - self.OVERLAY_PAD
-        btn_y_bot = h - self.OVERLAY_PAD
+        btn_y_top = h - self._ov_h - self._ov_pad
+        btn_y_bot = h - self._ov_pad
 
         # ⋯ menu button (always visible) — bottom-right
-        mx1 = w - self.OVERLAY_PAD
-        mx0 = mx1 - self.OVERLAY_BTN_W
+        mx1 = w - self._ov_pad
+        mx0 = mx1 - self._ov_w
         self.create_rectangle(
             mx0,
             btn_y_top,
@@ -672,14 +1069,14 @@ class SlotWidget(tk.Canvas):
             (btn_y_top + btn_y_bot) // 2,
             text="⋯",
             fill=COLORS["text_primary"],
-            font=("Segoe UI", 11, "bold"),
+            font=self._font_menu,
             tags=("overlay", "menu_btn"),
         )
 
         # Stop button (only when sound is playing) — bottom-left
         if self._stop_visible:
-            sx0 = self.OVERLAY_PAD
-            sx1 = sx0 + self.OVERLAY_BTN_W
+            sx0 = self._ov_pad
+            sx1 = sx0 + self._ov_w
             self.create_rectangle(
                 sx0,
                 btn_y_top,
@@ -694,7 +1091,7 @@ class SlotWidget(tk.Canvas):
                 (btn_y_top + btn_y_bot) // 2,
                 text="⏹",
                 fill="white",
-                font=("Segoe UI", 11),
+                font=self._font_stop,
                 tags=("overlay", "stop_btn"),
             )
 
@@ -711,16 +1108,16 @@ class SlotWidget(tk.Canvas):
         if w <= 1 or h <= 1:
             return "main"
 
-        btn_y_top = h - self.OVERLAY_BTN_H - self.OVERLAY_PAD
-        btn_y_bot = h - self.OVERLAY_PAD
+        btn_y_top = h - self._ov_h - self._ov_pad
+        btn_y_bot = h - self._ov_pad
         if btn_y_top <= y <= btn_y_bot:
-            mx1 = w - self.OVERLAY_PAD
-            mx0 = mx1 - self.OVERLAY_BTN_W
+            mx1 = w - self._ov_pad
+            mx0 = mx1 - self._ov_w
             if mx0 <= x <= mx1:
                 return "menu"
             if self._stop_visible:
-                sx0 = self.OVERLAY_PAD
-                sx1 = sx0 + self.OVERLAY_BTN_W
+                sx0 = self._ov_pad
+                sx1 = sx0 + self._ov_w
                 if sx0 <= x <= sx1:
                     return "stop"
         return "main"

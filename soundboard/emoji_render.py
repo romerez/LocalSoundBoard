@@ -15,6 +15,13 @@ Notes:
 * The font's bitmaps are baked at large sizes (109px), so we render at a
   large size and then resize to the requested target with LANCZOS.
 * All operations are done lazily and cached by `(emoji, size)`.
+* `size` is a raw PIXEL count — the cache does no DPI handling. Callers
+  must pass DEVICE pixels (``round(logical * window_scaling)``) whenever the
+  result is drawn 1:1 on a raw Tk canvas / `tk.Button` (PhotoImage) or is
+  wrapped as ``CTkImage(size=(logical, logical))``: CTk resizes the PIL image
+  to ``round(logical * scaling)`` and Pillow skips resampling only when the
+  raster already has exactly that size. Passing the logical size instead
+  gives a bicubic 1.5x upscale on a 150 % display (the "smudgy" emoji).
 """
 
 from __future__ import annotations
@@ -128,6 +135,9 @@ def _render_pil(emoji: str, size: int) -> Optional["Image.Image"]:
 def get_tk_image(emoji: str, size: int = 32) -> Optional["ImageTk.PhotoImage"]:
     """Return a cached `ImageTk.PhotoImage` for the given emoji and size.
 
+    ``size`` is DEVICE pixels: a PhotoImage is blitted 1:1, so pass
+    ``round(logical * window_scaling)`` (see the module docstring).
+
     Returns None if PIL or the emoji font are unavailable, or if the glyph
     cannot be rasterised. The returned object is owned by the cache; do
     not let the caller's ref drop without keeping it alive elsewhere — Tk
@@ -158,8 +168,10 @@ def get_pil_image(emoji: str, size: int = 32) -> Optional["Image.Image"]:
     """Return the cached PIL image for the emoji, or None.
 
     Useful when a consumer wants to wrap the rasterised glyph in something
-    other than a `tk.PhotoImage` — e.g. CTk's `CTkImage` which prefers a
-    raw PIL image so it can do its own HiDPI handling.
+    other than a `tk.PhotoImage` — e.g. CTk's `CTkImage`. Render at the
+    DEVICE size (``round(logical * scaling)``) and pass the LOGICAL size to
+    ``CTkImage(size=...)``: CTk then finds the raster already at its target
+    size and shows it without resampling.
     """
     if not emoji or not _PIL_OK:
         return None

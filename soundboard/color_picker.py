@@ -29,7 +29,7 @@ from typing import Callable, List, Optional
 
 import customtkinter as ctk
 
-from .constants import COLORS, FONTS, SLOT_COLOR_GROUPS, get_text_color_for_bg
+from .constants import COLORS, FONTS, SLOT_COLOR_GROUPS, UI, get_text_color_for_bg
 
 # Pillow + NumPy power the live gradient. They're hard deps of the app, but the
 # picker degrades to swatches-only if either is somehow unavailable.
@@ -78,6 +78,24 @@ def _hsv_to_hex(h: float, s: float, v: float) -> str:
 
 def _clamp01(x: float) -> float:
     return 0.0 if x < 0 else 1.0 if x > 1 else x
+
+
+def _window_scaling(widget) -> float:
+    """CTk's DPI factor for *widget*'s window (1.0 fallback).
+
+    The gradient square, hue strip, preview ring and swatch chips are RAW
+    ``tk.Canvas`` widgets: their sizes, coordinates and PhotoImages are DEVICE
+    pixels. Everything below is therefore rendered at ``logical * scaling`` and
+    drawn 1:1 — no CTk/Tk resample, so the gradients stay crisp at 150 %.
+    """
+    try:
+        return float(ctk.ScalingTracker.get_window_scaling(widget.winfo_toplevel()))
+    except Exception:
+        pass
+    try:
+        return max(1.0, float(widget.winfo_fpixels("1i")) / 96.0)
+    except Exception:
+        return 1.0
 
 
 if _IMG_OK:
@@ -151,7 +169,23 @@ class SlickColorPicker(ctk.CTkFrame):
         self._sv_photo = None
         self._hue_photo = None
 
-        self._font_xs = ctk.CTkFont(size=FONTS["size_xs"])
+        # Device-pixel sizes for the raw-Tk canvases (see _window_scaling).
+        # NB: ``self._s`` is the SATURATION channel, hence ``_dpi`` here.
+        dpi = _window_scaling(self)
+        if not (0.4 <= dpi <= 8.0):
+            dpi = 1.0
+        self._dpi = dpi
+        self._sv_dw = max(1, round(self.SV_W * dpi))
+        self._sv_dh = max(1, round(self.SV_H * dpi))
+        self._hue_dw = max(1, round(self.HUE_W * dpi))
+        self._sw_d = max(1, round(self.SWATCH * dpi))
+        self._prev_d = max(1, round(40 * dpi))
+        self._cur_r = max(2, round(6 * dpi))
+        self._w2 = max(1, round(2 * dpi))
+        # Raw-Tk font: NEGATIVE size = device px, matching CTk's sizing.
+        self._font_chip = (FONTS["family"], -max(1, round(9 * dpi)), "bold")
+
+        self._font_xs = ctk.CTkFont(family=FONTS["family"], size=FONTS["size_xs"])
         self._font_sm = ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"])
         self._font_sm_b = ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"], weight="bold")
         self._font_mono = ctk.CTkFont(family=FONTS["family_mono"], size=FONTS["size_sm"])
@@ -190,7 +224,7 @@ class SlickColorPicker(ctk.CTkFrame):
         inner.pack(fill=tk.X, padx=10, pady=8)
 
         self._preview = tk.Canvas(
-            inner, width=40, height=40, highlightthickness=0, bd=0,
+            inner, width=self._prev_d, height=self._prev_d, highlightthickness=0, bd=0,
             bg=COLORS["bg_dark"], cursor="arrow",
         )
         self._preview.pack(side=tk.LEFT)
@@ -210,10 +244,10 @@ class SlickColorPicker(ctk.CTkFrame):
 
         if self._allow_none:
             ctk.CTkButton(
-                inner, text="Default", width=74, height=30,
+                inner, text="Default", width=74, height=UI["control_height"],
                 command=self._choose_default,
                 fg_color=COLORS["bg_light"], hover_color=COLORS["bg_lighter"],
-                font=self._font_xs, corner_radius=15,
+                font=self._font_xs, corner_radius=UI["button_corner_radius"],
             ).pack(side=tk.RIGHT)
 
     # ----------------------------------------------------------------- studio
@@ -225,7 +259,7 @@ class SlickColorPicker(ctk.CTkFrame):
 
         # SV square (left).
         self._sv_canvas = tk.Canvas(
-            row, width=self.SV_W, height=self.SV_H, highlightthickness=0, bd=0,
+            row, width=self._sv_dw, height=self._sv_dh, highlightthickness=0, bd=0,
             bg=COLORS["bg_dark"], cursor="crosshair",
         )
         self._sv_canvas.pack(side=tk.LEFT)
@@ -234,13 +268,14 @@ class SlickColorPicker(ctk.CTkFrame):
 
         # Hue strip (middle).
         self._hue_canvas = tk.Canvas(
-            row, width=self.HUE_W, height=self.SV_H, highlightthickness=0, bd=0,
+            row, width=self._hue_dw, height=self._sv_dh, highlightthickness=0, bd=0,
             bg=COLORS["bg_dark"], cursor="sb_v_double_arrow",
         )
         self._hue_canvas.pack(side=tk.LEFT, padx=(10, 0))
         self._hue_canvas.bind("<Button-1>", self._on_hue_pointer)
         self._hue_canvas.bind("<B1-Motion>", self._on_hue_pointer)
-        self._hue_photo = ImageTk.PhotoImage(_hue_image(self.HUE_W, self.SV_H))
+        # Rendered at DEVICE size and drawn 1:1 → crisp on HiDPI.
+        self._hue_photo = ImageTk.PhotoImage(_hue_image(self._hue_dw, self._sv_dh))
         self._hue_canvas.create_image(0, 0, anchor="nw", image=self._hue_photo)
 
         # Controls column (right).
@@ -269,15 +304,16 @@ class SlickColorPicker(ctk.CTkFrame):
 
         btns = ctk.CTkFrame(ctrl, fg_color="transparent")
         btns.pack(fill=tk.X, side=tk.BOTTOM)
+        # Primary (green, bold) commits the studio colour; Save is secondary.
         ctk.CTkButton(
-            btns, text="✓ Use", height=30, command=self._use_studio_color,
-            fg_color=COLORS["blurple"], hover_color=COLORS["blurple_hover"],
-            font=self._font_sm, corner_radius=8,
+            btns, text="✓ Use", height=UI["control_height"], command=self._use_studio_color,
+            fg_color=COLORS["green"], hover_color=COLORS["green_hover"],
+            font=self._font_sm_b, corner_radius=UI["button_corner_radius"],
         ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
         ctk.CTkButton(
-            btns, text="＋ Save", height=30, command=self._save_studio_color,
-            fg_color=COLORS["green"], hover_color=COLORS["green_hover"],
-            font=self._font_sm, corner_radius=8,
+            btns, text="＋ Save", height=UI["control_height"], command=self._save_studio_color,
+            fg_color=COLORS["bg_light"], hover_color=COLORS["bg_lighter"],
+            font=self._font_sm, corner_radius=UI["button_corner_radius"],
         ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0))
 
     # ---------------------------------------------------------------- palette
@@ -292,10 +328,11 @@ class SlickColorPicker(ctk.CTkFrame):
         self._family_var = tk.StringVar(value=self._initial_family())
         ctk.CTkOptionMenu(
             head, values=list(SLOT_COLOR_GROUPS.keys()), variable=self._family_var,
-            command=lambda _v: self._render_family(), width=120, height=28,
+            command=lambda _v: self._render_family(), width=120,
+            height=UI["control_height"],
             fg_color=COLORS["bg_medium"], button_color=COLORS["bg_light"],
             button_hover_color=COLORS["bg_lighter"], font=self._font_sm,
-            dropdown_font=self._font_sm, corner_radius=8,
+            dropdown_font=self._font_sm, corner_radius=UI["button_corner_radius"],
         ).pack(side=tk.RIGHT)
 
         self._palette_grid = ctk.CTkFrame(wrap, fg_color="transparent")
@@ -350,7 +387,7 @@ class SlickColorPicker(ctk.CTkFrame):
             r, c = divmod(i, self.SWATCH_PER_ROW)
             h = _norm_hex(hex_color)
             cv = tk.Canvas(
-                self._saved_grid, width=self.SWATCH, height=self.SWATCH,
+                self._saved_grid, width=self._sw_d, height=self._sw_d,
                 highlightthickness=0, bd=0, bg=COLORS["bg_dark"], cursor="hand2",
             )
             cv.grid(row=r, column=c, padx=3, pady=3)
@@ -369,7 +406,7 @@ class SlickColorPicker(ctk.CTkFrame):
     # --------------------------------------------------------------- chips
     def _make_chip(self, parent, hex_color: str, col: int, row: int):
         cv = tk.Canvas(
-            parent, width=self.SWATCH, height=self.SWATCH, highlightthickness=0,
+            parent, width=self._sw_d, height=self._sw_d, highlightthickness=0,
             bd=0, bg=COLORS["bg_dark"], cursor="hand2",
         )
         cv.grid(row=row, column=col, padx=3, pady=3)
@@ -379,14 +416,14 @@ class SlickColorPicker(ctk.CTkFrame):
 
     def _draw_chip(self, canvas: tk.Canvas, fill: str, selected: bool):
         canvas.delete("all")
-        d = self.SWATCH
-        pad = 2
+        d = self._sw_d
+        pad = self._w2
         if selected:
-            canvas.create_oval(0, 0, d - 1, d - 1, fill="", outline=COLORS["text_primary"], width=2)
+            canvas.create_oval(0, 0, d - 1, d - 1, fill="", outline=COLORS["text_primary"],
+                               width=self._w2)
             canvas.create_oval(pad + 1, pad + 1, d - pad - 2, d - pad - 2, fill=fill, outline="")
             tc = get_text_color_for_bg(fill)
-            canvas.create_text(d / 2, d / 2 - 1, text="✓", fill=tc,
-                               font=(FONTS["family"], 9, "bold"))
+            canvas.create_text(d / 2, d / 2 - 1, text="✓", fill=tc, font=self._font_chip)
         else:
             canvas.create_oval(pad, pad, d - pad - 1, d - pad - 1, fill=fill,
                                outline=COLORS["bg_light"], width=1)
@@ -407,16 +444,17 @@ class SlickColorPicker(ctk.CTkFrame):
         self._refresh_all(notify=True)
 
     def _on_sv_pointer(self, event):
-        x = min(max(event.x, 0), self.SV_W - 1)
-        y = min(max(event.y, 0), self.SV_H - 1)
-        self._s = x / (self.SV_W - 1)
-        self._v = 1.0 - y / (self.SV_H - 1)
+        # Pointer coords are device px — the same space as the device-sized canvas.
+        x = min(max(event.x, 0), self._sv_dw - 1)
+        y = min(max(event.y, 0), self._sv_dh - 1)
+        self._s = x / max(1, self._sv_dw - 1)
+        self._v = 1.0 - y / max(1, self._sv_dh - 1)
         self._selected = _hsv_to_hex(self._h, self._s, self._v)
         self._refresh_all(notify=True)
 
     def _on_hue_pointer(self, event):
-        y = min(max(event.y, 0), self.SV_H - 1)
-        self._h = y / (self.SV_H - 1)
+        y = min(max(event.y, 0), self._sv_dh - 1)
+        self._h = y / max(1, self._sv_dh - 1)
         self._selected = _hsv_to_hex(self._h, self._s, self._v)
         self._render_sv(force=False)
         self._refresh_all(notify=True)
@@ -461,7 +499,7 @@ class SlickColorPicker(ctk.CTkFrame):
         if not _IMG_OK:
             return
         if force or self._sv_hue_cached is None or abs(self._sv_hue_cached - self._h) > 1e-4:
-            self._sv_photo = ImageTk.PhotoImage(_sv_image(self._h, self.SV_W, self.SV_H))
+            self._sv_photo = ImageTk.PhotoImage(_sv_image(self._h, self._sv_dw, self._sv_dh))
             if self._sv_img_id is None:
                 self._sv_img_id = self._sv_canvas.create_image(
                     0, 0, anchor="nw", image=self._sv_photo, tags=("svimg",)
@@ -476,12 +514,12 @@ class SlickColorPicker(ctk.CTkFrame):
         if not _IMG_OK:
             return
         self._sv_canvas.delete("svcur")
-        x = self._s * (self.SV_W - 1)
-        y = (1.0 - self._v) * (self.SV_H - 1)
-        rr = 6
+        x = self._s * (self._sv_dw - 1)
+        y = (1.0 - self._v) * (self._sv_dh - 1)
+        rr = self._cur_r
         # White ring with a dark inner ring so it reads on any background.
         self._sv_canvas.create_oval(x - rr, y - rr, x + rr, y + rr, outline="#ffffff",
-                                    width=2, tags=("svcur",))
+                                    width=self._w2, tags=("svcur",))
         self._sv_canvas.create_oval(x - rr - 1, y - rr - 1, x + rr + 1, y + rr + 1,
                                     outline="#000000", width=1, tags=("svcur",))
 
@@ -489,16 +527,19 @@ class SlickColorPicker(ctk.CTkFrame):
         if not _IMG_OK:
             return
         self._hue_canvas.delete("huecur")
-        y = self._h * (self.SV_H - 1)
-        self._hue_canvas.create_rectangle(0, y - 2, self.HUE_W - 1, y + 2,
-                                          outline="#ffffff", width=2, tags=("huecur",))
+        y = self._h * (self._sv_dh - 1)
+        hh = self._w2
+        self._hue_canvas.create_rectangle(0, y - hh, self._hue_dw - 1, y + hh,
+                                          outline="#ffffff", width=self._w2, tags=("huecur",))
 
     def _draw_ring(self, canvas: tk.Canvas, fill: str):
         canvas.delete("all")
         w = int(canvas.cget("width"))
         h = int(canvas.cget("height"))
         d = min(w, h)
-        canvas.create_oval(2, 2, d - 3, d - 3, fill=fill, outline=COLORS["bg_light"], width=2)
+        p = self._w2
+        canvas.create_oval(p, p, d - p - 1, d - p - 1, fill=fill, outline=COLORS["bg_light"],
+                           width=p)
 
     def _color_name(self, hex_color: str) -> str:
         for colors in SLOT_COLOR_GROUPS.values():

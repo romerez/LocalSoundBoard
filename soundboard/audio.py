@@ -16,6 +16,8 @@ import glob
 import hashlib
 import io
 import logging
+import collections
+import itertools
 import queue
 import re
 import shutil
@@ -44,28 +46,110 @@ WSOLA_FRAME = 2048  # ~43ms grain at 48kHz
 WSOLA_HS = 512  # synthesis hop → 75% overlap (Hann is COLA)
 
 
-# Real-time noise suppression via RNNoise (the same algorithm Discord used
-# before they switched to Krisp, also used by OBS Studio). Tiny RNN, ~0.5%
-# CPU at 48 kHz mono. We use the low-level C bindings directly and skip the
-# heavy `audiolab`/`av` wrapper around `RNNoise.denoise_frame` so nothing
-# inside the audio callback ever touches libav / ffmpeg.
-try:
-    from pyrnnoise.rnnoise import (  # type: ignore
-        FRAME_SIZE as _RNN_FRAME_SIZE,
-        SAMPLE_RATE as _RNN_SAMPLE_RATE,
-        create as _rnn_create,
-        destroy as _rnn_destroy,
-        process_frame as _rnn_process_frame,
-    )
+# ===========================================================================
+# Mic noise suppression — pluggable engines, all 48 kHz / 480-sample frames.
+#
+#   deepfilternet  DeepFilterNet3 DNN via onnxruntime — Krisp-class, the default
+#   max            DeepFilterNet + a residual gate driven by the DNN's own local
+#                  SNR estimate (ducks what little survives between words)
+#   classic        statistical spectral denoiser (MCRA noise tracking + decision-
+#                  directed Wiener gain) — the WebRTC/Speex family, no AI, no
+#                  extra dependencies, never "eats" a voice
+#   rnnoise        Xiph RNNoise tiny RNN — lightest CPU, weak on non-stationary
+#   gate           adaptive expander only — no denoising, just silence between
+#                  words
+#
+# The engines run on the mixer's dedicated mic-processing thread (see
+# AudioMixer._ns_worker), never inside the PortAudio callback, and they are
+# built/warmed on a background thread — so enabling or switching mid-call can't
+# stall the audio callback, and a missing DLL/model degrades to the next engine
+# ONCE with a visible note instead of retrying (and logging) on every block.
+# ===========================================================================
+_NS_FRAME_SIZE = 480
+_NS_SAMPLE_RATE = 48000
 
-    RNNOISE_AVAILABLE = True
-except Exception:  # pragma: no cover - import-time guard
-    _RNN_FRAME_SIZE = 480
-    _RNN_SAMPLE_RATE = 48000
-    _rnn_create = None  # type: ignore
-    _rnn_destroy = None  # type: ignore
-    _rnn_process_frame = None  # type: ignore
-    RNNOISE_AVAILABLE = False
+try:  # low-cut pre-filter (scipy is already a hard dependency via voice_fx)
+    from scipy.signal import butter as _sp_butter, lfilter as _sp_lfilter  # type: ignore
+
+    _SCIPY_SIGNAL_AVAILABLE = True
+except Exception:  # pragma: no cover - import guard
+    _sp_butter = _sp_lfilter = None  # type: ignore
+    _SCIPY_SIGNAL_AVAILABLE = False
+
+
+# --- RNNoise: bound DIRECTLY to rnnoise.dll via ctypes -----------------------
+# We deliberately do NOT `import pyrnnoise`. Its package __init__ imports the
+# file-conversion wrapper (`pyrnnoise.pyrnnoise`), which drags in `audiolab` ->
+# `av` (libav) -> tqdm: ~70 MB of imports that only the CLI needs, and a chain
+# the frozen EXE could not satisfy. There, `from pyrnnoise.rnnoise import ...`
+# raised at import time, RNNOISE_AVAILABLE went False, "Light (RNNoise)"
+# silently passed the RAW mic through, and the lazy loader retried + logged the
+# failure on every audio block (36k log lines in one session). Binding the four
+# C entry points ourselves needs only the DLL, which soundboard.spec bundles as
+# pyrnnoise/rnnoise.dll.
+def _rnnoise_dll_candidates() -> List[str]:
+    out: List[str] = []
+    mei = getattr(sys, "_MEIPASS", None)
+    if mei:
+        out.append(os.path.join(mei, "pyrnnoise", "rnnoise.dll"))
+    try:
+        import importlib.util as _ilu
+
+        spec = _ilu.find_spec("pyrnnoise")  # locates the package WITHOUT running __init__
+        if spec is not None:
+            if spec.origin:
+                out.append(os.path.join(os.path.dirname(spec.origin), "rnnoise.dll"))
+            for loc in list(spec.submodule_search_locations or []):
+                out.append(os.path.join(str(loc), "rnnoise.dll"))
+    except Exception:
+        pass
+    here = os.path.dirname(os.path.abspath(__file__))
+    out.append(os.path.join(here, "models", "rnnoise.dll"))
+    # de-dup, keep order
+    seen = set()
+    return [p for p in out if p and not (p in seen or seen.add(p))]
+
+
+class _RnnoiseLib:
+    """ctypes binding of the four RNNoise entry points we use."""
+
+    def __init__(self, path: str) -> None:
+        lib = ctypes.CDLL(path)
+        lib.rnnoise_create.argtypes = [ctypes.c_void_p]
+        lib.rnnoise_create.restype = ctypes.c_void_p
+        lib.rnnoise_destroy.argtypes = [ctypes.c_void_p]
+        lib.rnnoise_destroy.restype = None
+        lib.rnnoise_process_frame.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_float),
+            ctypes.POINTER(ctypes.c_float),
+        ]
+        lib.rnnoise_process_frame.restype = ctypes.c_float
+        lib.rnnoise_get_frame_size.argtypes = []
+        lib.rnnoise_get_frame_size.restype = ctypes.c_int
+        self.lib = lib
+        self.path = path
+        self.frame_size = int(lib.rnnoise_get_frame_size())
+        if self.frame_size <= 0 or self.frame_size > 4800:
+            raise RuntimeError(f"implausible RNNoise frame size {self.frame_size}")
+
+
+def _load_rnnoise() -> Tuple[Optional[_RnnoiseLib], str]:
+    errors: List[str] = []
+    for cand in _rnnoise_dll_candidates():
+        if not os.path.exists(cand):
+            continue
+        try:
+            return _RnnoiseLib(cand), ""
+        except Exception as e:  # pragma: no cover - depends on the machine
+            errors.append(f"{cand}: {e}")
+    return None, ("; ".join(errors) if errors else "rnnoise.dll not found")
+
+
+_RNNOISE_LIB, RNNOISE_LOAD_ERROR = _load_rnnoise()
+RNNOISE_AVAILABLE = _RNNOISE_LIB is not None
+_RNN_FRAME_SIZE = _RNNOISE_LIB.frame_size if _RNNOISE_LIB is not None else _NS_FRAME_SIZE
+_RNN_SAMPLE_RATE = _NS_SAMPLE_RATE
 
 
 # ---------------------------------------------------------------------------
@@ -117,19 +201,31 @@ class _DenoiseBackend:
     48 kHz. Implementations keep their own recurrent state across frames."""
 
     name = "none"
-    frame_size = _RNN_FRAME_SIZE
+    frame_size = _NS_FRAME_SIZE
+    #: True when the engine has its own strength knob (set_strength); engines
+    #: without one get a DELAY-COMPENSATED wet/dry mix in NoiseSuppressor.
+    has_native_strength = False
+    #: The engine's own output delay in samples (measured on real speech by
+    #: cross-correlation; all exact integers). The dry path of the wet/dry mix
+    #: is delayed by this much so the two never comb-filter.
+    latency_samples = 0
+    #: Per-frame speech evidence in dB (DeepFilterNet's local SNR estimate) or
+    #: None when the engine has no such estimate. Chained gates read this.
+    last_snr_db: Optional[float] = None
 
     def process_frame(self, frame: np.ndarray) -> np.ndarray:  # float32[fs]->float32[fs]
         return frame
+
+    def set_strength(self, strength: float) -> None:
+        """Native strength control, 0.0 (gentle) .. 1.0 (strongest)."""
 
     def reset(self) -> None:
         pass
 
     def warmup(self) -> None:
         """Run several dummy frames so the FIRST real frames don't pay the
-        graph-load + onnxruntime arena-allocation cost inside the audio callback
-        (the very first inference can be ~10x steady state). A few frames let
-        the memory arenas settle, then we reset the recurrent state."""
+        graph-load + onnxruntime arena-allocation cost (the very first
+        inference can be ~10x steady state). Then reset the recurrent state."""
         try:
             for _ in range(5):
                 self.process_frame(np.zeros(self.frame_size, dtype=np.float32))
@@ -143,42 +239,53 @@ class _DenoiseBackend:
 
 class _RnnoiseBackend(_DenoiseBackend):
     """Tiny RNN (Xiph RNNoise). ~0.5% CPU, BSD-licensed, lowest latency. Weak on
-    non-stationary noise — kept as the light / always-available fallback."""
+    non-stationary noise — the light option. Talks to rnnoise.dll directly:
+    float frames in the int16 range, in-place, returning the VAD probability."""
 
     name = "rnnoise"
     frame_size = _RNN_FRAME_SIZE
+    latency_samples = 960  # 20 ms (measured)
 
     def __init__(self) -> None:
-        if not RNNOISE_AVAILABLE or _rnn_create is None:
-            raise RuntimeError("RNNoise unavailable")
-        self._state = [_rnn_create()]
+        if _RNNOISE_LIB is None:
+            raise RuntimeError(f"RNNoise unavailable ({RNNOISE_LOAD_ERROR})")
+        self._lib = _RNNOISE_LIB.lib
+        self._st = self._lib.rnnoise_create(None)
+        if not self._st:
+            raise RuntimeError("rnnoise_create() returned NULL")
+        self._buf = np.zeros(self.frame_size, dtype=np.float32)
+        self._ptr = self._buf.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+        self.last_vad: float = 0.0
 
     def process_frame(self, frame: np.ndarray) -> np.ndarray:
-        i16 = np.clip(frame * 32767.0, -32768, 32767).astype(np.int16).reshape(1, -1)
-        out_frame, _sp = _rnn_process_frame(self._state, i16)  # type: ignore[arg-type]
-        return out_frame.reshape(-1).astype(np.float32) / 32767.0
+        if not self._st:
+            return frame
+        np.multiply(frame, 32768.0, out=self._buf)
+        self.last_vad = float(self._lib.rnnoise_process_frame(self._st, self._ptr, self._ptr))
+        return self._buf * np.float32(1.0 / 32768.0)
 
     def reset(self) -> None:
-        self.close()
-        if _rnn_create is not None:
-            self._state = [_rnn_create()]
+        if self._st:
+            self._lib.rnnoise_destroy(self._st)
+        self._st = self._lib.rnnoise_create(None)
 
     def close(self) -> None:
-        if getattr(self, "_state", None) and _rnn_destroy is not None:
-            for s in self._state:
-                try:
-                    _rnn_destroy(s)
-                except Exception:
-                    pass
-        self._state = None
+        st, self._st = self._st, None
+        if st:
+            try:
+                self._lib.rnnoise_destroy(st)
+            except Exception:
+                pass
 
 
 class _DeepFilterNetBackend(_DenoiseBackend):
-    """DeepFilterNet3 via onnxruntime. Krisp-class, 48 kHz, ~3 ms/frame on CPU
-    (3x real-time). Heavier than RNNoise but a large quality jump."""
+    """DeepFilterNet3 via onnxruntime. Krisp-class, 48 kHz, ~4 ms/frame on CPU
+    (2.5x real-time). Heavier than RNNoise but a large quality jump."""
 
     name = "deepfilternet"
     frame_size = _DFN_FRAME_SIZE
+    has_native_strength = False   # see set_attenuation_db: the model's own limit comb-filters
+    latency_samples = 1440        # 30 ms (measured)
 
     def __init__(self) -> None:
         if not ONNXRUNTIME_AVAILABLE:
@@ -195,208 +302,828 @@ class _DeepFilterNetBackend(_DenoiseBackend):
         self._sess = _ort.InferenceSession(path, so, providers=["CPUExecutionProvider"])
         self._state = np.zeros(_DFN_STATE_SIZE, dtype=np.float32)
         self._atten = np.zeros(1, dtype=np.float32)  # 0 dB limit = full denoise
+        self.last_snr_db = None
 
     def process_frame(self, frame: np.ndarray) -> np.ndarray:
         f = np.ascontiguousarray(frame, dtype=np.float32)
-        enhanced, self._state, _lsnr = self._sess.run(
+        enhanced, self._state, lsnr = self._sess.run(
             _DFN_OUTPUTS,
             {"input_frame": f, "states": self._state, "atten_lim_db": self._atten},
         )
+        try:
+            self.last_snr_db = float(lsnr.reshape(-1)[0])
+        except Exception:
+            self.last_snr_db = None
         return enhanced
+
+    def set_attenuation_db(self, db: float) -> None:
+        """DeepFilterNet's built-in attenuation limit - deliberately NOT used
+        for the strength slider any more. Measured on real voice clips with
+        this ONNX (clean-speech SI-SDR / white-noise attenuation):
+
+            limit  0 dB (= off) -> 21.8 dB / -43 dB     limit 10 dB ->  6.3 / -10
+            limit  3 dB         ->  8.1 dB /  -3 dB     limit 20 dB -> 17.3 / -20
+            limit  6 dB         ->  0.3 dB /  -6 dB     limit 40 dB -> 21.8 / -38
+
+        Any finite limit blends the raw input back in MISALIGNED with the
+        model's 30 ms lookahead (the output delay jumps 1440 -> 1920 samples),
+        comb-filtering the voice. The old mapping strength -> (1-s)*40 dB put
+        the GUI default (85) at a 6 dB limit = clean speech at 0.3 dB SI-SDR:
+        the "robotic / doubled" voice. Strength is now a delay-compensated
+        wet/dry mix in NoiseSuppressor (latency_samples = 1440) and the model
+        always runs unlimited.
+        """
+        self._atten = np.array([max(0.0, float(db))], dtype=np.float32)
+
+    def set_strength(self, strength: float) -> None:
+        # Strength lives in NoiseSuppressor's aligned wet/dry mix; the model
+        # itself always runs unlimited (see set_attenuation_db).
+        self._atten = np.zeros(1, dtype=np.float32)
 
     def reset(self) -> None:
         self._state = np.zeros(_DFN_STATE_SIZE, dtype=np.float32)
+        self.last_snr_db = None
+
+
+class _ResidualGate:
+    """Ducks whatever a denoiser leaves between words, keyed on a speech-
+    evidence signal in dB (DeepFilterNet's lsnr). Fast attack, slow release,
+    per-sample gain ramps — a duck, never a hard mute, so a wrong decision costs
+    a slightly quieter syllable rather than a chopped one."""
+
+    # Measured on real speech through DFN3: pauses sit at lsnr -15..-12.7 dB
+    # (p90), voiced speech well above; the slow release rides out brief dips.
+    OPEN_DB = -7.0    # evidence above this -> speech, gate opens
+    CLOSE_DB = -12.0  # below this -> pause, gate closes (hysteresis)
+
+    def __init__(self) -> None:
+        self._floor = 10 ** (-22.0 / 20.0)
+        self._gain = 1.0
+        self._open = True
+
+    def set_strength(self, strength: float) -> None:
+        s = max(0.0, min(1.0, float(strength)))
+        self._floor = float(10 ** ((-10.0 - 15.0 * s) / 20.0))  # -10 .. -25 dB
+
+    def reset(self) -> None:
+        self._gain = 1.0
+        self._open = True
+
+    def apply(self, frame: np.ndarray, snr_db: Optional[float]) -> np.ndarray:
+        if snr_db is None:
+            return frame
+        if snr_db > self.OPEN_DB:
+            self._open = True
+        elif snr_db < self.CLOSE_DB:
+            self._open = False
+        target = 1.0 if self._open else self._floor
+        start = self._gain
+        # ~2 frames to open, ~160 ms to close (release tail keeps word ends).
+        coeff = 0.5 if target > start else 0.06
+        self._gain = start + coeff * (target - start)
+        if abs(self._gain - 1.0) < 1e-4 and abs(start - 1.0) < 1e-4:
+            return frame
+        return frame * np.linspace(start, self._gain, len(frame), dtype=np.float32)
+
+
+class _MaxBackend(_DenoiseBackend):
+    """DeepFilterNet followed by the residual gate = the strongest setting.
+    The DNN removes noise under and around the voice; the gate then silences
+    the faint residue in pauses (keyboard burbles, other voices)."""
+
+    name = "max"
+    has_native_strength = False  # DNN part: aligned wet/dry in NoiseSuppressor
+
+    def __init__(self) -> None:
+        self._dfn = _DeepFilterNetBackend()
+        self._gate = _ResidualGate()
+        self.frame_size = self._dfn.frame_size
+        self.latency_samples = self._dfn.latency_samples
+        self.last_snr_db = None
+
+    def process_frame(self, frame: np.ndarray) -> np.ndarray:
+        y = self._dfn.process_frame(frame)
+        self.last_snr_db = self._dfn.last_snr_db
+        return self._gate.apply(y, self.last_snr_db)
+
+    def set_strength(self, strength: float) -> None:
+        self._dfn.set_strength(strength)
+        self._gate.set_strength(strength)
+
+    def reset(self) -> None:
+        self._dfn.reset()
+        self._gate.reset()
+        self.last_snr_db = None
+
+    def close(self) -> None:
+        self._dfn.close()
+
+
+class _SpectralBackend(_DenoiseBackend):
+    """'Classic' statistical denoiser — no neural net, NumPy only. The same
+    family as WebRTC / Speex noise suppression:
+
+      * 960-sample sqrt-Hann STFT, 50% overlap (10 ms hop, 10 ms latency)
+      * noise PSD via MCRA (Cohen 2002): smoothed periodogram, 1 s minimum
+        tracking, per-bin speech-presence probability slows the noise update
+        while you talk
+      * decision-directed a-priori SNR (Ephraim-Malah) -> Wiener gain, floored
+        (strength sets the floor: -8 dB gentle .. -32 dB strong) and smoothed
+        across frequency so it doesn't twinkle ("musical noise")
+
+    Strong on stationary noise (fans, AC, PC hum, hiss, static), transparent to
+    the voice, deterministic and ~0.1 ms/frame. Weak on keyboard/other voices —
+    that is what the DNN engines are for.
+    """
+
+    name = "classic"
+    frame_size = _NS_FRAME_SIZE
+    has_native_strength = True
+    latency_samples = _NS_FRAME_SIZE  # 10 ms: one hop of the 50%-overlap STFT
+
+    _ALPHA_S = 0.8   # periodogram smoothing
+    _ALPHA_D = 0.95  # noise PSD update rate when speech is absent
+    _ALPHA_P = 0.2   # speech-presence smoothing
+    _DELTA = 5.0     # P / Pmin ratio that counts as speech
+    _L_MIN = 96      # minimum-tracking window, in hops (~1 s)
+    _A_DD = 0.96     # decision-directed a-priori SNR smoothing
+
+    def __init__(self) -> None:
+        n = 2 * self.frame_size
+        self._n = n
+        self._nb = n // 2 + 1
+        # Periodic sqrt-Hann: analysis * synthesis = Hann, which sums to 1 at
+        # 50% overlap (COLA), so no renormalisation is needed.
+        self._win = np.sqrt(np.hanning(n + 1)[:-1]).astype(np.float32)
+        self._floor = 10 ** (-32.0 / 20.0)
+        self.reset()
+
+    def reset(self) -> None:
+        n = self._n
+        self._in = np.zeros(n, dtype=np.float32)
+        self._ola = np.zeros(n, dtype=np.float32)
+        self._P: Optional[np.ndarray] = None
+        self._Pmin: Optional[np.ndarray] = None
+        self._Ptmp: Optional[np.ndarray] = None
+        self._Npsd: Optional[np.ndarray] = None
+        self._p = np.zeros(self._nb, dtype=np.float32)
+        self._G = np.ones(self._nb, dtype=np.float32)
+        self._prev_X2 = np.zeros(self._nb, dtype=np.float32)
+        self._hops = 0
+        self._age = 0
+
+    def set_strength(self, strength: float) -> None:
+        s = max(0.0, min(1.0, float(strength)))
+        self._floor = float(10 ** ((-8.0 - 24.0 * s) / 20.0))
+
+    def process_frame(self, frame: np.ndarray) -> np.ndarray:
+        H = self.frame_size
+        buf = self._in
+        buf[:-H] = buf[H:]
+        buf[-H:] = frame
+        X = np.fft.rfft(buf * self._win)
+        X2 = (X.real * X.real + X.imag * X.imag).astype(np.float32) + np.float32(1e-12)
+        if self._P is None:
+            self._P = X2.copy()
+            self._Pmin = X2.copy()
+            self._Ptmp = X2.copy()
+            self._Npsd = X2.copy()
+        P = self._P
+        P *= self._ALPHA_S
+        P += (1.0 - self._ALPHA_S) * X2
+        # Minimum statistics: continuous minimum plus a window-reset buffer so
+        # the floor can rise again when the room gets louder.
+        np.minimum(self._Pmin, P, out=self._Pmin)
+        np.minimum(self._Ptmp, P, out=self._Ptmp)
+        self._hops += 1
+        self._age += 1
+        if self._hops >= self._L_MIN:
+            self._hops = 0
+            np.minimum(self._Ptmp, P, out=self._Pmin)
+            self._Ptmp[:] = P
+        # Speech presence -> how fast the noise estimate may follow the input.
+        speech = (P > self._DELTA * self._Pmin).astype(np.float32)
+        p = self._p
+        p *= self._ALPHA_P
+        p += (1.0 - self._ALPHA_P) * speech
+        # Warm start: for the first second after reset let the noise estimate
+        # converge fast (the minimum tracker has no history yet), then settle
+        # to the slow, speech-protected rate.
+        a_d = self._ALPHA_D if self._age >= self._L_MIN else 0.85
+        alpha_d = a_d + (1.0 - a_d) * p
+        Npsd = self._Npsd
+        Npsd *= alpha_d
+        Npsd += (1.0 - alpha_d) * X2
+        # Decision-directed a-priori SNR -> Wiener gain.
+        gamma = X2 / Npsd
+        xi = self._A_DD * (self._G * self._G * self._prev_X2 / Npsd) + (1.0 - self._A_DD) * np.maximum(
+            gamma - 1.0, 0.0
+        )
+        G = xi / (1.0 + xi)
+        Gs = G.copy()
+        Gs[1:-1] = 0.25 * G[:-2] + 0.5 * G[1:-1] + 0.25 * G[2:]
+        np.maximum(Gs, self._floor, out=Gs)
+        self._G = Gs.astype(np.float32, copy=False)
+        self._prev_X2 = X2
+        y = (np.fft.irfft(X * Gs, n=self._n).astype(np.float32)) * self._win
+        ola = self._ola
+        ola += y
+        out = ola[:H].copy()
+        ola[:-H] = ola[H:]
+        ola[-H:] = 0.0
+        return out
+
+
+class _NoiseGateBackend(_DenoiseBackend):
+    """Adaptive noise gate / expander — no model, no deps, works everywhere.
+
+    Not a denoiser: it estimates the room's noise floor from quiet frames and
+    smoothly DUCKS the mic when you are not talking, so background chatter,
+    fans and hum vanish between words. During speech it is transparent
+    (background bleeds through, but under your voice it is far less audible).
+    Uses a 2-band split so a low-frequency rumble alone can't hold the gate
+    open.
+    """
+
+    name = "gate"
+    frame_size = _NS_FRAME_SIZE  # 480 @ 48k, ~10 ms
+    has_native_strength = True
+
+    def __init__(self) -> None:
+        self.reset()
+        # Reduction depth: how far the gate ducks the background (linear gain).
+        # 0.06 ≈ -24 dB. Driven by strength (1.0 -> full depth).
+        self._floor_gain = 0.06
+
+    def reset(self) -> None:
+        self._noise = -1.0          # noise-floor estimate (RMS); <0 = seed from 1st frame
+        self._gain = 0.0            # smoothed gate gain, ramps 0..1
+        self._open = False          # hysteresis latch
+
+    def set_depth(self, floor_gain: float) -> None:
+        self._floor_gain = float(max(0.0, min(1.0, floor_gain)))
+
+    def set_strength(self, strength: float) -> None:
+        # dB-linear depth: strength 0 -> -6 dB duck, 1.0 -> -36 dB (near mute).
+        s = max(0.0, min(1.0, float(strength)))
+        self.set_depth(10.0 ** (-(6.0 + 30.0 * s) / 20.0))
+
+    def process_frame(self, frame: np.ndarray) -> np.ndarray:
+        f = np.ascontiguousarray(frame, dtype=np.float32)
+        # Level detector on the voice band only: subtracting a 128-sample
+        # moving average is a ~165 Hz low-cut (first null 375 Hz), so a 50/60/
+        # 120 Hz hum or desk rumble can't hold the gate open. (The old 8-sample
+        # average cut everything below ~3 kHz, so under broadband noise the
+        # detector saw the hiss, not the voice, and the gate closed ON speech.)
+        hp = f - _moving_avg(f, 128)
+        rms = float(np.sqrt(np.mean(hp * hp)) + 1e-9)
+        # Track the noise floor: seed from the first frame, fall fast toward
+        # quiet, rise at a moderate pace while the gate is closed (the room got
+        # louder) and only very slowly while it is open (that's the voice).
+        if self._noise < 0.0:
+            self._noise = rms
+        elif rms < self._noise:
+            self._noise += 0.1 * (rms - self._noise)
+        elif not self._open:
+            self._noise += 0.05 * (rms - self._noise)
+        else:
+            self._noise += 0.002 * (rms - self._noise)
+        open_thr = self._noise * 3.0      # +9.5 dB over floor -> open
+        close_thr = self._noise * 1.8     # +5 dB -> close (hysteresis)
+        if rms > open_thr:
+            self._open = True
+        elif rms < close_thr:
+            self._open = False
+        target = 1.0 if self._open else self._floor_gain
+        # Fast attack (open in ~1 frame), slow release (tail ~60 ms).
+        coeff = 0.6 if target >= self._gain else 0.12
+        self._gain += coeff * (target - self._gain)
+        return f * self._gain
+
+
+def _moving_avg(x: np.ndarray, k: int) -> np.ndarray:
+    if k <= 1:
+        return x
+    c = np.cumsum(np.insert(x, 0, 0.0))
+    out = (c[k:] - c[:-k]) / k
+    pad = k // 2
+    return np.concatenate((np.full(pad, out[0]), out, np.full(len(x) - len(out) - pad, out[-1])))
+
+
+class _LowCut:
+    """2nd-order Butterworth high-pass with carried state — strips desk rumble,
+    handling thumps and plosive booms before the denoiser sees them."""
+
+    def __init__(self, sample_rate: int, cutoff_hz: float = 80.0) -> None:
+        if not _SCIPY_SIGNAL_AVAILABLE:
+            raise RuntimeError("scipy.signal unavailable")
+        self._b, self._a = _sp_butter(2, cutoff_hz, btype="highpass", fs=sample_rate)
+        self._zi = np.zeros(max(len(self._a), len(self._b)) - 1, dtype=np.float64)
+
+    def reset(self) -> None:
+        self._zi[:] = 0.0
+
+    def process(self, x: np.ndarray) -> np.ndarray:
+        y, self._zi = _sp_lfilter(self._b, self._a, x, zi=self._zi)
+        return y.astype(np.float32, copy=False)
+
+
+# --- Engine catalogue (shared with the GUI) --------------------------------
+NS_BACKEND_ORDER: Tuple[str, ...] = ("deepfilternet", "max", "classic", "rnnoise", "gate")
+NS_BACKEND_LABELS: Dict[str, str] = {
+    "deepfilternet": "Best (DeepFilterNet)",
+    "max": "Max (DeepFilterNet + gate)",
+    "classic": "Classic (spectral, no AI)",
+    "rnnoise": "Light (RNNoise)",
+    "gate": "Gate only",
+}
+NS_BACKEND_BLURBS: Dict[str, str] = {
+    "deepfilternet": "AI denoiser — keyboard, other voices, fans. ~4 ms/frame.",
+    "max": "AI denoiser + silences the residue between words. Strongest.",
+    "classic": "Statistical filter — fans, hum, hiss. Most natural voice, no AI.",
+    "rnnoise": "Tiny RNN — lowest CPU/latency, weak on keyboard & voices.",
+    "gate": "No denoising: only mutes the mic between words.",
+}
+# When the chosen engine can't load, degrade along these routes (once, with a
+# visible note) rather than to raw passthrough.
+_NS_FALLBACKS: Dict[str, Tuple[str, ...]] = {
+    "deepfilternet": ("classic", "rnnoise", "gate"),
+    "max": ("deepfilternet", "classic", "rnnoise", "gate"),
+    "classic": ("gate",),
+    "rnnoise": ("classic", "gate"),
+    "gate": (),
+}
+
+
+def ns_backend_available(name: str) -> bool:
+    if name in ("deepfilternet", "max"):
+        return DEEPFILTERNET_AVAILABLE
+    if name == "rnnoise":
+        return RNNOISE_AVAILABLE
+    return name in ("classic", "gate")
+
+
+def ns_available_backends() -> List[str]:
+    """Engine names that can load on this machine, best first. Never empty:
+    'classic' and 'gate' are pure NumPy."""
+    return [n for n in NS_BACKEND_ORDER if ns_backend_available(n)]
+
+
+def ns_unavailable_reason(name: str) -> str:
+    if name in ("deepfilternet", "max"):
+        if not ONNXRUNTIME_AVAILABLE:
+            return "onnxruntime not installed"
+        if not os.path.exists(_dfn_model_path()):
+            return "denoiser_model.onnx missing"
+        return ""
+    if name == "rnnoise":
+        return "" if RNNOISE_AVAILABLE else f"rnnoise.dll not loadable ({RNNOISE_LOAD_ERROR})"
+    return ""
 
 
 def _default_backend_name() -> str:
     """Best available backend: DeepFilterNet if its model + onnxruntime are
-    present, else RNNoise, else none."""
-    if DEEPFILTERNET_AVAILABLE:
-        return "deepfilternet"
-    if RNNOISE_AVAILABLE:
-        return "rnnoise"
-    return "none"
+    present, else classic (always loadable)."""
+    avail = ns_available_backends()
+    return avail[0] if avail else "classic"
+
+
+def _build_ns_backend(name: str) -> _DenoiseBackend:
+    if name == "deepfilternet":
+        return _DeepFilterNetBackend()
+    if name == "max":
+        return _MaxBackend()
+    if name == "classic":
+        return _SpectralBackend()
+    if name == "rnnoise":
+        return _RnnoiseBackend()
+    if name == "gate":
+        return _NoiseGateBackend()
+    raise ValueError(f"unknown denoiser backend {name!r}")
 
 
 class NoiseSuppressor:
-    """Real-time mic noise suppressor with a PLUGGABLE backend.
+    """Real-time mic noise suppressor with a PLUGGABLE engine.
 
-    Replaces Discord's Krisp (bypassed when routing through a virtual cable) by
-    denoising the MIC ONLY, before soundboard sounds are mixed in. Backends:
+    Replaces Discord's Krisp (which would also eat the soundboard sounds, since
+    everything shares one cable) by denoising the MIC ONLY, before sounds are
+    mixed in. Engines: see NS_BACKEND_LABELS. All run on 480-sample 48 kHz
+    frames, so one input/output ring bridges arbitrary audio blocks (1024) to
+    fixed frames; the one-frame output priming avoids the underrun buzz that
+    block≠frame caused.
 
-      * ``deepfilternet`` — DeepFilterNet3 DNN (ONNX). Krisp-class quality,
-        48 kHz, ~3 ms/frame. The default when available.
-      * ``rnnoise``       — tiny RNN. ~0.5% CPU, lowest latency, weak on
-        non-stationary noise. Light / always-available fallback.
-      * ``none``          — passthrough.
-
-    Both real backends use 480-sample 48 kHz frames, so a single input/output
-    ring buffer bridges arbitrary audio blocks (e.g. 1024) to fixed frames; the
-    one-frame output priming avoids the underrun-buzz that block≠frame caused.
-    ``strength`` is a wet/dry mix (1.0 = fully denoised, 0.0 = bypass). Any load
-    or inference failure falls back to passthrough — NS can never break audio.
+    Threading contract:
+      * ``process()`` is called from the mixer's mic-processing thread (or, in
+        tests, inline). It NEVER builds an engine — a missing engine means
+        passthrough for that block.
+      * Engines are built + warmed on a background thread (``ensure_backend_
+        async``); ``prepare()`` builds synchronously for tests.
+      * A failed engine is remembered (``status()["note"]``) and the next one
+        on its fallback route is tried ONCE — no per-block retries or logging.
+      * ``set_backend / set_strength / reset / lowcut`` may be called from the
+        GUI thread at any time; a small lock serialises them with ``process``.
     """
 
     def __init__(self, sample_rate: int, block_size: int):
         self.sample_rate = sample_rate
         self.block_size = block_size
-        self.enabled: bool = False
-        # Wet/dry mix: 0.0 = original mic, 1.0 = fully denoised.
+        self._enabled: bool = False
+        # Engine strength 0..1 (native knob when the engine has one, wet/dry
+        # mix otherwise). 1.0 = strongest.
         self.strength: float = 1.0
-        # Both backends are 48 kHz native; only run when the mixer matches.
-        self._matched_sr = sample_rate == _RNN_SAMPLE_RATE
-        # Desired backend name; the backend object is built lazily on first use
-        # so an unavailable lib / missing model never blows up __init__.
-        self._backend_name = _default_backend_name()
+        # All engines are 48 kHz native; only run when the mixer matches.
+        self._matched_sr = sample_rate == _NS_SAMPLE_RATE
+        self._requested: str = _default_backend_name()
         self._backend: Optional[_DenoiseBackend] = None
+        self._lock = threading.Lock()
+        self._gen = 0                 # bumps on every switch; stale builds are discarded
+        self._building = False
+        self._failed: Dict[str, str] = {}   # engine -> why it failed to load
+        self._note: str = ""                # fallback / failure note for the GUI
         # Float32 rings bridging arbitrary blocks <-> fixed frames.
         self._in_buf = np.zeros(0, dtype=np.float32)
         self._out_buf = np.zeros(0, dtype=np.float32)
         self._primed = False
+        # Raw-input history for the delay-compensated wet/dry mix.
+        self._dry_hist = np.zeros(0, dtype=np.float32)
+        # Optional 80 Hz low-cut ahead of the engine.
+        self._lowcut_on = False
+        self._lowcut: Optional[_LowCut] = None
+        # Perf stats (written by the processing thread, read by the GUI).
+        self.ms_last: float = 0.0
+        self.ms_avg: float = 0.0
+        self.ms_peak: float = 0.0
+        self.blocks_processed: int = 0
+
+    # ------------------------------------------------------------ properties
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    @enabled.setter
+    def enabled(self, value: bool) -> None:
+        self._enabled = bool(value)
+        if self._enabled:
+            self.ensure_backend_async()
+
+    @property
+    def lowcut(self) -> bool:
+        return self._lowcut_on
+
+    @lowcut.setter
+    def lowcut(self, value: bool) -> None:
+        value = bool(value)
+        with self._lock:
+            if value and self._lowcut is None:
+                try:
+                    self._lowcut = _LowCut(self.sample_rate)
+                except Exception as e:
+                    logger.warning("Low-cut filter unavailable: %s", e)
+                    self._lowcut = None
+                    value = False
+            if self._lowcut is not None:
+                self._lowcut.reset()
+            self._lowcut_on = value
 
     @property
     def backend_name(self) -> str:
-        return self._backend_name
+        """The REQUESTED engine (what the user picked)."""
+        return self._requested
+
+    @property
+    def active_backend(self) -> Optional[str]:
+        """The engine actually processing right now (None while loading /
+        when nothing could load)."""
+        b = self._backend
+        return b.name if b is not None else None
+
+    @property
+    def is_loading(self) -> bool:
+        return self._building
+
+    @property
+    def note(self) -> str:
+        return self._note
 
     def available_backends(self) -> list:
-        """Backend names that can actually load on this machine (for the GUI)."""
-        out = []
-        if DEEPFILTERNET_AVAILABLE:
-            out.append("deepfilternet")
-        if RNNOISE_AVAILABLE:
-            out.append("rnnoise")
-        return out
+        """Engine names that can actually load on this machine (for the GUI)."""
+        return ns_available_backends()
 
-    def set_backend(self, name: str) -> None:
-        """Switch denoiser backend (rebuilt + warmed on next enable/use)."""
+    # ------------------------------------------------------------- switching
+    def set_backend(self, name: str, retry: bool = False) -> None:
+        """Switch engine. The new engine is built on a background thread when
+        NS is enabled (or on the next enable); until it lands the mic passes
+        through untouched. Re-applying the current choice is a no-op, except
+        with ``retry=True`` (an explicit user pick) while a fallback engine is
+        standing in for a failed one - that retries the failed engine."""
         name = (name or "").strip().lower()
-        if name not in ("deepfilternet", "rnnoise", "none"):
+        if name == "none":
+            name = _default_backend_name()
+        if name not in NS_BACKEND_LABELS:
             return
-        if name == self._backend_name and self._backend is not None:
-            return
-        self._backend_name = name
-        # Tear down the old backend and force a fresh build (+ ring reset) so
-        # the switch is clean even mid-stream.
-        self._teardown_backend()
-        self._in_buf = np.zeros(0, dtype=np.float32)
-        self._out_buf = np.zeros(0, dtype=np.float32)
-        self._primed = False
-
-    def _teardown_backend(self) -> None:
-        if self._backend is not None:
+        if name == self._requested and (self._backend is not None or self._building):
+            b = self._backend
+            if not (retry and b is not None and b.name != name):
+                return
+        with self._lock:
+            old, self._backend = self._backend, None
+            self._gen += 1
+            self._requested = name
+            self._failed.pop(name, None)
+            self._note = ""
+            self._reset_rings_locked()
+        if old is not None:
             try:
-                self._backend.close()
+                old.close()
             except Exception:
                 pass
-            self._backend = None
+        if self._enabled:
+            self.ensure_backend_async()
 
-    def _build_backend(self, name: str) -> Optional[_DenoiseBackend]:
-        try:
-            if name == "deepfilternet":
-                b = _DeepFilterNetBackend()
-            elif name == "rnnoise":
-                b = _RnnoiseBackend()
+    def ensure_backend_async(self) -> None:
+        """Kick off an engine build on a background thread if none is live."""
+        with self._lock:
+            if self._backend is not None or self._building:
+                return
+            self._building = True
+            gen = self._gen
+        t = threading.Thread(target=self._builder, args=(gen,), name="lsb-ns-build", daemon=True)
+        t.start()
+
+    def prepare(self) -> Optional[str]:
+        """Build the engine synchronously (tests / eager warm-up). Returns the
+        active engine name, or None if nothing could load."""
+        with self._lock:
+            if self._backend is not None:
+                return self._backend.name
+            if self._building:
+                gen = None
             else:
-                return None
-        except Exception as e:
-            logger.warning("Denoiser backend '%s' failed to load: %s", name, e)
-            return None
-        b.warmup()
-        return b
+                self._building = True
+                gen = self._gen
+        if gen is None:
+            # A background build is in flight — wait for it (bounded).
+            deadline = time.monotonic() + 10.0
+            while self._building and time.monotonic() < deadline:
+                time.sleep(0.01)
+            return self.active_backend
+        self._builder(gen)
+        return self.active_backend
 
-    def _ensure_backend(self) -> Optional[_DenoiseBackend]:
-        if self._backend is not None:
-            return self._backend
-        # Try the requested backend, then gracefully fall back to RNNoise.
-        b = self._build_backend(self._backend_name)
-        if b is None and self._backend_name != "rnnoise" and RNNOISE_AVAILABLE:
-            logger.warning("Falling back to RNNoise denoiser")
-            self._backend_name = "rnnoise"
-            b = self._build_backend("rnnoise")
-        self._backend = b
-        return b
+    def _builder(self, gen: int) -> None:
+        try:
+            self._build_chain(gen)
+        finally:
+            self._building = False
 
+    def _build_chain(self, gen: int) -> None:
+        requested = self._requested
+        route = (requested,) + _NS_FALLBACKS.get(requested, ())
+        for name in route:
+            if self._gen != gen:
+                return  # superseded by a newer set_backend()
+            if name in self._failed:
+                continue
+            if not ns_backend_available(name):
+                self._failed[name] = ns_unavailable_reason(name) or "unavailable"
+                continue
+            try:
+                b = _build_ns_backend(name)
+                b.warmup()
+                b.set_strength(self.strength)
+            except Exception as e:
+                self._failed[name] = str(e)
+                logger.warning("Denoiser engine '%s' failed to load: %s", name, e)
+                continue
+            with self._lock:
+                if self._gen != gen or self._backend is not None:
+                    stale = True
+                else:
+                    stale = False
+                    self._backend = b
+                    self._reset_rings_locked()
+                    if name != requested:
+                        why = self._failed.get(requested, "")
+                        self._note = (
+                            f"{NS_BACKEND_LABELS[requested]} unavailable"
+                            + (f" ({why})" if why else "")
+                            + f" → using {NS_BACKEND_LABELS[name]}"
+                        )
+                        logger.warning("NoiseSuppressor: %s", self._note)
+                    else:
+                        self._note = ""
+            if stale:
+                try:
+                    b.close()
+                except Exception:
+                    pass
+            return
+        with self._lock:
+            if self._gen == gen and self._backend is None:
+                why = self._failed.get(requested, "")
+                self._note = "no noise-suppression engine could load" + (f" ({why})" if why else "") + " — mic passes through unfiltered"
+                logger.warning("NoiseSuppressor: %s", self._note)
+
+    # -------------------------------------------------------------- controls
     def set_strength(self, strength: float) -> None:
-        """Set wet/dry mix (0.0 = bypass, 1.0 = fully denoised)."""
+        """Set suppression strength (0.0 = gentlest, 1.0 = strongest).
+
+        Engines with a NATIVE strength control (the spectral gain floor, the
+        gate depth) get it directly. The neural engines (DeepFilterNet, Max,
+        RNNoise) get a DELAY-COMPENSATED wet/dry mix in process(): the dry copy
+        is delayed by the engine's measured latency so nothing comb-filters,
+        and the residual is dB-linear (0.5 -> noise -20 dB, 1.0 -> engine
+        output only). DeepFilterNet's own attenuation limit is NOT used - see
+        _DeepFilterNetBackend.set_attenuation_db for why.
+        """
         self.strength = max(0.0, min(1.0, float(strength)))
+        with self._lock:
+            b = self._backend
+            if b is not None:
+                try:
+                    b.set_strength(self.strength)
+                except Exception:
+                    pass
+
+    def _reset_rings_locked(self) -> None:
+        self._in_buf = np.zeros(0, dtype=np.float32)
+        self._out_buf = np.zeros(0, dtype=np.float32)
+        self._dry_hist = np.zeros(0, dtype=np.float32)
+        self._primed = False
 
     def reset(self) -> None:
         """Reset internal state (e.g. when stream restarts)."""
-        self._in_buf = np.zeros(0, dtype=np.float32)
-        self._out_buf = np.zeros(0, dtype=np.float32)
-        self._primed = False
-        if self._backend is not None:
+        with self._lock:
+            self._reset_rings_locked()
+            if self._backend is not None:
+                try:
+                    self._backend.reset()
+                except Exception:
+                    pass
+            if self._lowcut is not None:
+                self._lowcut.reset()
+
+    def close(self) -> None:
+        with self._lock:
+            b, self._backend = self._backend, None
+            self._gen += 1
+        if b is not None:
             try:
-                self._backend.reset()
+                b.close()
             except Exception:
                 pass
 
     def __del__(self):
         try:
-            self._teardown_backend()
+            self.close()
         except Exception:
             pass
 
+    # ---------------------------------------------------------------- status
+    def status(self) -> Dict[str, object]:
+        b = self._backend
+        return {
+            "enabled": self._enabled,
+            "requested": self._requested,
+            "active": b.name if b is not None else None,
+            "loading": self._building,
+            "note": self._note,
+            "lowcut": self._lowcut_on,
+            "ms_avg": self.ms_avg,
+            "ms_peak": self.ms_peak,
+            "block_ms": 1000.0 * self.block_size / float(self.sample_rate or 48000),
+            "blocks": self.blocks_processed,
+        }
+
+    def status_text(self) -> str:
+        """One-line human status for the GUI."""
+        if not self._enabled:
+            return "Off — mic passes through untouched"
+        if not self._matched_sr:
+            return f"⚠ engines need 48 kHz (stream is {self.sample_rate} Hz) — passthrough"
+        b = self._backend
+        if b is None:
+            if self._building:
+                return f"Loading {NS_BACKEND_LABELS.get(self._requested, self._requested)}…"
+            return "⚠ " + (self._note or "no engine loaded — mic passes through")
+        label = NS_BACKEND_LABELS.get(b.name, b.name)
+        block_ms = 1000.0 * self.block_size / float(self.sample_rate or 48000)
+        sr = float(self.sample_rate or 48000)
+        lat_ms = (int(getattr(b, "latency_samples", 0)) + b.frame_size) / sr * 1000.0
+        parts = [f"✓ {label} active", f"{self.ms_avg:.1f} ms/block", f"{lat_ms:.0f} ms delay"]
+        if self.ms_avg > 0.6 * block_ms:
+            parts.append("⚠ heavy CPU — try Classic or Light")
+        if self._lowcut_on:
+            parts.append("low-cut 80 Hz")
+        if self._note:
+            parts.append(self._note)
+        return " · ".join(parts)
+
+    # --------------------------------------------------------------- process
     def process(self, mic_block: np.ndarray) -> np.ndarray:
         """Apply noise suppression to a mic block. Returns a same-length array.
 
-        Safe to call when disabled or when no backend can load — returns the
-        input unchanged in those cases.
+        Safe to call when disabled or before an engine has loaded — returns the
+        input unchanged in those cases (low-cut still applies when on).
         """
-        if not self.enabled or not self._matched_sr:
+        if not self._enabled or not self._matched_sr:
             return mic_block
         n = len(mic_block)
         if n == 0:
             return mic_block
-        backend = self._ensure_backend()
-        if backend is None:
-            return mic_block
+        t0 = time.perf_counter()
         try:
-            mic_f32 = np.ascontiguousarray(mic_block, dtype=np.float32).reshape(-1)
-            fs = backend.frame_size
-            # Prime the output ring with ONE frame of latency the first time we
-            # run after enable/reset/switch. The block size isn't a multiple of
-            # the 480-sample frame, so without this slack the ring underflows
-            # every block and we'd splice raw samples in at a discontinuity (the
-            # old "constant buzz / partly-undenoised" bug). ~10 ms of leading
-            # silence is imperceptible and is the only ring-added latency.
-            if not self._primed:
-                self._out_buf = np.zeros(fs, dtype=np.float32)
-                self._primed = True
-            self._in_buf = (
-                np.concatenate((self._in_buf, mic_f32))
-                if self._in_buf.size
-                else mic_f32.copy()
-            )
-            # Drain as many full frames as we can through the backend.
-            n_frames = self._in_buf.size // fs
-            if n_frames > 0:
-                consumed = n_frames * fs
-                frames = self._in_buf[:consumed].reshape(n_frames, fs)
-                den_parts = [backend.process_frame(frames[i]) for i in range(n_frames)]
-                denoised_f32 = np.concatenate(den_parts).astype(np.float32, copy=False)
-                # Wet/dry mix vs the original samples that produced these frames
-                # (time-aligned: both are delayed together by the output ring).
-                if self.strength < 1.0:
-                    orig = self._in_buf[:consumed]
-                    denoised_f32 = self.strength * denoised_f32 + (1.0 - self.strength) * orig
-                self._in_buf = self._in_buf[consumed:].copy()
-                self._out_buf = np.concatenate((self._out_buf, denoised_f32))
-            # Steady state: the primed backlog guarantees >= n samples here.
-            if self._out_buf.size >= n:
-                out = self._out_buf[:n].copy()
-                self._out_buf = self._out_buf[n:]
+            with self._lock:
+                mic_f32 = np.ascontiguousarray(mic_block, dtype=np.float32).reshape(-1)
+                if self._lowcut_on and self._lowcut is not None:
+                    mic_f32 = self._lowcut.process(mic_f32)
+                backend = self._backend
+                if backend is None:
+                    return mic_f32
+                fs = backend.frame_size
+                # Prime the output ring with ONE frame of latency the first
+                # time we run after enable/reset/switch. The block size isn't
+                # a multiple of the 480-sample frame, so without this slack
+                # the ring underflows every block and we'd splice raw samples
+                # in at a discontinuity (the old "constant buzz / partly-
+                # undenoised" bug). ~10 ms of leading silence is imperceptible
+                # and is the only ring-added latency.
+                if not self._primed:
+                    self._out_buf = np.zeros(fs, dtype=np.float32)
+                    self._primed = True
+                self._in_buf = (
+                    np.concatenate((self._in_buf, mic_f32)) if self._in_buf.size else mic_f32.copy()
+                )
+                # Drain as many full frames as we can through the engine.
+                n_frames = self._in_buf.size // fs
+                if n_frames > 0:
+                    consumed = n_frames * fs
+                    frames = self._in_buf[:consumed].reshape(n_frames, fs)
+                    den_parts = [backend.process_frame(frames[i]) for i in range(n_frames)]
+                    denoised_f32 = np.concatenate(den_parts).astype(np.float32, copy=False)
+                    # Delay-compensated wet/dry mix for engines without a
+                    # native strength control (the neural ones). The dry copy
+                    # is read `latency_samples` behind so it lines up with the
+                    # engine output sample-for-sample; the residual is
+                    # dB-linear in strength (-40 dB * strength).
+                    if not backend.has_native_strength:
+                        lat = max(0, int(getattr(backend, "latency_samples", 0)))
+                        hist = self._dry_hist if self._dry_hist.size else np.zeros(lat, dtype=np.float32)
+                        hist = np.concatenate((hist, self._in_buf[:consumed]))
+                        if self.strength < 1.0:
+                            end = hist.size - lat
+                            start = end - consumed
+                            if start >= 0:
+                                dry = hist[start:end]
+                            else:  # history shorter than the delay: left-pad
+                                dry = np.concatenate((np.zeros(-start, dtype=np.float32), hist[:end]))
+                            r = np.float32(10.0 ** (-2.0 * self.strength))
+                            denoised_f32 = denoised_f32 + r * (dry - denoised_f32)
+                        keep = lat + fs
+                        self._dry_hist = hist[-keep:] if hist.size > keep else hist
+                    self._in_buf = self._in_buf[consumed:].copy()
+                    self._out_buf = np.concatenate((self._out_buf, denoised_f32))
+                # Steady state: the primed backlog guarantees >= n samples here.
+                if self._out_buf.size >= n:
+                    out = self._out_buf[:n].copy()
+                    self._out_buf = self._out_buf[n:]
+                    return out
+                # Safety net (shouldn't fire after priming): pad the TAIL with
+                # the freshest input so the timeline stays monotonic.
+                deficit = n - self._out_buf.size
+                out = np.concatenate((self._out_buf, mic_f32[-deficit:]))
+                self._out_buf = np.zeros(0, dtype=np.float32)
                 return out
-            # Safety net (shouldn't fire after priming): pad the TAIL with the
-            # freshest raw input so the timeline stays monotonic.
-            deficit = n - self._out_buf.size
-            out = np.concatenate((self._out_buf, mic_f32[-deficit:]))
-            self._out_buf = np.zeros(0, dtype=np.float32)
-            return out
         except Exception as e:
-            # Never let noise suppression break the audio callback.
+            # Never let noise suppression break the mic path.
             logger.debug("NoiseSuppressor.process failed: %s", e)
             return mic_block
+        finally:
+            dt = (time.perf_counter() - t0) * 1000.0
+            self.ms_last = dt
+            self.ms_avg = dt if self.blocks_processed == 0 else 0.9 * self.ms_avg + 0.1 * dt
+            self.ms_peak = max(dt, self.ms_peak * 0.98)
+            self.blocks_processed += 1
+
+
+def _raise_thread_priority() -> None:
+    """Best effort: run the mic-processing thread in the Pro Audio MMCSS class
+    (what PortAudio does for its own callbacks), else just HIGHEST priority.
+    Denoising must win the CPU over Tk repaints, not queue behind them."""
+    if sys.platform != "win32":
+        return
+    try:
+        task_index = ctypes.c_ulong(0)
+        h = ctypes.windll.avrt.AvSetMmThreadCharacteristicsW("Pro Audio", ctypes.byref(task_index))
+        if h:
+            return
+    except Exception:
+        pass
+    try:
+        k32 = ctypes.windll.kernel32
+        k32.SetThreadPriority(k32.GetCurrentThread(), 2)  # THREAD_PRIORITY_HIGHEST
+    except Exception:
+        pass
 
 
 # Mouse button simulation using direct Windows SendInput API
@@ -834,6 +1561,53 @@ def _resample_audio(data: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarra
         return result
 
 
+def apply_speed(
+    data: np.ndarray, speed: float, preserve_pitch: bool = True, sample_rate: int = 48000
+) -> np.ndarray:
+    """Render *data* at a playback *speed* — the ONE speed/pitch transform used
+    by both the Discord path (AudioMixer._play_sound_sync) and the local
+    preview, so what you audition is what the call hears.
+
+    preserve_pitch=True  → librosa time-stretch (same pitch, shorter/longer);
+    preserve_pitch=False → plain resample (chipmunk / deep voice).
+    Speed > 1.0 = faster (shorter), < 1.0 = slower (longer). Module-level so
+    it works before the stream (mixer) exists.
+    """
+    logger.debug(
+        "Speed: speed=%s, preserve_pitch=%s, LIBROSA=%s",
+        speed,
+        preserve_pitch,
+        LIBROSA_AVAILABLE,
+    )
+
+    if speed == 1.0:
+        return data
+
+    # Use librosa time_stretch for pitch preservation if available and requested
+    if preserve_pitch and LIBROSA_AVAILABLE:
+        try:
+            # Serialize librosa calls to prevent CPU saturation
+            with _librosa_lock:
+                # Convert stereo to mono for librosa, then back
+                if data.ndim == 2:
+                    # Process each channel separately
+                    left = librosa.effects.time_stretch(data[:, 0], rate=speed)
+                    right = librosa.effects.time_stretch(data[:, 1], rate=speed)
+                    result = np.column_stack([left, right])
+                else:
+                    result = librosa.effects.time_stretch(data, rate=speed)
+                return result.astype(np.float32)
+        except Exception as e:
+            logger.warning("librosa time_stretch failed, falling back to resample: %s", e)
+
+    # Fallback: simple resampling (changes pitch - chipmunk/deep voice effect)
+    # Speed > 1.0 = faster + higher pitch
+    # Speed < 1.0 = slower + lower pitch
+    new_sr = int(sample_rate * speed)
+    result = _resample_audio(data, new_sr, sample_rate)
+    return result.astype(np.float32)
+
+
 def _apply_fade_out(data: np.ndarray, sample_rate: int, fade_ms: int = 30) -> np.ndarray:
     """
     Apply a short fade-out to the end of audio IN-PLACE.
@@ -1164,6 +1938,13 @@ class AudioMixer:
         self._mic_queue: queue.Queue = queue.Queue(maxsize=8)
         # Fallback buffer when queue is empty (prevents choppy audio)
         self._last_mic_data = np.zeros((self.block_size,), dtype=np.float32)
+        # Mic-processing worker: while noise suppression is on, the input
+        # callback hands raw blocks to this thread and returns immediately, so a
+        # heavy engine (DeepFilterNet ~10 ms per 1024 block) can never overrun
+        # the PortAudio callback. See _ns_worker / _start_ns_worker.
+        self._ns_in_q: queue.Queue = queue.Queue(maxsize=16)
+        self._ns_thread: Optional[threading.Thread] = None
+        self._ns_stop: Optional[threading.Event] = None
 
         # Mic settings
         self.mic_volume = 1.0
@@ -1173,6 +1954,12 @@ class AudioMixer:
         # they're added to the mix (separate from mic_volume which only
         # affects the microphone passthrough).
         self.master_volume = 1.0
+
+        # --- Air Deck engine state ---
+        self.bed_level = 0.35                       # bed sounds duck to this under voice
+        self._events = collections.deque(maxlen=256)  # ('started'|'ended'|'loop'|'paused', id, meta)
+        self._instance_counter = itertools.count(1)   # unique per play, for instance-cap recycling
+        self._peaks_cache = {}                        # waveform peak buckets, keyed by (id(data), n)
 
         # Precomputed Hann window for real-time WSOLA pitch-preserving
         # time-stretch (see _wsola_render). Built once; reused per grain.
@@ -1225,6 +2012,18 @@ class AudioMixer:
         self._inject_window_until: float = 0.0   # our SendInput moments
         self._ptt_watch_handles: list = []       # keyboard-lib hook handles
         self.duck_mic_during_sounds: bool = True  # GUI checkbox; persisted
+
+        # --- Universal PTT (mic gate) -------------------------------------
+        # The opposite model from the Discord auto-PTT above: no key is ever
+        # injected. Instead, apps use the virtual cable as their mic on plain
+        # voice-activity, and the LIVE MIC only reaches the cable while the
+        # user holds a global key — soundboard/universal_ptt.py flips
+        # `universal_ptt_open` from its poll thread. Sounds always pass. The
+        # envelope ramps open/close across one block (~21ms) so the gate
+        # never clicks.
+        self.universal_ptt_enabled: bool = False
+        self.universal_ptt_open: bool = False
+        self._u_gate_env: float = 1.0  # current gate gain (1 = mic passes)
 
         # Local monitoring (play sounds to speakers too)
         self.monitor_enabled = False
@@ -1376,6 +2175,9 @@ class AudioMixer:
         except Exception:
             pass
 
+        # Mic-processing worker must be up before the first input callback.
+        self._start_ns_worker()
+
         # Create separate input stream for microphone
         self.input_stream = sd.InputStream(
             device=self.input_device,
@@ -1422,6 +2224,7 @@ class AudioMixer:
             except Exception:
                 pass
             self.output_stream = None
+        self._stop_ns_worker()
         if self.monitor_stream:
             try:
                 self.monitor_stream.abort()
@@ -1611,17 +2414,36 @@ class AudioMixer:
             self._force_release_ptt()
 
     def _input_callback(self, indata, frames, time, status):
-        """Capture microphone input into queue."""
-        # Extract mono channel
+        """Capture microphone input.
+
+        With noise suppression on, the raw block is handed to the mic-processing
+        worker (which denoises it and pushes it on); otherwise it goes straight
+        to the mix queue. Blocks keep flowing through the worker until it has
+        drained after NS is switched off, so no block can overtake another.
+        """
         mic_data = indata[:, 0].copy()
+        ns = self.noise_suppressor
+        stop = self._ns_stop
+        q = self._ns_in_q
+        if stop is not None and not stop.is_set() and (ns.enabled or q.unfinished_tasks > 0):
+            try:
+                q.put_nowait(mic_data)
+            except queue.Full:
+                # Worker is badly behind - drop the oldest so we never stall.
+                try:
+                    q.get_nowait()
+                    q.task_done()
+                    q.put_nowait(mic_data)
+                except (queue.Empty, queue.Full, ValueError):
+                    pass
+            return
+        if ns.enabled:
+            mic_data = ns.process(mic_data)
+        self._push_mic_block(mic_data)
 
-        # Apply noise suppression to the mic channel only (sounds are mixed
-        # in later, untouched). This replaces Discord's Krisp NS which is
-        # bypassed when routing through the virtual cable.
-        if self.noise_suppressor.enabled:
-            mic_data = self.noise_suppressor.process(mic_data)
-
-        # Try to add to queue (non-blocking)
+    def _push_mic_block(self, mic_data: np.ndarray) -> None:
+        """Hand a (processed) mic block to the output mixer and, when the call
+        recorder is running, to its mic tap."""
         try:
             self._mic_queue.put_nowait(mic_data)
         except queue.Full:
@@ -1636,7 +2458,10 @@ class AudioMixer:
         # if recording is active. We push the volume-applied signal so the
         # recording matches what the user actually sends to Discord.
         tap = self._recording_tap
-        if tap is not None and not self.mic_muted:
+        # Skip the tap while the Universal PTT gate is closed - the call
+        # didn't hear the user, so the recording shouldn't either.
+        _gated = self.universal_ptt_enabled and not self.universal_ptt_open
+        if tap is not None and not self.mic_muted and not _gated:
             try:
                 tap.put_nowait((mic_data * self.mic_volume).astype(np.float32, copy=False))
             except queue.Full:
@@ -1645,6 +2470,65 @@ class AudioMixer:
                     tap.get_nowait()
                     tap.put_nowait((mic_data * self.mic_volume).astype(np.float32, copy=False))
                 except queue.Empty:
+                    pass
+
+    # ----------------------------------------------------- mic-processing thread
+    def _start_ns_worker(self) -> None:
+        """Start the dedicated mic-processing thread (idempotent)."""
+        t = self._ns_thread
+        if t is not None and t.is_alive():
+            return
+        # Drain leftovers from a previous run so unfinished_tasks starts at 0.
+        while True:
+            try:
+                self._ns_in_q.get_nowait()
+                self._ns_in_q.task_done()
+            except (queue.Empty, ValueError):
+                break
+        stop = threading.Event()
+        self._ns_stop = stop
+        t = threading.Thread(
+            target=self._ns_worker, args=(stop,), name="lsb-mic-ns", daemon=True
+        )
+        self._ns_thread = t
+        t.start()
+
+    def _stop_ns_worker(self) -> None:
+        stop, self._ns_stop = self._ns_stop, None
+        t, self._ns_thread = self._ns_thread, None
+        if stop is not None:
+            stop.set()
+        if t is not None and t.is_alive() and t is not threading.current_thread():
+            try:
+                self._ns_in_q.put_nowait(None)  # wake it so it sees the stop flag
+            except queue.Full:
+                pass
+            t.join(timeout=1.0)
+
+    def _ns_worker(self, stop: threading.Event) -> None:
+        """Denoise mic blocks off the audio callback. Runs at Pro-Audio / highest
+        thread priority so GUI repaints can't starve it; never raises."""
+        _raise_thread_priority()
+        q = self._ns_in_q
+        while not stop.is_set():
+            try:
+                blk = q.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            try:
+                if blk is None:
+                    continue  # wake-up sentinel
+                ns = self.noise_suppressor
+                if ns.enabled:
+                    try:
+                        blk = ns.process(blk)
+                    except Exception as e:
+                        logger.debug("mic NS worker: %s", e)
+                self._push_mic_block(blk)
+            finally:
+                try:
+                    q.task_done()
+                except ValueError:
                     pass
 
     def _output_callback(self, outdata, frames, time, status):
@@ -1688,8 +2572,18 @@ class AudioMixer:
             and not self.ptt_user_physical
             and not self.manual_ptt_hold
         )
-        if self.mic_muted or _duck:
+        # Universal PTT mic gate: 1.0 when the key is held (or the feature is
+        # off), 0.0 when released. The envelope ramps between targets across
+        # one block so opening/closing never clicks. Env values are only ever
+        # exactly 0.0 or 1.0, so the equality checks below are safe.
+        if self.universal_ptt_enabled:
+            _gate_target = 1.0 if self.universal_ptt_open else 0.0
+        else:
+            _gate_target = 1.0
+        _gate_env = self._u_gate_env
+        if self.mic_muted or _duck or (_gate_target == 0.0 and _gate_env == 0.0):
             mixed = np.zeros((frames, self.channels), dtype=np.float32)
+            self._u_gate_env = _gate_target
         else:
             mic_mono = mic_data * self.mic_volume
             # Real-time voice changer (pitch/robot/echo/reverb/radio/etc.).
@@ -1700,6 +2594,11 @@ class AudioMixer:
             vc = self.voice_changer
             if vc is not None and vc.enabled:
                 mic_mono = vc.process(mic_mono)
+            if _gate_env != _gate_target:
+                mic_mono = mic_mono * np.linspace(
+                    _gate_env, _gate_target, frames, dtype=np.float32
+                )
+                self._u_gate_env = _gate_target
             mixed = np.column_stack([mic_mono, mic_mono])
 
         # Add newly queued sounds to currently playing
@@ -1714,7 +2613,24 @@ class AudioMixer:
         # Mix all currently playing sounds
         with self.lock:
             finished = []
+            _ev = self._events
             for i, sound in enumerate(self.currently_playing):
+                # Apply a pending seek (also while paused: position moves, stays paused).
+                _seek = sound.get("pending_seek")
+                if _seek is not None:
+                    _dl = len(sound["data"])
+                    sound["position"] = (max(0, min(int(_seek), _dl - 1)) if _dl > 0 else 0)
+                    sound["pending_seek"] = None
+                    sound.pop("wsola_buf", None)
+                    sound["wsola_read"] = 0
+                    sound["wsola_write"] = 0
+                    sound["in_delay"] = False
+                    sound["delay_position"] = 0
+                    # 10 ms fade-in hides the splice (only if not already fading).
+                    if sound.get("gain", 1.0) >= 1.0 and sound.get("gain_target", 1.0) >= 1.0:
+                        sound["gain"] = 0.0
+                        sound["gain_target"] = 1.0
+                        sound["gain_step"] = 1.0 / max(1, int(0.010 * self.sample_rate))
                 # Skip paused sounds
                 if sound.get("paused", False):
                     continue
@@ -1774,6 +2690,7 @@ class AudioMixer:
                             continue
                     # Not looping or no more loops - mark as finished
                     finished.append(i)
+                    _ev.append(("ended", sound.get("sound_id"), {"reason": "finished", "instance": sound.get("instance")}))
                     continue
 
                 if rate == 1.0:
@@ -1839,10 +2756,36 @@ class AudioMixer:
                     padded[:chunk_size] = chunk
                     chunk = padded
 
-                # Add to both main mix and sounds-only mix
+                # --- fade envelope: fast path (gain==target==1.0) skips this entirely ---
+                _g = sound.get("gain", 1.0)
+                _gt = sound.get("gain_target", 1.0)
+                _fade_done = False
+                if _g != 1.0 or _gt != 1.0:
+                    _step = sound.get("gain_step", 0.0) * chunk_size
+                    _g2 = min(_gt, _g + _step) if _gt >= _g else max(_gt, _g - _step)
+                    _ramp = np.linspace(_g, _g2, chunk_size, dtype=np.float32)
+                    chunk[:chunk_size] *= _ramp[:, None]
+                    sound["gain"] = _g2
+                    _fade_done = (_g2 <= 0.0 and _gt <= 0.0)
+
+                # Add to both main mix and sounds-only mix. The block that ramps
+                # to zero is mixed TOO, so the fade reaches silence with no click.
                 mixed += chunk
                 sounds_mix += chunk
                 sound["position"] = new_pos
+                if not sound.get("started", False):
+                    sound["started"] = True
+                    _ev.append(("started", sound.get("sound_id"), {"instance": sound.get("instance")}))
+                if _fade_done:
+                    if sound.get("after_fade") == "pause":
+                        sound["paused"] = True
+                        sound["gain"] = 0.0
+                        sound["gain_target"] = 1.0
+                        sound["after_fade"] = None
+                        _ev.append(("paused", sound.get("sound_id"), {}))
+                    else:
+                        finished.append(i)
+                        _ev.append(("ended", sound.get("sound_id"), {"reason": "faded", "instance": sound.get("instance")}))
 
             # Remove finished sounds
             for i in reversed(finished):
@@ -1954,6 +2897,12 @@ class AudioMixer:
         loop: bool = False,
         loop_count: int = 0,
         loop_delay: float = 0.0,
+        display_name: Optional[str] = None,
+        emoji: Optional[str] = None,
+        meta: Optional[dict] = None,
+        fade_in_ms: int = 0,
+        cue_s: float = 0.0,
+        max_instances: int = 0,
     ) -> float:
         """Queue a sound for playback. Uses cache if available for better performance.
 
@@ -1984,7 +2933,9 @@ class AudioMixer:
             # Run processing in background thread
             def process_and_play():
                 self._play_sound_sync(
-                    file_path, volume, speed, preserve_pitch, sound_id, loop, loop_count, loop_delay
+                    file_path, volume, speed, preserve_pitch, sound_id, loop, loop_count, loop_delay,
+                    display_name=display_name, emoji=emoji, meta=meta,
+                    fade_in_ms=fade_in_ms, cue_s=cue_s, max_instances=max_instances,
                 )
 
             thread = threading.Thread(target=process_and_play, daemon=True)
@@ -1999,7 +2950,9 @@ class AudioMixer:
 
         # For normal speed or simple resample, run synchronously (fast)
         return self._play_sound_sync(
-            file_path, volume, speed, preserve_pitch, sound_id, loop, loop_count, loop_delay
+            file_path, volume, speed, preserve_pitch, sound_id, loop, loop_count, loop_delay,
+            display_name=display_name, emoji=emoji, meta=meta,
+            fade_in_ms=fade_in_ms, cue_s=cue_s, max_instances=max_instances,
         )
 
     def _play_sound_sync(
@@ -2013,6 +2966,12 @@ class AudioMixer:
         loop_count: int,
         loop_delay: float,
         skip_ptt: bool = False,
+        display_name: Optional[str] = None,
+        emoji: Optional[str] = None,
+        meta: Optional[dict] = None,
+        fade_in_ms: int = 0,
+        cue_s: float = 0.0,
+        max_instances: int = 0,
     ) -> float:
         """Synchronous sound playback - does all processing on calling thread.
 
@@ -2051,9 +3010,23 @@ class AudioMixer:
                         "file_path": file_path,
                         "speed": speed,
                         "preserve_pitch": preserve_pitch,
-                        "name": Path(file_path).stem if file_path else "Unknown",
+                        "name": display_name or (Path(file_path).stem if file_path else "Unknown"),
+                        "emoji": emoji,
+                        "base_speed": speed,
+                        "meta": meta or {},
+                        "instance": next(self._instance_counter),
+                        "gain": 0.0 if fade_in_ms > 0 else 1.0,
+                        "gain_target": 1.0,
+                        "gain_step": (1.0 / max(1, int((fade_in_ms / 1000.0) * self.sample_rate))) if fade_in_ms > 0 else 0.0,
+                        "after_fade": None,
+                        "cue": max(0, int(cue_s * self.sample_rate)),
+                        "pending_seek": None,
+                        "bed": False,
+                        "started": False,
                         "paused": False,
                     }
+                    if max_instances > 0:
+                        self._enforce_instance_cap(sound_id, max_instances)
                     self.sound_queue.put(sound_entry)
                     if not skip_ptt:
                         self._press_ptt()
@@ -2112,9 +3085,23 @@ class AudioMixer:
                 "file_path": file_path,
                 "speed": speed,
                 "preserve_pitch": preserve_pitch,
-                "name": Path(file_path).stem if file_path else "Unknown",
+                "name": display_name or (Path(file_path).stem if file_path else "Unknown"),
+                "emoji": emoji,
+                "base_speed": speed,
+                "meta": meta or {},
+                "instance": next(self._instance_counter),
+                "gain": 0.0 if fade_in_ms > 0 else 1.0,
+                "gain_target": 1.0,
+                "gain_step": (1.0 / max(1, int((fade_in_ms / 1000.0) * self.sample_rate))) if fade_in_ms > 0 else 0.0,
+                "after_fade": None,
+                "cue": max(0, int(cue_s * self.sample_rate)),
+                "pending_seek": None,
+                "bed": False,
+                "started": False,
                 "paused": False,
             }
+            if max_instances > 0:
+                self._enforce_instance_cap(sound_id, max_instances)
             self.sound_queue.put(sound_entry)
             if not skip_ptt:
                 self._press_ptt()
@@ -2126,49 +3113,8 @@ class AudioMixer:
     def _apply_speed(
         self, data: np.ndarray, speed: float, preserve_pitch: bool = True
     ) -> np.ndarray:
-        """Apply playback speed adjustment to audio data.
-
-        Args:
-            data: Audio data as numpy array
-            speed: Speed factor (>1.0 = faster, <1.0 = slower)
-            preserve_pitch: If True, use time-stretch (natural sound); if False, simple resample (chipmunk/deep voice)
-
-        Speed > 1.0 = faster (shorter duration)
-        Speed < 1.0 = slower (longer duration)
-        """
-        logger.debug(
-            "Speed: speed=%s, preserve_pitch=%s, LIBROSA=%s",
-            speed,
-            preserve_pitch,
-            LIBROSA_AVAILABLE,
-        )
-
-        if speed == 1.0:
-            return data
-
-        # Use librosa time_stretch for pitch preservation if available and requested
-        if preserve_pitch and LIBROSA_AVAILABLE:
-            try:
-                # Serialize librosa calls to prevent CPU saturation
-                with _librosa_lock:
-                    # Convert stereo to mono for librosa, then back
-                    if data.ndim == 2:
-                        # Process each channel separately
-                        left = librosa.effects.time_stretch(data[:, 0], rate=speed)
-                        right = librosa.effects.time_stretch(data[:, 1], rate=speed)
-                        result = np.column_stack([left, right])
-                    else:
-                        result = librosa.effects.time_stretch(data, rate=speed)
-                    return result.astype(np.float32)
-            except Exception as e:
-                logger.warning("librosa time_stretch failed, falling back to resample: %s", e)
-
-        # Fallback: simple resampling (changes pitch - chipmunk/deep voice effect)
-        # Speed > 1.0 = faster + higher pitch
-        # Speed < 1.0 = slower + lower pitch
-        new_sr = int(self.sample_rate * speed)
-        result = _resample_audio(data, new_sr, self.sample_rate)
-        return result.astype(np.float32)
+        """Apply playback speed adjustment to audio data (see :func:`apply_speed`)."""
+        return apply_speed(data, speed, preserve_pitch, self.sample_rate)
 
     def _soft_clip(self, x: np.ndarray) -> np.ndarray:
         """Apply soft limiting to prevent harsh clipping while allowing volume boost.
@@ -2211,12 +3157,17 @@ class AudioMixer:
 
         return result.astype(np.float32)
 
-    def stop_sound(self, sound_id: str):
+    def stop_sound(self, sound_id: str, fade_ms: int = 0):
         """Stop a specific sound by its ID.
 
-        Args:
-            sound_id: The identifier of the sound to stop
+        fade_ms == 0 keeps today's exact semantics (hard removal + queue drain +
+        PTT release when empty) so the Queue scheduler, AFK, shutdown and the
+        existing tests are untouched. fade_ms > 0 ramps to silence and lets the
+        normal PTT countdown release ~300 ms after the tail (Deck opts in).
         """
+        if fade_ms > 0:
+            self.fade_out_sound(sound_id, fade_ms, then="stop")
+            return
         logger.debug(
             "Stop: id=%s, currently_playing=%d, ids=%s",
             sound_id,
@@ -2254,8 +3205,18 @@ class AudioMixer:
                 # Force direct release for reliability (bypass queue)
                 self._force_release_ptt()
 
-    def stop_all_sounds(self):
-        """Clear playback queue and stop all sounds."""
+    def stop_all_sounds(self, fade_ms: int = 0):
+        """Clear playback queue and stop all sounds.
+
+        fade_ms == 0 is today's behaviour exactly; fade_ms > 0 fades every
+        playing sound and lets the PTT countdown release after the tails.
+        """
+        if fade_ms > 0:
+            with self.lock:
+                ids = {s.get("sound_id") for s in self.currently_playing}
+            for sid in ids:
+                self.fade_out_sound(sid, fade_ms, then="stop")
+            return
         with self.lock:
             self.currently_playing.clear()
 
@@ -2269,12 +3230,16 @@ class AudioMixer:
         # Force release PTT key directly (bypass queue for reliability)
         self._force_release_ptt()
 
-    def pause_sound(self, sound_id: str):
+    def pause_sound(self, sound_id: str, fade_ms: int = 0):
         """Pause a specific sound by its ID.
 
-        Args:
-            sound_id: The identifier of the sound to pause
+        fade_ms == 0 pauses instantly (today's behaviour, kept for the Queue
+        scheduler etc.); fade_ms > 0 ramps to silence first, then pauses at
+        gain 0 (the Deck uses ~30 ms so pausing to talk is clickless).
         """
+        if fade_ms > 0:
+            self.fade_out_sound(sound_id, fade_ms, then="pause")
+            return
         with self.lock:
             for sound in self.currently_playing:
                 if sound.get("sound_id") == sound_id:
@@ -2282,18 +3247,29 @@ class AudioMixer:
                     logger.debug("Paused sound: %s", sound_id)
                     break
 
-    def resume_sound(self, sound_id: str):
-        """Resume a paused sound by its ID.
-
-        Args:
-            sound_id: The identifier of the sound to resume
-        """
+    def resume_sound(self, sound_id: str, fade_ms: int = 0):
+        """Resume a paused sound by its ID (and re-press the Discord PTT key)."""
+        resumed = False
         with self.lock:
             for sound in self.currently_playing:
                 if sound.get("sound_id") == sound_id:
                     sound["paused"] = False
+                    if fade_ms > 0:
+                        sound["gain"] = 0.0
+                        sound["gain_target"] = 1.0
+                        sound["gain_step"] = 1.0 / max(1, int((fade_ms / 1000.0) * self.sample_rate))
+                    else:
+                        sound["gain"] = 1.0
+                        sound["gain_target"] = 1.0
+                    sound["after_fade"] = None
+                    resumed = True
                     logger.debug("Resumed sound: %s", sound_id)
                     break
+        # A pause released the auto-PTT (the countdown ignores paused sounds);
+        # re-press so the resumed sound actually transmits to Discord.
+        if resumed:
+            self._ptt_release_countdown = 0
+            self._press_ptt()
 
     def toggle_sound_loop(self, sound_id: str, loop: Optional[bool] = None):
         """Toggle or set the loop state of a playing sound.
@@ -2475,8 +3451,167 @@ class AudioMixer:
                     sound["in_delay"] = False
                     sound["delay_position"] = 0
                     sound["paused"] = False
+                    sound["gain"] = 1.0
+                    sound["gain_target"] = 1.0
+                    sound["after_fade"] = None
                     logger.debug("Restarted sound: %s", sound_id)
                     break
+        # Re-assert auto-PTT in case a prior pause released it.
+        self._ptt_release_countdown = 0
+        self._press_ptt()
+
+    # ------------------------------------------------------------------
+    # Air Deck engine (WP-A): fades, seek, retrigger, events, deck helpers.
+    # ------------------------------------------------------------------
+    def pop_events(self):
+        """Drain and return the (type, sound_id, meta) events the audio callback
+        appended since the last drain. Called once per GUI tick; never calls
+        back on the audio thread. deque append/popleft are atomic, so no lock."""
+        out = []
+        ev = self._events
+        while True:
+            try:
+                out.append(ev.popleft())
+            except IndexError:
+                break
+        return out
+
+    def _enforce_instance_cap(self, sound_id, max_instances):
+        """Fade the OLDEST live instance of sound_id when at the cap, so a
+        spammed short sound keeps the joke but not a growing wall of copies."""
+        with self.lock:
+            live = [s for s in self.currently_playing
+                    if s.get("sound_id") == sound_id and not s.get("paused", False)]
+        if len(live) < max_instances:
+            return
+        live.sort(key=lambda s: s.get("instance", 0))
+        for s in live[:len(live) - max_instances + 1]:
+            self.fade_out_sound_entry(s, 20, then="stop")
+
+    def fade_out_sound_entry(self, sound, ms=800, then="stop"):
+        """Arm a fade on ONE entry dict (already located)."""
+        n = max(1, int((ms / 1000.0) * self.sample_rate))
+        with self.lock:
+            sound["gain_target"] = 0.0
+            sound["gain"] = sound.get("gain", 1.0)
+            sound["gain_step"] = 1.0 / n
+            sound["after_fade"] = then
+
+    def fade_out_sound(self, sound_id: str, ms: int = 800, then: str = "stop"):
+        """Ramp every live instance of sound_id to silence over *ms*, then stop
+        or pause. Fading entries stay ACTIVE so the PTT key is held through the
+        tail (they finish, THEN the normal countdown releases)."""
+        n = max(1, int((ms / 1000.0) * self.sample_rate))
+        with self.lock:
+            for sound in self.currently_playing:
+                if sound.get("sound_id") == sound_id and not sound.get("paused", False):
+                    sound["gain_target"] = 0.0
+                    sound["gain"] = sound.get("gain", 1.0)
+                    sound["gain_step"] = 1.0 / n
+                    sound["after_fade"] = then
+
+    def seek_sound(self, sound_id: str, seconds: float, relative: bool = False) -> bool:
+        """Queue a seek applied at the next block boundary (works while paused)."""
+        hit = False
+        with self.lock:
+            for sound in self.currently_playing:
+                if sound.get("sound_id") == sound_id:
+                    dl = len(sound["data"])
+                    base = sound.get("position", 0) if relative else 0
+                    tgt = int(base + seconds * self.sample_rate)
+                    sound["pending_seek"] = (max(0, min(tgt, dl - 1)) if dl > 0 else 0)
+                    hit = True
+        return hit
+
+    def set_cue(self, sound_id: str, seconds: float):
+        with self.lock:
+            for sound in self.currently_playing:
+                if sound.get("sound_id") == sound_id:
+                    sound["cue"] = max(0, int(seconds * self.sample_rate))
+
+    def set_sound_bed(self, sound_id: str, enabled: bool):
+        with self.lock:
+            for sound in self.currently_playing:
+                if sound.get("sound_id") == sound_id:
+                    sound["bed"] = bool(enabled)
+
+    def set_effective_rate(self, sound_id: str, rate: float, preserve_pitch=None):
+        """Set the EFFECTIVE playback rate, honest for speed-baked slots:
+        playback_rate = clamp(rate / base_speed, 0.5, 2.0)."""
+        with self.lock:
+            for sound in self.currently_playing:
+                if sound.get("sound_id") == sound_id:
+                    base = float(sound.get("base_speed", 1.0)) or 1.0
+                    sound["playback_rate"] = max(0.5, min(2.0, rate / base))
+                    if preserve_pitch is not None:
+                        sound["pitch_preserve_live"] = bool(preserve_pitch)
+                        sound.pop("wsola_buf", None)
+                        sound["wsola_read"] = 0
+                        sound["wsola_write"] = 0
+
+    def handle_retrigger(self, sound_id: str, policy: str):
+        """Pre-check for a re-press of a playing sound_id. Returns None when the
+        caller should proceed to play_sound (nothing live, or 'layer'). 'restart'
+        seeks the newest instance to its cue (no new copy); 'toggle' fades it."""
+        with self.lock:
+            live = [s for s in self.currently_playing if s.get("sound_id") == sound_id]
+        if not live or policy == "layer":
+            return None
+        if policy == "restart":
+            newest = max(live, key=lambda s: s.get("instance", 0))
+            with self.lock:
+                newest["pending_seek"] = newest.get("cue", 0)
+                newest["paused"] = False
+            self._ptt_release_countdown = 0
+            self._press_ptt()
+            return "restarted"
+        if policy == "toggle":
+            self.fade_out_sound(sound_id, 250, then="stop")
+            return "stopped"
+        return None
+
+    def on_air_state(self):
+        """('user'|'app'|'off', mic_ducked) for the ON-AIR LED. 'app' = the
+        mixer is auto-holding your PTT key (your own mic is ducked); 'user' =
+        your own voice is live."""
+        talking = bool(self.ptt_user_physical
+                       or (self.universal_ptt_enabled and self.universal_ptt_open)
+                       or self.manual_ptt_hold)
+        app_holding = bool(self.ptt_active and not self.ptt_user_physical)
+        state = "user" if talking else ("app" if app_holding else "off")
+        ducked = bool(app_holding and self.duck_mic_during_sounds)
+        return state, ducked
+
+    def get_sound_peaks(self, sound_id: str, buckets: int = 160):
+        """Normalised abs-max peak envelope for the waveform, memoised by
+        (id(data), buckets). Cheap; the Deck calls it off the Tk thread."""
+        data = None
+        with self.lock:
+            for sound in self.currently_playing:
+                if sound.get("sound_id") == sound_id:
+                    data = sound.get("data")
+                    break
+        if data is None or len(data) == 0:
+            return None
+        key = (id(data), buckets)
+        cache = self._peaks_cache
+        if key in cache:
+            return cache[key]
+        mono = data if getattr(data, "ndim", 1) == 1 else data.mean(axis=1)
+        n = len(mono)
+        edges = np.linspace(0, n, buckets + 1).astype(np.int64)
+        out = np.zeros(buckets, dtype=np.float32)
+        for b in range(buckets):
+            a, c = int(edges[b]), int(edges[b + 1])
+            if c > a:
+                out[b] = float(np.max(np.abs(mono[a:c])))
+        m = float(out.max())
+        if m > 0:
+            out = out / m
+        cache[key] = out
+        if len(cache) > 32:
+            cache.pop(next(iter(cache)))
+        return out
 
     def set_sound_loop_count(self, sound_id: str, count: int):
         """Set the loop count for a currently playing sound.
@@ -2629,6 +3764,7 @@ class AudioMixer:
                     {
                         "sound_id": sound.get("sound_id"),
                         "name": sound.get("name", "Unknown"),
+                        "emoji": sound.get("emoji"),
                         "progress": progress,
                         "volume": sound.get("volume", 1.0),
                         "loop": sound.get("loop", False),
@@ -2641,6 +3777,18 @@ class AudioMixer:
                         "file_path": sound.get("file_path"),
                         "elapsed_seconds": elapsed_seconds,
                         "total_seconds": total_seconds,
+                        "label": sound.get("label", sound.get("name", "Unknown")),
+                        "meta": sound.get("meta", {}),
+                        "instance": sound.get("instance"),
+                        "base_speed": sound.get("base_speed", 1.0),
+                        "live_rate": sound.get("playback_rate", 1.0),
+                        "effective_rate": float(sound.get("base_speed", 1.0)) * float(sound.get("playback_rate", 1.0)),
+                        "pitch_preserve_live": sound.get("pitch_preserve_live", False),
+                        "gain": sound.get("gain", 1.0),
+                        "fading": sound.get("gain_target", 1.0) < sound.get("gain", 1.0),
+                        "bed": sound.get("bed", False),
+                        "cue_s": sound.get("cue", 0) / self.sample_rate,
+                        "started": sound.get("started", False),
                     }
                 )
         return result

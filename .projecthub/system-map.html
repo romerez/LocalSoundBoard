@@ -1,0 +1,1077 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LocalSoundBoard — System Map</title>
+<style>
+  :root{--bg:#0b0d10;--bg1:#12151a;--bg2:#1a1e25;--bd:#262b34;--bd1:#333a45;--tx:#e6e9ee;--tx1:#9aa3b0;--tx2:#5c6572;--ac:#5b8cff;--ok:#3fb96a;--warn:#d9a13c;--err:#e05b5b}
+  *{box-sizing:border-box;margin:0}
+  body{background:var(--bg);color:var(--tx);font:13px/1.5 "Segoe UI",system-ui,sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  header{display:flex;align-items:center;gap:10px;padding:12px 20px;border-bottom:1px solid var(--bd);background:var(--bg1);flex-wrap:wrap}
+  h1{font-size:16px}
+  #intent{font-size:11px;color:var(--tx2);max-width:420px}
+  .tabs{display:flex;gap:5px;margin-left:auto}
+  .tabs button{background:var(--bg2);border:1px solid var(--bd);color:var(--tx1);border-radius:7px;padding:5px 11px;font-size:12px;cursor:pointer}
+  .tabs button.on{border-color:var(--ac);color:var(--ac)}
+  main{flex:1;display:flex;min-height:0}
+  #view{flex:1;overflow:auto;padding:12px}
+  aside{width:330px;border-left:1px solid var(--bd);background:var(--bg1);padding:16px;overflow-y:auto}
+  aside h2{font-size:13px;margin-bottom:8px}
+  aside h3{font-size:11px;color:var(--tx2);text-transform:uppercase;letter-spacing:.06em;margin:14px 0 6px}
+  aside li{font-size:12px;color:var(--tx1);margin:0 0 7px 14px}
+  aside .comp{background:var(--bg2);border:1px solid var(--bd);border-radius:7px;padding:6px 9px;margin-bottom:6px}
+  aside .comp b{font-size:12px}
+  aside .comp div{font-size:11px;color:var(--tx1)}
+  aside .hint{color:var(--tx2);font-size:11.5px;margin-top:12px}
+  .badge{display:inline-flex;align-items:center;gap:4px;border-radius:5px;padding:1px 7px;font-size:10px;font-weight:700;color:#fff;margin:1px 3px 1px 0}
+  .legend{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;background:var(--bg1);border:1px solid var(--bd);border-radius:10px;padding:9px 14px;margin-bottom:10px;font-size:11.5px;color:var(--tx1)}
+  .legend b{color:var(--tx)}
+  .lrow{display:flex;gap:7px;align-items:center;cursor:pointer}
+  .lline{width:20px;height:3px;border-radius:2px}
+  svg{display:block}
+  svg text{font-family:"Segoe UI",system-ui,sans-serif}
+  .node rect.body{fill:var(--bg1);stroke:var(--bd1);stroke-width:1.2;rx:11}
+  .node.sel rect.body,.node:hover rect.body{stroke:var(--ac);stroke-width:1.8}
+  .node{cursor:pointer}
+  .ntitle{fill:var(--tx);font-size:13.5px;font-weight:600}
+  .ndesc{fill:var(--tx1);font-size:10.5px}
+  .ltitle{fill:var(--tx2);font-size:10.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+  .lsub{fill:#3f4854;font-size:9.5px}
+  .tbadge text{fill:#fff;font-size:8.5px;font-weight:700}
+  .dchip rect{fill:var(--bg2);stroke:var(--bd1);rx:4}
+  .dchip text{fill:var(--warn);font-size:8.5px;font-weight:700}
+  .edge{fill:none;stroke-width:1.8;opacity:.9}
+  svg.action .node,svg.action .pchip{opacity:.15}
+  svg.action .edge{opacity:.07}
+  svg.action .node.hl,svg.action .pchip.hl{opacity:1}
+  svg.action .edge.hl{opacity:1;stroke-width:3}
+  .stepbadge circle{fill:var(--ac)}
+  .stepbadge text{fill:#fff;font-size:10px;font-weight:700}
+  .actions{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;align-items:center}
+  .actions .alabel{font-size:11.5px;color:var(--tx1);font-weight:700;margin-right:4px}
+  .actions button{background:var(--bg1);border:1px solid var(--bd1);color:var(--tx1);border-radius:8px;padding:5px 11px;font-size:11.5px;cursor:pointer}
+  .actions button:hover{border-color:var(--ac);color:var(--tx)}
+  .actions button.on{border-color:var(--ac);color:var(--ac);background:var(--bg2)}
+  .pchip{cursor:pointer}
+  .pchip rect{fill:#12151a;stroke-width:1.2;rx:8}
+  .pchip text{fill:var(--tx);font-size:9.5px}
+  .ent rect.body{fill:var(--bg1);stroke:var(--bd1);rx:8;stroke-width:1.2}
+  .ent{cursor:pointer}
+  .ent:hover rect.body,.ent.sel rect.body{stroke:var(--ac)}
+  .ent .et{fill:var(--tx);font-size:12px;font-weight:700}
+  .ent .ef{fill:var(--tx1);font-size:10px;font-family:Consolas,monospace}
+  .ent .ek{fill:var(--ac)}
+  .ent line{stroke:var(--bd)}
+  .rel{stroke:#d9a13c;stroke-width:1.4;fill:none;marker-end:url(#arr2);opacity:.9}
+  .rlabel rect{fill:#12151a;stroke:#d9a13c;stroke-width:1;rx:7}
+  .rlabel text{fill:#e6c98a;font-size:9px}
+  .store{fill:var(--tx2);font-size:10.5px;font-weight:700;letter-spacing:.1em}
+  .feat{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px;padding:6px}
+  .fcard{background:var(--bg1);border:1px solid var(--bd);border-radius:9px;padding:10px 12px;cursor:pointer}
+  .fcard:hover,.fcard.sel{border-color:var(--ac)}
+  .fcard .t{font-size:12.5px;font-weight:600}
+  .fcard .w{font-size:11px;color:var(--tx1);margin-top:3px}
+  .fcard .d{font-size:10px;color:var(--tx2);margin-top:5px}
+  .fcard.planned{opacity:.6;border-style:dashed}
+  .tag{display:inline-block;background:var(--bg2);border:1px solid var(--bd);border-radius:5px;padding:1px 7px;font-size:10.5px;color:var(--tx1);margin:1px}
+  .wires{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px;padding:6px}
+  .wire{background:var(--bg1);border:1px solid var(--bd);border-radius:10px;padding:10px;cursor:pointer}
+  .wire:hover,.wire.sel{border-color:var(--ac)}
+  .wire h4{font-size:12px;margin-bottom:8px}
+  .art{background:var(--bg);border:1px solid var(--bd);border-radius:6px;height:110px;padding:6px;display:flex;flex-direction:column;gap:4px;overflow:hidden}
+  .bar{height:9px;border-radius:3px;background:var(--bg2)}
+  .row{display:flex;gap:4px;flex:1}
+  .blk{background:var(--bg2);border:1px solid var(--bd);border-radius:4px;flex:1}
+  .blk.acc{border-color:var(--ac)} .blk.g{border-color:var(--ok)}
+  .steps{max-width:640px;padding:6px}
+  .step{display:flex;gap:12px;cursor:pointer;border-radius:8px;padding:8px}
+  .step:hover,.step.sel{background:var(--bg1)}
+  .step .dot{width:14px;height:14px;border-radius:50%;margin-top:2px;flex-shrink:0}
+  .dot.done{background:var(--ok)}.dot.part{background:var(--warn)}.dot.todo{background:var(--bg2);border:1px solid var(--bd1)}
+  .step .t{font-weight:600;font-size:12.5px}
+  .step .s{color:var(--tx1);font-size:11.5px}
+  .step .w{color:var(--tx2);font-size:10.5px}
+  .vline{width:2px;background:var(--bd);margin-left:14px;height:10px}
+  .list{max-width:720px;padding:6px}
+  .item{background:var(--bg1);border:1px solid var(--bd);border-radius:8px;padding:8px 12px;margin-bottom:8px;cursor:pointer}
+  .item:hover{border-color:var(--ac)}
+  .item .t{font-size:12.5px}
+  .item .m{color:var(--tx2);font-size:10.5px;margin-top:2px}
+  .pill{display:inline-block;border-radius:4px;padding:0 6px;font-size:9.5px;text-transform:uppercase;margin-right:6px;font-weight:700}
+  .pill.high{background:rgba(224,91,91,.15);color:var(--err)}
+  .pill.medium{background:rgba(217,161,60,.15);color:var(--warn)}
+  .pill.low{background:var(--bg2);color:var(--tx2)}
+  .pill.added{background:rgba(63,185,106,.15);color:var(--ok)}
+  .pill.changed{background:rgba(91,140,255,.15);color:var(--ac)}
+  .pill.fixed{background:rgba(217,161,60,.15);color:var(--warn)}
+  .snap{color:var(--tx2);font-size:11px;padding:4px 8px}
+</style>
+</head>
+<body>
+<header>
+  <div><h1>LocalSoundBoard</h1><div id="intent"></div></div>
+  <div class="tabs" id="tabs">
+    <button data-t="map" class="on">Map</button><button data-t="database">Database</button><button data-t="features">Features</button><button data-t="screens">Screens</button><button data-t="phases">Phases</button><button data-t="backlog">Backlog</button><button data-t="history">History</button>
+  </div>
+</header>
+<main><div id="view"></div><aside id="panel"></aside></main>
+<script>
+/* ================================================================== *
+ *  MAP — this object drives the whole page (contract §10). Update it *
+ *  after every change. Renderers are generic: positions and label    *
+ *  slots are COMPUTED, so overlap is impossible.                     *
+ *  Audience rule: a junior reads the surface; a senior clicks once.  *
+ * ================================================================== */
+const MAP = {
+  updated: "2026-08-20",
+  intent: "Drop the perfect sound into a Discord call at the perfect moment: a local soundboard that mixes sounds + your noise-suppressed voice into a virtual mic — with an Android companion that carries the library everywhere.",
+
+  tech: {
+    python: {bg:"#3776ab", label:"Python",  icon:"gear"},
+    ctk:    {bg:"#1f6aa5", label:"CTk",     icon:"card"},
+    numpy:  {bg:"#4dabcf", label:"NumPy",   icon:"wave"},
+    onnx:   {bg:"#7a5cf0", label:"ONNX",    icon:"spark"},
+    kotlin: {bg:"#7f52ff", label:"Kotlin",  icon:"orbit"},
+    compose:{bg:"#4285f4", label:"Compose", icon:"atom"},
+    files:  {bg:"#6b7280", label:"JSON",    icon:"brace"},
+    win32:  {bg:"#0078d4", label:"Win32",   icon:"win"},
+    ffmpeg: {bg:"#007808", label:"ffmpeg",  icon:"box"},
+    discord:{bg:"#5865f2", label:"Discord", icon:"spark"},
+  },
+
+  protocols: {
+    ui:   {color:"#5b8cff", tag:"UI",    name:"clicks & keys (Tk events)", desc:"You drive the app with clicks, drag & drop, and the mouse wheel — Tkinter delivers them as events."},
+    call: {color:"#b07ce8", tag:"CALL",  name:"in-process Python calls", desc:"Plain function calls inside the one Python process. No network, no IPC — everything lives together."},
+    audio:{color:"#3fb96a", tag:"AUDIO", name:"live audio streams (WASAPI)", desc:"Real-time 48 kHz PCM flowing through sounddevice callbacks — mic frames in, mixed sound out."},
+    file: {color:"#d9a13c", tag:"FILE",  name:"files on disk", desc:"JSON config, wav/mp3/ogg sounds, cached PCM — everything persists as plain local files. No database server anywhere."},
+    win32:{color:"#e05b8b", tag:"WIN32", name:"Windows input APIs", desc:"Global keyboard hooks, GetAsyncKeyState polling, and SendInput key injection — how the app hears and presses keys system-wide."},
+    http: {color:"#3fc0c9", tag:"HTTP",  name:"Wi-Fi HTTP (token URL)", desc:"A tiny LAN web server inside the app; the phone reaches it by scanning a QR code that encodes a token-protected URL."},
+  },
+
+  // LAYERS left→right. Nodes stack; the engine computes every position.
+  layers: [
+    {title:"People", sub:"who acts & listens", nodes:[
+      {id:"you", title:"You", desc:["click · drag · talk · scan"], tech:[],
+       purpose:"The whole app exists so you can land the right sound in a live call without fumbling.",
+       facts:["You click slots, drag files in, hold PTT to talk over sounds, and scan the QR with your phone.","Runs at 150% DPI on a multi-monitor setup — the UI is per-monitor-v2 DPI aware for that reason."]},
+      {id:"friends", title:"Discord friends", desc:["hear sounds + your voice"], tech:[],
+       purpose:"The audience: everything the mixer produces is ultimately for the people in your call.",
+       facts:["They hear the mixed cable feed — sounds plus your noise-suppressed voice — as your normal Discord mic.","Auto-PTT presses your Discord push-to-talk key for you, so sounds transmit even when your hands are off the keyboard."]},
+    ]},
+    {title:"Windows", sub:"what you see (CustomTkinter)", nodes:[
+      {id:"board", title:"Main board", desc:["tabs · virtualized slot grid","search · action bar"], tech:["ctk"],
+       purpose:"The daily surface: every sound one click away, organized into tabs you can search in Hebrew or English.",
+       facts:["Slots are single-canvas widgets with occlusion culling — only visible rows exist as real widgets.","💻/📱 section switcher splits tabs into PC-managed and phone-managed masters."],
+       internals:[
+         {n:"Tab sidebar", what:"scrolling tab list, drag-reorder, 💻/📱 section switcher"},
+         {n:"Slot grid", what:"virtualized canvas slots: image, emoji, progress strip, shift+wheel volume"},
+         {n:"Search overlay", what:"debounced cross-tab search, jumps across sections"},
+         {n:"Action bar", what:"YouTube ⬇ · 📱 send-to-phone · voice FX · noise-suppression engine + strength"},
+         {n:"Bottom bar", what:"device pickers, mic level meter, 🌐 Universal PTT manager"},
+         {n:"DJ Looper", what:"beat-looping a sound while you layer others"}]},
+      {id:"people", title:"People hub & Favorites", desc:["per-person mini-boards","⭐ favorite folders"], tech:["ctk"],
+       purpose:"Each friend gets their own mini-soundboard of inside jokes; Favorites reuses the same machinery for your own folders.",
+       facts:["A persistent hub: close = withdraw, reopen in ~30 ms; panels prebuilt hidden at startup and revealed behind alpha=0 after a Win32 RedrawWindow (content built while withdrawn is otherwise stale on screen).","Chips stream in through a debt-based build pump; native ClearType names + colour pills, chip labels rasterised at exact device pixels; background pre-warm pauses while the hub is visible."],
+       internals:[
+         {n:"Person sidebar", what:"avatar rows, colored names, search"},
+         {n:"Group panels", what:"masonry cards of sound chips; shared + personal groups; empty-group stubs"},
+         {n:"Pop-outs", what:"any person detaches into its own always-available window"},
+         {n:"Favorites window", what:"the whole PersonPanel feature set as personal folders (solo PersonContext)"}]},
+      {id:"editor", title:"Sound editor & pickers", desc:["waveform trim · clone","emoji / color pickers"], tech:["ctk"],
+       purpose:"Sounds rarely arrive perfect — the editor cuts the exact moment out of any file without touching the original.",
+       facts:["Trims save as NEW files; source_file_path keeps the original so re-trim always reopens the full audio.","Color picker is a 2D gradient studio; emoji picker renders colored emoji via Pillow."]},
+      {id:"syncdlg", title:"📱 Send-to-Phone dialog", desc:["QR · export · server log"], tech:["ctk"],
+       purpose:"The bridge to the phone: one QR code serves install, first pack, and every later delta sync.",
+       facts:["Shows the LAN URL as a QR (adapter dropdown for VPN/Hyper-V machines) plus live download/bake events.","Tray icon + splash screen also live at this shell level: close minimizes to tray."]},
+    ]},
+    {title:"Engine", sub:"one Python process", nodes:[
+      {id:"core", title:"App core", desc:["gui.py — state & config","models.py — schema"], tech:["python"], db:{kind:"JSON", note:"config"},
+       purpose:"The single owner of all state: tabs, slots, people, settings — everything the windows show and the mixer plays.",
+       facts:["Config saves are debounced, async, atomic, backed up — and guarded so an empty people list can never overwrite a good one.","models.py round-trips unknown JSON keys, so old and new builds can no longer wipe each other's fields."],
+       internals:[
+         {n:"Config store", what:"load/save with async writer, .bak + 20 rotating backups, empty-people guard"},
+         {n:"Data models", what:"SoundTab/SoundSlot/Person/PersonGroup with tolerant extra-key round-trip"},
+         {n:"Import pipeline", what:"drag & drop (windnd) + YouTube ⬇ (yt-dlp + bundled ffmpeg)"},
+         {n:"RTL & emoji", what:"BiDi display + Pillow-rendered colored emoji (Hebrew-first UI)"},
+         {n:"Perf patches", what:"CTk tracker O(1) fixes, resize-defer + chunked sweep, DPI v2"}]},
+      {id:"mixer", title:"Audio mixer", desc:["audio.py — playback + mic","NS · auto-PTT · duck"], tech:["python","numpy","onnx"], db:{kind:"PCM cache", note:"audio_cache/"},
+       purpose:"The heart: mixes any number of sounds with your live mic into one clean 48 kHz feed Discord treats as a microphone.",
+       facts:["One duplex WASAPI stream; per-sound volume/speed/pitch/loop applied at mix time.","Noise suppression runs on a dedicated mic-processing thread (input callback → queue → AudioMixer._ns_worker → mix), never inside the PortAudio callback: 5 engines — DeepFilterNet3 (ONNX, ~7.5 ms/block), Max (DFN + lsnr residual gate), Classic (MCRA/Wiener spectral, no AI), RNNoise (rnnoise.dll bound via ctypes — never `import pyrnnoise`), Gate — built off-thread with a one-shot fallback chain and a live status line; strength = delay-compensated wet/dry."],
+       internals:[
+         {n:"SoundCache", what:"decode once → decoded-PCM disk cache; startup warmer; streaming for ≥10-min files"},
+         {n:"Playback voices", what:"overlapping sounds, loop count + gap, pitch-preserving speed (librosa)"},
+         {n:"Mic pipeline", what:"DFN3/RNNoise noise suppression, voice FX (radio/megaphone), level meter"},
+         {n:"Auto-PTT", what:"injects your Discord PTT key during sounds; physical-key watch never cuts you off"},
+         {n:"Mic duck", what:"🤫 zeroes the mic while auto-PTT sounds play, unless your real finger holds PTT"}]},
+      {id:"uptt", title:"Universal PTT", desc:["universal_ptt.py — mic gate"], tech:["python"],
+       purpose:"Push-to-talk for ANY voice app: the mic stays closed until you hold your key — no Discord required.",
+       facts:["Polls GetAsyncKeyState instead of installing hooks, so a busy UI can never stall the OS cursor or keyboard.","Cue beeps confirm open/close; managed from the 🌐 bottom-bar control."]},
+      {id:"msync", title:"Mobile sync", desc:["mobile_sync.py — manifest","zip · LAN server"], tech:["python"],
+       purpose:"Gets the whole library — and the app itself — onto the phone with nothing but a QR scan on shared Wi-Fi.",
+       facts:["Walks every referenced path (3 path fields), md5-hashes with a cache (0.33 s warm for ~660 MB), rewrites out-of-tree paths.","Serves files BY MANIFEST INDEX so Hebrew/bracket filenames survive; token-protected, idle self-stop."],
+       internals:[
+         {n:"Reference walker", what:"tabs + persons + favorites; tolerates dangling refs"},
+         {n:"Manifest builder", what:"md5 + size per file, format_version, APK version block"},
+         {n:"LAN server", what:"landing page (install APK / download pack), by-index file routes, /v1/complete"},
+         {n:"SoundPack zip", what:"UTF-8 names, avatars/external audio rewritten inboard"}]},
+    ]},
+    {title:"Storage", sub:"local disk, no DB server", nodes:[
+      {id:"config", title:"soundboard_config.json", desc:["~400 KB · tabs · people","favorites · settings"], tech:["files"], db:{kind:"JSON file", note:"repo root"},
+       purpose:"One file IS the product's memory: every tab, slot, person, folder and setting you ever configured.",
+       facts:["Guarded by .bak + 20 rotating launch-time backups in config_backups/ — born from a real data-loss incident.","Unknown keys round-trip, so older builds can't silently strip newer fields again."]},
+      {id:"library", title:"Sound & image library", desc:["sounds/ ~600 audio files","images/ · avatars"], tech:["files"],
+       purpose:"The actual bytes of every sound and slot image — plain files you can back up or edit outside the app.",
+       facts:["wav (PCM16-48k) / mp3 / ogg — all Android-native so the phone plays them unconverted.","Imports are named {stem}_{md5-8}{ext} for content-dedupe; ~300 Hebrew filenames, NFC-verified."]},
+      {id:"cache", title:"audio_cache/", desc:["decoded PCM (.npy)","~2.6 GB · rebuildable"], tech:["files"],
+       purpose:"Turns first-play decode cost into a one-time background job — playing is just np.load.",
+       facts:["Keyed by source path + mtime; never synced to the phone; safe to delete any time."]},
+      {id:"model", title:"DFN3 model", desc:["models/denoiser_model.onnx","16 MB"], tech:["onnx"],
+       purpose:"The neural noise suppressor's brain — shipped locally so NS works offline with zero cloud.",
+       facts:["DeepFilterNet3, 48 kHz native, 480-sample frames, validated 1.0000 correlation vs reference.","Weights provenance still to clean up before commercial builds (backlog)."]},
+    ]},
+    {title:"Outside", sub:"what it talks to", nodes:[
+      {id:"devices", title:"Audio devices + VB-Cable", desc:["HyperX mic in","virtual mic out · monitor"], tech:["win32"],
+       purpose:"The physical ends of the pipe: the real mic in, and a virtual cable that impersonates a mic for Discord.",
+       facts:["WASAPI via sounddevice, 48 kHz end-to-end (cable matched to 48 kHz — mismatch causes robotic voice).","Local monitor output lets you hear what your friends hear."]},
+      {id:"discord", title:"Discord", desc:["reads VB-Cable as your mic"], tech:["discord"],
+       purpose:"The destination app — it just sees a very good microphone and transmits whatever the mixer produced.",
+       facts:["Discord's own NS (Krisp) is set to None: this app already denoised, double-NS causes artifacts.","Auto-PTT presses your real Discord PTT key (e.g. F9) via SendInput."]},
+      {id:"wininput", title:"Windows input", desc:["hooks · SendInput · VK polls"], tech:["win32"],
+       purpose:"How the app hears keys system-wide and presses keys on your behalf — the glue for hotkeys and auto-PTT.",
+       facts:["keyboard-lib hooks for slot hotkeys + the physical-PTT watch; injected keys are excluded via ~50 ms windows.","Hover-preview and Universal PTT use GetAsyncKeyState polling — no global mouse hook (it stalled the OS cursor)."]},
+      {id:"phone", title:"Android app", desc:["mobile/ · Galaxy S24U","playback-only, no mic"], tech:["kotlin","compose"],
+       purpose:"The library in your pocket: play the same sounds anywhere, and build the library on the phone itself.",
+       facts:["Keeps the desktop JSON schema verbatim (raw-JsonObject round-trip); ExoPlayer pool mirrors desktop loop/gain semantics.","v3: phone-side tabs, share-to-app import, trim editor, yt-dlp downloads; self-updates over the sync link."]},
+    ]},
+  ],
+
+  // dir: "req" = one-way call (single arrowhead, caller→callee) ·
+  //      "push" = one-way stream/write (single arrowhead, producer→consumer) ·
+  //      "bi"  = two-way link (arrowheads BOTH ends — duplex streams, sync links).
+  // via: the CONCRETE calls/endpoints/files this arrow carries — shown on click.
+  edges: [
+    {from:"you",    to:"board",   protocol:"ui",   dir:"req",  label:"click · drag · wheel", why:"Everything starts with a click on a slot — or a global hotkey, which arrives via Windows input instead.",
+     via:["left-click slot = play · right-click = context menu","drag audio files onto the window (windnd drop)","shift+wheel = per-slot volume · Ctrl+F = search overlay"]},
+    {from:"board",  to:"core",    protocol:"call", dir:"req",  label:"play · edit · organize", why:"The grid asks the core to play/stop/edit; the core owns all state and fans changes back out to every window.",
+     via:["invoke play_slot(tab, slot) / stop_sound()","open editor · rename · set emoji/image/hotkey","mark config dirty on any change (debounced save)"]},
+    {from:"people", to:"core",    protocol:"call", dir:"req",  label:"play chips · edit groups", why:"Person chips and Favorites reuse the exact same play path and config store through a PersonContext facade.",
+     via:["PersonContext.play/stop for chips (same voices as slots)","group/folder CRUD + drag-move → config store","avatar decode via the shared master-decode cache"]},
+    {from:"editor", to:"core",    protocol:"call", dir:"req",  label:"save trims & edits", why:"Trims save as new library files and update the slot; the original is kept via source_file_path for re-trim.",
+     via:["save trim → writes NEW file into sounds/, re-points slot.file_path","keeps source_file_path → original for re-trim","picker results: slot emoji · color · image"]},
+    {from:"syncdlg",to:"msync",   protocol:"call", dir:"bi",   label:"start server · events", why:"The 📱 dialog spins the LAN server up (and down on idle) and renders its token URL as the QR; the server streams progress back into the dialog log.",
+     via:["invoke start_server(adapter) → token URL for the QR","invoke export_zip(path) · stop_server()","download/bake progress events ← server (dialog log)"]},
+    {from:"core",   to:"mixer",   protocol:"call", dir:"req",  label:"play · stop · settings", why:"Each play carries the slot's volume/speed/pitch/loop; settings changes retune the live mic pipeline instantly.",
+     via:["invoke play(path, volume, speed, pitch, loop, gap)","stop_all() · per-voice stop","set NS engine/strength · voice FX · devices (stream restart)"]},
+    {from:"uptt",   to:"mixer",   protocol:"call", dir:"req",  label:"mic gate + cue beeps", why:"Universal PTT opens/closes the mic inside the mix and plays confirmation beeps through the same output.",
+     via:["set_mic_gate(open|closed) inside the input callback","cue beep samples queued into the output mix"]},
+    {from:"core",   to:"config",  protocol:"file", dir:"bi",   label:"load / save (async)", why:"A debounced async writer does atomic replace + .bak + rotating backups off the Tk thread; suspicious empty saves are refused.",
+     via:["reads soundboard_config.json at startup (hydrates models)","writes temp → atomic replace + .bak (async, debounced)","launch backup → config_backups/ (keep 20)","REFUSES saves that would wipe a non-empty people list"]},
+    {from:"core",   to:"library", protocol:"file", dir:"push", label:"import sounds", why:"Drag & drop and the YouTube ⬇ button (yt-dlp + bundled ffmpeg) write new audio files into sounds/.",
+     via:["copies dropped files → sounds/{stem}_{md5-8}{ext}","yt-dlp download + ffmpeg convert → sounds/","slot images + person avatars → images/"]},
+    {from:"mixer",  to:"library", protocol:"file", dir:"req",  label:"decode audio", why:"The first-ever play of a file decodes wav/mp3/ogg via pydub/ffmpeg; after that the PCM cache answers instead.",
+     via:["reads sounds/*.wav|mp3|ogg via pydub/ffmpeg on first decode","streaming chunk reads for ≥10-min files"]},
+    {from:"mixer",  to:"cache",   protocol:"file", dir:"bi",   label:"warm & np.load", why:"A paced startup warmer decodes everything once to disk, so playing is a single np.load — no GUI freeze.",
+     via:["warmer writes decoded PCM → audio_cache/*.npy","play reads np.load(entry) — key = source path + mtime"]},
+    {from:"mixer",  to:"model",   protocol:"file", dir:"req",  label:"load DFN3", why:"onnxruntime loads the 16 MB model on a background builder thread and runs it on the mic-processing worker — Krisp-class NS without PyTorch.",
+     via:["onnxruntime.InferenceSession(models/denoiser_model.onnx)","run() per 480-sample frame on AudioMixer._ns_worker (~3.5 ms; the input callback only enqueues raw blocks)"]},
+    {from:"msync",  to:"library", protocol:"file", dir:"req",  label:"walk · hash · zip", why:"Walks every referenced path, md5s them (hash cache), and zips/serves them by manifest index so Hebrew names survive.",
+     via:["walks file_path · source_file_path · image_path across tabs/persons/favorites","md5 per file, cached in mobile_sync_hashcache.json","zips SoundPack (UTF-8 names) · serves bytes by manifest index"]},
+    {from:"mixer",  to:"devices", protocol:"audio",dir:"bi",   label:"mic in · mix out", why:"One duplex WASAPI stream: mic frames arrive, the mixed sounds+voice leave to VB-Cable and the local monitor.",
+     via:["duplex sounddevice/WASAPI stream @ 48 kHz","mic PCM frames ← HyperX input callback","mixed sounds+voice → VB-Cable Input + monitor output"]},
+    {from:"devices",to:"discord", protocol:"audio",dir:"push", label:"VB-Cable = your mic", why:"Discord's input device is the virtual cable, so whatever the mixer writes is exactly what Discord transmits.",
+     via:["Discord input device = 'CABLE Output (VB-Audio)' @ 48 kHz","carries the finished mix — Discord can't tell it from a mic"]},
+    {from:"discord",to:"friends", protocol:"audio",dir:"push", label:"voice channel", why:"Discord carries the finished mix to everyone in the call.",
+     via:["voice-channel transmit while PTT is held (Krisp = None)"]},
+    {from:"mixer",  to:"wininput",protocol:"win32",dir:"req",  label:"auto-PTT SendInput", why:"When a sound plays, the app presses your Discord PTT key for you — and skips the release while your real finger holds it.",
+     via:["SendInput(PTT key DOWN) at sound start · UP at end","GetAsyncKeyState physical-key check skips the UP if your finger is down"]},
+    {from:"wininput",to:"core",   protocol:"win32",dir:"push", label:"global hotkeys", why:"keyboard hooks fire slot hotkeys and the physical-PTT watch even when the app is unfocused.",
+     via:["keyboard-lib hook → slot/person hotkey callbacks","physical-PTT watch events (key down/up)","injected keys excluded via ~50 ms suppress windows"]},
+    {from:"uptt",   to:"wininput",protocol:"win32",dir:"req",  label:"VK polling", why:"Universal PTT polls key state (no hooks — nothing can stall the OS) to gate the mic for any voice app.",
+     via:["GetAsyncKeyState(vk) polled on a timer — no hooks installed"]},
+    {from:"msync",  to:"phone",   protocol:"http", dir:"bi",   label:"manifest · files · APK", why:"The phone scans the QR, diffs md5s, downloads only what changed — and installs app updates over the same link.",
+     via:["GET /?token=… — browser landing page (install APK / get pack)","GET /v1/manifest — md5+size list + APK version block","GET /v1/file/<index> — bytes by manifest index (Hebrew-safe)","GET /v1/apk (md5-verified self-update) · POST /v1/complete ← phone"]},
+  ],
+
+  dbmap: {
+    stores: [
+      {name:"soundboard_config.json — one JSON file · repo root · .bak + 20 rotating backups", cols:[0,1,2]},
+      {name:"files on disk — sounds/ · images/ · audio_cache/", cols:[3]},
+      {name:"phone — DataStore JSON", cols:[4]},
+    ],
+    // grid: col (0-4) × row (0-1); the renderer computes pixels.
+    entities: [
+      {id:"cfg", col:0, row:0, name:"Config root", icon:"gear", purpose:"every user setting in one place",
+       fields:[["devices","input · output · monitor"],["ptt","key · auto-PTT · duck flag"],["noise_suppression","backend · strength"],["active_section · geometry",""],["ui prefs","chip size · last_person …"]]},
+      {id:"tab", col:1, row:0, name:"SoundTab", icon:"card", sub:"nested in config", purpose:"one tab of the board grid",
+       fields:[["name · emoji · color","","k"],["section","\"pc\" | \"phone\""],["slots{}","nests SoundSlot","fk"],["extra","unknown keys kept"]]},
+      {id:"slot", col:2, row:0, name:"SoundSlot", icon:"play", sub:"nested in a tab", purpose:"one playable sound + its tuning",
+       fields:[["file_path","→ Library file","fk"],["source_file_path","→ re-trim original","fk"],["volume · speed · pitch",""],["loop","count · gap"],["name (RTL) · image_path",""]]},
+      {id:"person", col:0, row:1, name:"Person", icon:"card", purpose:"a friend's own mini-soundboard",
+       fields:[["name · color","","k"],["avatar","image path"],["groups[]","nests PersonGroup","fk"]]},
+      {id:"group", col:1, row:1, name:"PersonGroup", icon:"clip", sub:"shared or personal", purpose:"a folder of sounds on a person board",
+       fields:[["name","","k"],["shared","visible on every person"],["sounds[]","slot-shaped dicts","fk"]]},
+      {id:"fav", col:2, row:1, name:"Favorites board", icon:"check", sub:"solo PersonContext", purpose:"your own folders of favorite sounds",
+       fields:[["folders[]","PersonGroup shape","fk"],["fav_* prefs","geometry · density"]]},
+      {id:"libfile", col:3, row:0, name:"Library file", icon:"doc", purpose:"the actual bytes of a sound or image",
+       fields:[["sounds/*.wav|mp3|ogg","~600 files"],["Android-native","phone plays as-is"],["images/ · avatars",""],["{stem}_{md5-8}{ext}","dedupe","k"]]},
+      {id:"cachee", col:3, row:1, name:"Cache entry", icon:"pulse", purpose:"decoded PCM so play is instant",
+       fields:[["audio_cache/*.npy",""],["key","source path + mtime","k"],["rebuildable","safe to delete"]]},
+      {id:"manifest", col:4, row:0, name:"SoundPack manifest", icon:"link", sub:"generated per sync", purpose:"all the phone needs to mirror the library",
+       fields:[["format_version","","k"],["files[]","md5 · size · by-index"],["app","APK versionCode · md5"]]},
+      {id:"phonecfg", col:4, row:1, name:"Phone config", icon:"box", purpose:"the same JSON schema living on Android",
+       fields:[["raw JsonObject","keys round-trip"],["origin","phone vs desktop tabs"],["DataStore + staged import","kill-safe"]]},
+    ],
+    relations: [
+      {from:"cfg", to:"tab", label:"nests", card:"1:N"},
+      {from:"tab", to:"slot", label:"nests", card:"1:N"},
+      {from:"cfg", to:"person", label:"nests", card:"1:N"},
+      {from:"person", to:"group", label:"nests", card:"1:N"},
+      {from:"group", to:"slot", label:"same shape", card:"1:N", dash:true},
+      {from:"fav", to:"group", label:"folders reuse", card:"1:N", dash:true},
+      {from:"slot", to:"libfile", label:"points at", card:"N:1"},
+      {from:"cachee", to:"libfile", label:"decoded from", card:"1:1"},
+      {from:"manifest", to:"libfile", label:"indexes", card:"1:N"},
+      {from:"phonecfg", to:"manifest", label:"applied by sync", card:"N:1"},
+      {from:"phonecfg", to:"cfg", label:"mirrors", card:"1:1", dash:true},
+    ],
+  },
+
+  // FLOWS: everything that can HAPPEN in the system and the path it travels.
+  // trigger: "you" = a user action · "event" = the system reacts on its own.
+  actions: [
+    {id:"play", trigger:"you", name:"▶ Play a sound", purpose:"the core moment: one click and your whole call hears it",
+     steps:[
+       {at:"you", text:"you click a slot (or press its global hotkey)"},
+       {at:"board", via:"you→board", text:"the slot lights up; its progress strip starts"},
+       {at:"core", via:"board→core", text:"the core resolves the slot's file + volume/speed/pitch/loop settings"},
+       {at:"mixer", via:"core→mixer", text:"a playback voice starts"},
+       {at:"cache", via:"mixer→cache", text:"decoded PCM arrives via one np.load — no decode, no freeze"},
+       {at:"wininput", via:"mixer→wininput", text:"auto-PTT presses your Discord PTT key; your live mic is ducked 🤫"},
+       {at:"devices", via:"mixer→devices", text:"the sound is mixed into the VB-Cable feed at 48 kHz"},
+       {at:"discord", via:"devices→discord", text:"Discord transmits the cable as your mic"},
+       {at:"friends", via:"discord→friends", text:"everyone hears it, clean, at the volume you tuned"}]},
+    {id:"talk", trigger:"you", name:"🎙 Talk (noise-suppressed)", purpose:"your voice goes through the app too — denoised better than Discord's own NS",
+     steps:[
+       {at:"you", text:"you hold your Discord PTT key and talk"},
+       {at:"devices", via:"mixer→devices", text:"mic frames arrive through the duplex WASAPI stream"},
+       {at:"model", via:"mixer→model", text:"the mic-processing thread denoises — DeepFilterNet3 / Max / Classic / RNNoise / Gate, strength as a delay-compensated wet/dry"},
+       {at:"mixer", text:"optional voice FX (radio/megaphone), then into the output mix"},
+       {at:"discord", via:"devices→discord", text:"Discord (Krisp off) transmits your clean voice"}]},
+    {id:"add", trigger:"you", name:"➕ Add a sound", purpose:"any file or YouTube link becomes a slot in seconds",
+     steps:[
+       {at:"you", text:"you drag audio files onto the board — or paste a YouTube URL into ⬇"},
+       {at:"core", via:"board→core", text:"the import pipeline copies (or yt-dlp downloads + ffmpeg converts) the audio"},
+       {at:"library", via:"core→library", text:"the file lands in sounds/ with a content-hash name"},
+       {at:"config", via:"core→config", text:"the new slot persists into the config"},
+       {at:"cache", via:"mixer→cache", text:"the background warmer decodes it so its first play is instant"}]},
+    {id:"trim", trigger:"you", name:"✂ Trim in the editor", purpose:"cut the exact moment out of a long file — original always kept",
+     steps:[
+       {at:"you", text:"you open ✂ on a slot"},
+       {at:"editor", via:"editor→core", text:"the waveform renders; you drag the green/red handles and preview"},
+       {at:"library", via:"core→library", text:"Save writes a NEW file — the original is never modified"},
+       {at:"config", via:"core→config", text:"the slot now points at the cut; source_file_path remembers the original for re-trim"}]},
+    {id:"hub", trigger:"you", name:"👤 Open the People hub", purpose:"a friend's whole soundboard, ~270 ms after you click",
+     steps:[
+       {at:"you", text:"you click 👤 (or a person hotkey)"},
+       {at:"people", via:"people→core", text:"the persistent hub reconciles, maps at alpha 0, repaints (RedrawWindow) and reveals on <Map> — ~30 ms, no white or stale frame"},
+       {at:"core", text:"panels reconcile changes; chips stream through the debt-based build pump"},
+       {at:"people", text:"you land on the last person you used; Esc hides the hub again"}]},
+    {id:"sync", trigger:"you", name:"📱 Send to phone", purpose:"install, update and mirror the whole library over one QR",
+     steps:[
+       {at:"you", text:"you click 📱 in the action bar"},
+       {at:"syncdlg", via:"syncdlg→msync", text:"the LAN server starts; the dialog shows the QR token URL"},
+       {at:"msync", via:"msync→library", text:"manifest built: every referenced file, md5-hashed (cache makes it 0.33 s)"},
+       {at:"phone", via:"msync→phone", text:"the phone scans, diffs, downloads only what changed — by manifest index"},
+       {at:"phone", text:"if the PC has a newer APK the phone self-updates first; imports are staged + kill-safe"}]},
+    {id:"uptt", trigger:"you", name:"🌐 Universal PTT", purpose:"push-to-talk for any voice app — the mic opens only while you hold the key",
+     steps:[
+       {at:"you", text:"you hold your PTT key — in any app, any game"},
+       {at:"wininput", via:"uptt→wininput", text:"the VK poll sees the key go down (no hooks, nothing to stall)"},
+       {at:"uptt", via:"uptt→mixer", text:"the mic gate opens; a cue beep confirms"},
+       {at:"devices", via:"mixer→devices", text:"your voice flows while held; release closes the gate + beeps again"}]},
+    {id:"launch", trigger:"event", name:"⚡ App launches", purpose:"heavy work is paced so the window is usable immediately",
+     steps:[
+       {at:"core", text:"splash appears; config loads; a rotating backup snapshots config_backups/"},
+       {at:"config", via:"core→config", text:"tabs, people, favorites and settings hydrate the models"},
+       {at:"mixer", via:"core→mixer", text:"the duplex audio stream starts; the paced warmer begins decoding"},
+       {at:"cache", via:"mixer→cache", text:"new/changed sounds get decoded into audio_cache/ in the background"},
+       {at:"people", text:"after ~4.5 s the People hub prebuilds hidden against its REQUESTED width — first open is the ~30 ms reveal path"}]},
+    {id:"pttlock", trigger:"event", name:"⚡ Sound ends while your finger holds PTT", purpose:"the app must never cut you off mid-sentence",
+     steps:[
+       {at:"mixer", text:"a sound finishes; auto-PTT would normally inject the key-UP"},
+       {at:"wininput", via:"mixer→wininput", text:"the physical-key watch says your real finger is still down → injection skipped"},
+       {at:"discord", via:"devices→discord", text:"your transmission continues; your own release ends it"}]},
+    {id:"save", trigger:"event", name:"⚡ Anything changes", purpose:"every tweak persists without ever freezing a frame or risking the data",
+     steps:[
+       {at:"core", text:"a change (volume, drag, rename…) marks the config dirty; saves debounce"},
+       {at:"config", via:"core→config", text:"the async writer serializes off the Tk thread: atomic replace + .bak"},
+       {at:"config", text:"a save that would wipe existing people is refused — the 2026-06 incident can't repeat"}]},
+  ],
+
+  features: [
+    {name:"Soundboard grid with per-sound tuning", date:"2026-02-13", nodes:["board","core","mixer"], what:"Tabs of slots; each sound carries its own volume, speed, pitch, loop count + gap, image and emoji."},
+    {name:"VB-Cable mixing + auto-PTT", date:"2026-02-13", nodes:["mixer","devices","discord","wininput"], what:"Sounds + mic mix into a virtual cable Discord reads as a mic; the app presses your PTT key for you."},
+    {name:"Sound editor (waveform trim)", date:"2026-02-13", nodes:["editor","library"], what:"Waveform view, drag handles, preview, save-as-new with the original kept for re-trim."},
+    {name:"Local monitoring + loopback capture", date:"2026-02-13", nodes:["mixer","devices"], what:"Hear what your friends hear; record other people in the call via WASAPI loopback."},
+    {name:"Pitch-preserving speed", date:"2026-02-15", nodes:["mixer"], what:"Time-stretch via librosa so faster ≠ chipmunk."},
+    {name:"Emoji + Hebrew RTL", date:"2026-02-20", nodes:["board","core"], what:"Colored emoji (Pillow) and BiDi display everywhere — the library is Hebrew-first."},
+    {name:"DJ Looper", date:"2026-04-06", nodes:["board","mixer"], what:"Loop a beat while layering other sounds over it."},
+    {name:"Sound groups", date:"2026-04-24", nodes:["core"], what:"Slots can belong to groups for bulk organization."},
+    {name:"Grid virtualization", date:"2026-06-05", nodes:["board"], what:"Occlusion culling: only visible slot rows exist as widgets — dense tabs scroll smoothly."},
+    {name:"Data-safety net", date:"2026-06-09", nodes:["core","config"], what:"Rotating launch backups, empty-people save guard, tolerant schema — built after recovering 83 wiped person-sounds from git objects."},
+    {name:"Decoded-PCM disk cache", date:"2026-06-09", nodes:["mixer","cache"], what:"Decode once into audio_cache/; every later play is a single np.load."},
+    {name:"People mini-soundboards", date:"2026-06-09", nodes:["people","core"], what:"Per-friend boards with shared + personal sound groups, pop-outs, drag & drop between people."},
+    {name:"DeepFilterNet3 noise suppression", date:"2026-06-11", nodes:["mixer","model"], what:"Krisp-class DNN denoising via ONNX, engine dropdown (Best/Light), RNNoise fallback."},
+    {name:"Instant People hub", date:"2026-07-17", nodes:["people"], what:"Persistent hub (close = withdraw), hidden startup prebuild, debt-based build pump — open in ~270 ms."},
+    {name:"⭐ Favorites + 🔍 pick-from-title", date:"2026-07-18", nodes:["people","core"], what:"Personal folders reusing the whole person-panel machinery; search any part of a title in-app or on the web."},
+    {name:"🌐 Universal PTT", date:"2026-07-30", nodes:["uptt","mixer","wininput"], what:"Hook-free VK-polled mic gate with cue beeps — PTT for any voice app."},
+    {name:"📱 Mobile companion (desktop side)", date:"2026-08-07", nodes:["syncdlg","msync","library"], what:"Manifest + SoundPack zip + token LAN server + QR; one code serves install, first pack, and delta sync."},
+    {name:"Android app v1–v2", date:"2026-08-07", nodes:["phone","msync"], what:"Kotlin/Compose playback app with the desktop schema verbatim; Wi-Fi QR delta sync; in-app APK self-update; long-press edit."},
+    {name:"💻/📱 master sections", date:"2026-08-07", nodes:["board","core","phone"], what:"Tabs split into PC-managed and phone-managed sections on both devices."},
+    {name:"Build the library ON the phone (v3)", date:"2026-08-08", nodes:["phone"], what:"Phone-side tab CRUD, share-to-app import, trim editor, yt-dlp web downloads — all two-way-sync-ready."},
+    {name:"Noise suppression rework", date:"2026-08-31", nodes:["mixer","model"], what:"RNNoise revived in the EXE (direct rnnoise.dll binding; the pyrnnoise import chain never shipped), DeepFilterNet strength comb-filter fixed (delay-compensated wet/dry instead of atten_lim_db), engines built off-thread with a one-shot fallback chain + live status line, denoising on a Pro-Audio worker thread; new Max / Classic / Gate engines + 80 Hz low-cut."},
+    {name:"People smudge root-caused + UI consistency", date:"2026-08-31", nodes:["people","board"], what:"Stale pixels after deiconify (RedrawWindow reveal behind alpha 0), full rebuild on every first open (withdrawn width placeholder), CustomTkinter nested idle pumps (ctk_patches.py); native names + pills, device-pixel chip labels/icons, WCAG contrast; app-wide control tokens (28/32/24/36 px), status bar overflow fix, device-px tab emoji/thumbnails."},
+  ],
+
+  screens: [
+    {id:"board", name:"Main board", icon:"card",
+     purpose:"the daily home: every sound one click away",
+     layout:[["action bar — ⬇ YouTube · 📱 · voice FX · NS engine + strength"],["tab sidebar 💻/📱","slot grid (virtualized) — image · emoji · progress"],["bottom bar — devices · mic meter · 🌐 PTT manager"]],
+     elements:[{n:"Slot", what:"click = play · right-click = menu · shift+wheel = volume · drag = rearrange/copy"},{n:"Search", what:"debounced overlay, jumps across tabs and sections"},{n:"Section switcher", what:"💻 PC tabs vs 📱 phone tabs, drag between them"}]},
+    {id:"people", name:"People hub", icon:"card",
+     purpose:"each friend's inside jokes, one click away — opens in ~270 ms",
+     layout:[["person sidebar — avatars · search","group masonry — cards of sound chips"],["person sidebar — colour pill · avatar · native name","chips: 2-line device-pixel labels · progress strip"]],
+     elements:[{n:"Chip", what:"play button + settings; drag between groups/people; shift+wheel volume"},{n:"Group card", what:"shared or personal; collapse; empty groups are droppable stubs"},{n:"Pop-out", what:"any person detaches to its own window"}]},
+    {id:"favorites", name:"⭐ Favorites", icon:"check",
+     purpose:"your own folders of go-to sounds, same machinery as a person board",
+     layout:[["folder masonry — cards of favorite chips"],["add via slot ⋯ menu · chip ⋮ menu · drag onto the window"]],
+     elements:[{n:"Folder", what:"a personal PersonGroup; move sounds by drag or menu"},{n:"Persistence", what:"favorites_board in the config; warmed at startup"}]},
+    {id:"editor", name:"Sound editor", icon:"wave",
+     purpose:"cut the exact moment out of any audio file",
+     layout:[["toolbar — play · zoom · save"],["waveform — green start / red end drag handles"],["range picker · volume · fade"]],
+     elements:[{n:"Handles", what:"drag to trim; preview plays just the selection"},{n:"Save", what:"writes a NEW file; the slot re-points; original kept via source_file_path"}]},
+    {id:"syncdlg", name:"📱 Send to Phone", icon:"link",
+     purpose:"the QR bridge: install the app, ship the pack, sync deltas",
+     layout:[["QR code — token LAN URL","IP adapter dropdown"],["Open in browser · Export .zip"],["server log — downloads · bake events"]],
+     elements:[{n:"QR", what:"camera scan → browser landing (install/pack); in-app scan → delta sync"},{n:"Server", what:"token-protected, serves by manifest index, idle self-stop"}]},
+    {id:"pickers", name:"Emoji & color pickers", icon:"spark",
+     purpose:"make every slot recognizable at a glance",
+     layout:[["emoji picker — categories · search · colored render"],["color studio — 2D gradient field · hue bar · swatches"]],
+     elements:[{n:"Emoji picker", what:"category tabs, incremental build (never freezes), colored via Pillow"},{n:"Color studio", what:"2D gradient picking, not rows of preset dots"}]},
+    {id:"tray", name:"Tray + splash", icon:"gear",
+     purpose:"the app lives in the background; close never kills your call setup",
+     layout:[["splash — instant, before heavy imports"],["tray 🗕 — left-click opens · right-click: Open / Exit"]],
+     elements:[{n:"Splash", what:"appears before the ~seconds of library imports"},{n:"Tray", what:"minimize-to-tray keeps audio + hotkeys alive"}]},
+    {id:"phoneui", name:"Android app", icon:"box",
+     purpose:"the library in your pocket — Discord-dark, RTL-correct, playback-only",
+     layout:[["section switcher 📱/💻 · tab chips"],["sound grid — RTL tiles · search"],["now playing · sync screen — 📷 scan · progress"]],
+     elements:[{n:"Board", what:"tab chips + sparse grid + search; long-press = edit/trim/delete"},{n:"Sync", what:"📷 scan → delta pull → staged, kill-safe import; APK self-update card"},{n:"Phone tabs", what:"＋ create, share-to-app import, trim editor, 🌐 yt-dlp downloads"}]},
+  ],
+
+  phases: [
+    {n:"P1", t:"Core soundboard", s:"done", d:"2026-02-13 → 02-26", w:"Grid + tabs, VB-Cable mixing, auto-PTT, waveform editor, monitoring, loopback, pitch-preserving speed, emoji/RTL."},
+    {n:"P2", t:"Playback & organization", s:"done", d:"2026-04 → 05", w:"DJ Looper, sound groups, colored emoji rendering, mixer test tools, config growth."},
+    {n:"P3", t:"Perf wall + data crisis", s:"done", d:"2026-06-05 → 06-09", w:"Grid virtualization; then the people-wipe emergency: git-object recovery, backups, save guards, PCM cache."},
+    {n:"P4", t:"Deep perf overhaul + DFN3", s:"done", d:"2026-06-10 → 07-17", w:"Felt-lag fixes app-wide, CTk internals patches, PTT-lock + mic duck, DeepFilterNet3 NS, instant People hub."},
+    {n:"P5", t:"Favorites & Universal PTT", s:"done", d:"2026-07-18 → 07-30", w:"⭐ Favorites board, 🔍 pick-from-title, 🌐 hook-free universal mic gate."},
+    {n:"P6", t:"Mobile companion", s:"done", d:"2026-08-07 → 08-08", w:"Desktop exporter + QR LAN server; Android app v1→v3: sync, self-update, sections, phone-side library building."},
+    {n:"P7", t:"Stabilize & ship", s:"part", d:"", w:"On-device v3 acceptance, commit the July–August WIP, EXE rebuild discipline."},
+    {n:"→", t:"Next", s:"todo", d:"", w:"Canvas-chip People rewrite · DFN3 weights provenance · single-instance guard · commercial build (see docs/AUTH_AND_SUBSCRIPTION.md)."},
+  ],
+
+  backlog: [
+    {p:"high", t:"Commit the July–August WIP", m:"Favorites, Universal PTT, DFN3 wiring, whole mobile/ tree are shipped but uncommitted"},
+    {p:"high", t:"On-device acceptance pass for phone v3", m:"checklist in docs/SESSION_BACKLOG.md — CRUD, share-to, trim, yt-dlp, re-sync survival"},
+    {p:"medium", t:"Single-instance guard", m:"slow startup once stacked 6 instances; relaunch should focus the existing window"},
+    {p:"medium", t:"DFN3 weights provenance for commercial builds", m:"regenerate combined ONNX from the official split model or get written confirmation"},
+    {p:"medium", t:"People canvas-chip rewrite (behind a flag)", m:"one canvas per chip instead of ~10 Tk widgets — kills the remaining per-widget floor"},
+    {p:"medium", t:"Editor: off-thread load + marker-drag redraw", m:"full-file resample on the UI thread; markers full-redraw per pixel"},
+    {p:"low", t:"Async play-path decode for very long sounds", m:"first play still np.loads on the GUI thread"},
+    {p:"low", t:"Action-bar overflow menu", m:"the bar clips at narrow window widths (📱 added ~40 px)"},
+    {p:"low", t:"Clean dead shared groups", m:"E2E_NEWGROUP + duplicate Hebrew groups inflate every panel by ~⅓"},
+    {p:"low", t:"Re-file recovered sounds from ♻ Recovered tab", m:"Yair's sounds await the user's recognition"},
+    {p:"low", t:"Repo housekeeping", m:"untrack logs/perf leftovers, decide _recovery/ fate, remove temp tools"},
+  ],
+
+  history: [
+    {d:"2026-08-31", k:"fixed", t:"UI polish: preview now honours slot speed/pitch (shared apply_speed), search overlay shows the slot name (was the file hash) + a stop button on previews, the slot quick-edit popup was rebuilt, and CTkToplevel dialogs no longer take ~5 s to open (title-bar recolour ran a nested update() pump). DJ Looper Pause->Resume no longer goes silent to Discord and cards show the real name+emoji."},
+    {d:"2026-08-31", k:"added", t:"DJ Looper reimagined as \"Air Deck\" (4-concept/3-judge/36-agent workflow): always-on-top canvas deck + global ctrl+alt hotkeys, memes get no UI, engine gains fades/seek/A-B/bed-duck; full spec docs/DJ_AIR_DECK_PLAN.md; awaiting the build direction (full deck vs docked strip)."},
+    {d:"2026-08-31", k:"fixed", t:"Review pass on the People/UI work (36-agent adversarial review, 14/15 confirmed): reopen on a visible window blanked it 0.7 s (deiconify on a mapped window emits no <Map>), zero-people hint pack/grid TclError, alpha flipped before Tk's queued repaints (nested after_idle), thumbnail poll wedged when its slot was destroyed, slot ⋯ menu lost half its items (self._fix_rtl_text), Hebrew chip labels would mirror without a fribidi DLL (native-text fallback)."},
+    {d:"2026-08-31", k:"fixed", t:"People window: stale/blank content after (re)open, full rebuild on every first open, and CTk nested idle-pump freezes root-caused and fixed; names/headers native text with colour pills, chip labels and icons at device pixels; app-wide button/checkbox/dropdown consistency pass."},
+    {d:"2026-08-31", k:"fixed", t:"Mic noise suppression: RNNoise was silently dead in the EXE (pyrnnoise→audiolab import) and DeepFilterNet at strength<100 comb-filtered the voice — both fixed; engines now load off-thread with a fallback chain + status line, run on a dedicated worker thread; added Max / Classic / Gate engines and an 80 Hz low-cut."},
+    {d:"2026-08-20", k:"changed", t:"Map v9 renderer: connections spread along each card side as ports (never all into the center), every parallel run gets a private lane so two lines never overlap, long-haul edges route through card bottoms into the bus (with side-exit gutter lanes where a straight drop would cross the cards below), plug dots at both ends of every edge in the ORIGIN card's identity color (cards gained accent strips), and every label chip states METHOD + direction: AUDIO ↔ mic in · mix out."},
+    {d:"2026-08-20", k:"changed", t:"Map rebuilt on the v8 renderer (contract §10): every arrow now declares its direction (→ one-way call/stream, ↔ two-way link — arrowheads both ends, protocol-colored) and its concrete traffic (exact calls, files, HTTP routes on click); label chips get a collision pass; tech badges wrap instead of clipping."},
+    {d:"2026-08-08", k:"fixed", t:"Section-wipe incident closed: old EXE dropped unknown JSON keys — models now round-trip extras; stale-grid fix; spec hiddenimports; EXE rebuild rule."},
+    {d:"2026-08-08", k:"added", t:"Phone v3: build the library ON the phone — tab CRUD, share-to-app import, trim editor, yt-dlp web downloads."},
+    {d:"2026-08-07", k:"added", t:"Phone v2: 💻/📱 master sections both sides, Wi-Fi QR delta sync, in-app APK self-update, long-press edit."},
+    {d:"2026-08-07", k:"added", t:"Mobile companion born in one day: full plan, desktop exporter + token QR LAN server, complete Kotlin/Compose app (working APK), USB-free browser bootstrap."},
+    {d:"2026-07-30", k:"added", t:"🌐 Universal PTT: hook-free VK-polled mic gate with cue beeps, for any voice app."},
+    {d:"2026-07-18", k:"added", t:"⭐ Favorites board (person-panel machinery as personal folders) + 🔍 pick-from-title search."},
+    {d:"2026-07-17", k:"changed", t:"People window opens in ~270 ms: persistent hub, hidden startup prebuild, empty-group stubs, probed debt-based build pump."},
+    {d:"2026-06-11", k:"added", t:"DeepFilterNet3 noise suppression (ONNX, ~3.3 ms/frame) as default engine with RNNoise fallback + GUI selection."},
+    {d:"2026-06-10", k:"fixed", t:"Felt-lag sweep: global mouse hook removed, hover/progress fast paths, CTk tracker O(1) patches, async config writer, PTT-lock + mic-duck fixes."},
+    {d:"2026-06-09", k:"fixed", t:"Data-loss emergency: 8 people / 83 sounds recovered from git objects, 80 orphans into ♻ Recovered; save guards, rotating backups, People-hang + startup fixes."},
+    {d:"2026-06-09", k:"added", t:"Decoded-PCM disk cache (audio_cache/): decode once, np.load forever."},
+    {d:"2026-06-05", k:"added", t:"Grid virtualization (occlusion culling) for dense tabs; v1.2.3 + commercial plan docs the next day."},
+    {d:"2026-05-02", k:"added", t:"Colored emoji rendering via Pillow; AudioMixer Test Output / Test Recording tools."},
+    {d:"2026-04-24", k:"added", t:"Sound groups + noise-suppression settings groundwork."},
+    {d:"2026-04-06", k:"added", t:"DJ Looper + PTT/GUI responsiveness improvements."},
+    {d:"2026-02-20", k:"added", t:"Tabbed interface era: scrolling tab bar, per-tab storage, looping playback, emoji + Hebrew RTL."},
+    {d:"2026-02-15", k:"added", t:"Pitch-preserving speed adjustment + first unit tests."},
+    {d:"2026-02-13", k:"added", t:"Initial Discord soundboard: grid + tabs, VB-Cable playback, auto-PTT, waveform trim editor, local monitoring, loopback capture."},
+  ],
+};
+
+/* ---------------- generic renderers (leave alone) ---------------- */
+const view = document.getElementById("view"), panel = document.getElementById("panel");
+const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;");
+document.getElementById("intent").textContent = MAP.intent;
+
+/* tiny icon glyphs, drawn white inside badges */
+function iconSvg(kind, x, y){
+  const w = "#fff";
+  switch(kind){
+    case "gear":  return `<g transform="translate(${x},${y})" stroke="${w}" fill="none" stroke-width="1.1"><circle cx="5" cy="5" r="2.2"/><path d="M5 0.5v1.6M5 7.9v1.6M0.5 5h1.6M7.9 5h1.6M1.8 1.8l1.1 1.1M7.1 7.1l1.1 1.1M8.2 1.8L7.1 2.9M2.9 7.1L1.8 8.2"/></g>`;
+    case "orbit": return `<g transform="translate(${x},${y})" stroke="${w}" fill="none" stroke-width="1.1"><circle cx="3.5" cy="5" r="2.6"/><circle cx="6.5" cy="5" r="2.6"/></g>`;
+    case "atom":  return `<g transform="translate(${x},${y})" stroke="${w}" fill="none" stroke-width="0.9"><ellipse cx="5" cy="5" rx="4.4" ry="1.7"/><ellipse cx="5" cy="5" rx="4.4" ry="1.7" transform="rotate(60 5 5)"/><ellipse cx="5" cy="5" rx="4.4" ry="1.7" transform="rotate(120 5 5)"/><circle cx="5" cy="5" r="0.9" fill="${w}"/></g>`;
+    case "wave":  return `<g transform="translate(${x},${y})" stroke="${w}" fill="none" stroke-width="1.3"><path d="M0.5 4 C2 1.5 4 1.5 5 4 S8 6.5 9.5 4"/><path d="M0.5 7.5 C2 5 4 5 5 7.5 S8 10 9.5 7.5" transform="translate(0,-1.5)"/></g>`;
+    case "win":   return `<g transform="translate(${x},${y})" fill="${w}"><rect x="0.5" y="0.5" width="4" height="4"/><rect x="5.5" y="0.5" width="4" height="4"/><rect x="0.5" y="5.5" width="4" height="4"/><rect x="5.5" y="5.5" width="4" height="4"/></g>`;
+    case "brace": return `<text transform="translate(${x},${y})" x="0" y="8" fill="${w}" font-size="9" font-weight="700">{ }</text>`;
+    case "branch":return `<g transform="translate(${x},${y})" stroke="${w}" fill="none" stroke-width="1.1"><circle cx="2" cy="2" r="1.4"/><circle cx="2" cy="8" r="1.4"/><circle cx="8" cy="5" r="1.4"/><path d="M2 3.4v3.2M3.2 2.6C6 3.2 6.6 3.8 6.8 4.6"/></g>`;
+    case "box":   return `<g transform="translate(${x},${y})" fill="${w}"><rect x="0.5" y="4" width="2.6" height="2.4"/><rect x="3.6" y="4" width="2.6" height="2.4"/><rect x="6.7" y="4" width="2.6" height="2.4"/><rect x="3.6" y="1.2" width="2.6" height="2.4"/><rect x="0.5" y="7" width="8.8" height="1.6"/></g>`;
+    case "key":   return `<g transform="translate(${x},${y})" stroke="${w}" fill="none" stroke-width="1.2"><circle cx="3" cy="3.4" r="2.2"/><path d="M4.6 5 L8.6 9M7 7.4l1.4-1.2M8 8.6l1.2-1"/></g>`;
+    case "spark": return `<g transform="translate(${x},${y})" stroke="${w}" stroke-width="1.2"><path d="M5 0.5v9M0.5 5h9M1.8 1.8l6.4 6.4M8.2 1.8L1.8 8.2"/></g>`;
+    case "card":  return `<g transform="translate(${x},${y})" stroke="${w}" fill="none" stroke-width="1.1"><rect x="0.5" y="1.5" width="9" height="7" rx="1"/><path d="M2 4h3M2 6h5"/></g>`;
+    case "clip":  return `<g transform="translate(${x},${y})" stroke="${w}" fill="none" stroke-width="1.1"><rect x="1" y="1.5" width="8" height="8" rx="1"/><path d="M3.5 1.5V0.7h3v0.8M3 4.5h4M3 6.5h4"/></g>`;
+    case "play":  return `<g transform="translate(${x},${y})" fill="${w}"><path d="M2.5 1.5L8.5 5L2.5 8.5z"/></g>`;
+    case "pulse": return `<g transform="translate(${x},${y})" stroke="${w}" fill="none" stroke-width="1.2"><path d="M0.5 5h2l1.5-3.5L6 8.5 7.5 5h2"/></g>`;
+    case "check": return `<g transform="translate(${x},${y})" stroke="${w}" fill="none" stroke-width="1.4"><path d="M1.5 5.5L4 8L8.5 2"/></g>`;
+    case "clock": return `<g transform="translate(${x},${y})" stroke="${w}" fill="none" stroke-width="1.1"><circle cx="5" cy="5" r="4"/><path d="M5 2.8V5l1.8 1.4"/></g>`;
+    case "doc":   return `<g transform="translate(${x},${y})" stroke="${w}" fill="none" stroke-width="1.1"><path d="M2 0.8h4l2.5 2.5v6H2z"/><path d="M3.5 5h3M3.5 7h3"/></g>`;
+    case "link":  return `<g transform="translate(${x},${y})" stroke="${w}" fill="none" stroke-width="1.2"><path d="M4 6L6 4M2.5 5A2 2 0 0 1 5 2.5M5 7.5A2 2 0 0 0 7.5 5" transform="rotate(45 5 5)"/></g>`;
+    default: return "";
+  }
+}
+function badgeHtml(keys){ return (keys||[]).map(k=>{const t=MAP.tech[k]; if(!t) return "";
+  return `<span class="badge" style="background:${t.bg}">${t.icon!=="none"?`<svg width="10" height="10" viewBox="0 0 10 10">${iconSvg(t.icon,0,0)}</svg>`:""}${esc(t.label)}</span>`}).join(""); }
+
+/* Orthogonal path with HOP ARCS: horizontal segments jump over vertical
+   segments of OTHER edges with a small bridge — crossings read as
+   "not connected", circuit-diagram style. verts = [[x,y],...] corners. */
+function orthoPath(verts, otherVerticals){
+  let d = `M${verts[0][0]},${verts[0][1]}`;
+  for(let s=1; s<verts.length; s++){
+    const [x1,y1] = verts[s-1], [x2,y2] = verts[s];
+    if(y1===y2 && x1!==x2){ // horizontal: find crossings
+      const dir = x2>x1 ? 1 : -1;
+      const lo = Math.min(x1,x2)+4, hi = Math.max(x1,x2)-4;
+      const xs = otherVerticals
+        .filter(v => v.x>lo && v.x<hi && y1>Math.min(v.y1,v.y2)+4 && y1<Math.max(v.y1,v.y2)-4)
+        .map(v=>v.x).sort((a,b)=>dir*(a-b));
+      for(const cx of xs){
+        d += ` H${cx-6*dir} A6 6 0 0 ${dir>0?0:1} ${cx+6*dir} ${y1}`;
+      }
+      d += ` H${x2}`;
+    } else {
+      d += ` V${y2}`;
+    }
+  }
+  return d;
+}
+function collectVerticals(vertsList){
+  const out = [];
+  for(const {verts, id} of vertsList){
+    for(let s=1; s<verts.length; s++){
+      const [x1,y1] = verts[s-1], [x2,y2] = verts[s];
+      if(x1===x2 && y1!==y2) out.push({x:x1, y1, y2, id});
+    }
+  }
+  return out;
+}
+function setPanel(title, html){
+  panel.innerHTML = "<h2>"+esc(title)+"</h2>"+html+"<div class='hint'>Updated "+MAP.updated+" · maintained by agents per contract §10</div>";
+}
+function factsHtml(facts){ return "<ul>"+ (facts||[]).map(f=>"<li>"+esc(f)+"</li>").join("") +"</ul>"; }
+function nodeById(id){ for(const L of MAP.layers) for(const n of L.nodes) if(n.id===id) return {n, layer:L}; return null; }
+
+function renderMap(){
+  const COLW=216, GUT=150, PAD=14, LINE=15, BADGE=20, DBC=19, GAPY=34, TOP=66;
+  const colX = i => 20 + i*(COLW+GUT);
+  const colOf = {}; MAP.layers.forEach((L,i)=>L.nodes.forEach(n=>colOf[n.id]=i));
+  // Tech badges WRAP to extra rows instead of overflowing the box — nothing
+  // may ever clip. Same math is used at measure and draw time.
+  const badgeW = t => t.label.length*6+12+(t.icon!=="none"?13:0);
+  const badgeRows = n => {
+    if(!n.tech?.length) return 0;
+    let bx=PAD, rows=1;
+    for(const k of n.tech){ const t=MAP.tech[k]; if(!t) continue;
+      const bw = badgeW(t);
+      if(bx>PAD && bx+bw > COLW-PAD){ rows++; bx=PAD; }
+      bx += bw+5; }
+    return rows;
+  };
+  // measure + stack
+  const pos = {}; let maxBottom = 0;
+  MAP.layers.forEach((L,i)=>{
+    let y = TOP;
+    for(const n of L.nodes){
+      const h = PAD+16 + (n.desc?.length||0)*LINE + badgeRows(n)*BADGE + (n.db?DBC:0) + PAD;
+      pos[n.id] = {x:colX(i), y, w:COLW, h};
+      y += h + GAPY;
+    }
+    maxBottom = Math.max(maxBottom, y - GAPY);
+  });
+  // Every node gets an IDENTITY COLOR (accent strip on the card + the plug
+  // dots at both ends of its outgoing edges) — you can trace any arrow back
+  // to its origin card by color alone.
+  const NODE_PALETTE = ["#5b8cff","#3fb96a","#d9a13c","#b07ce8","#3fc0c9","#e05b5b","#8ab0ff","#6fe09a","#ffd27a","#d0a6ff","#7ce0e8","#ff9d5c"];
+  const nodeColor = {}; { let ci = 0; for(const L of MAP.layers) for(const n of L.nodes) nodeColor[n.id] = NODE_PALETTE[ci++ % NODE_PALETTE.length]; }
+
+  // classify edges: adjacent (elbow through gutter) vs long/same-col (bottom bus)
+  const gutterEdges = {}, busEdges = [];
+  MAP.edges.forEach((e,i)=>{
+    const c1 = colOf[e.from], c2 = colOf[e.to];
+    if(Math.abs(c1-c2)===1){ const g = Math.min(c1,c2); (gutterEdges[g]=gutterEdges[g]||[]).push({e,i}); }
+    else busEdges.push({e,i});
+  });
+
+  // Long-haul edges each get a PRIVATE bottom bus lane (assigned first so lane
+  // depth can order ports and gutter lanes).
+  const busTop = maxBottom + 44;
+  const busYof = {}; let lane = 0;
+  busEdges.forEach(({e,i})=>{ if(colOf[e.from]!==colOf[e.to]) busYof[i] = busTop + lane++*34; });
+  const busLanes = lane;
+
+  // A long-haul edge leaves/enters through the card BOTTOM straight into its
+  // bus lane when the card is its column's lowest. When cards sit below it, a
+  // straight drop would spear them — so it exits through the side facing its
+  // destination into a private gutter lane instead, then dives to the bus.
+  const isLowest = id => !MAP.layers[colOf[id]].nodes.some(n => n.id!==id && pos[n.id].y > pos[id].y);
+  const busExit = {};
+  busEdges.forEach(({e,i})=>{
+    const c1 = colOf[e.from], c2 = colOf[e.to];
+    if(c1===c2) return;
+    for(const end of ["from","to"]){
+      const id = e[end], otherC = end==="from" ? c2 : c1;
+      if(isLowest(id)) busExit[i+"|"+end] = {mode:"bottom"};
+      else { const right = otherC > colOf[id]; busExit[i+"|"+end] = {mode:"side", g: right ? colOf[id] : colOf[id]-1, side: right?"right":"left"}; }
+    }
+  });
+
+  // ── PASS 1: a PRIVATE LANE for every vertical run — two edges never share a
+  // line. Adjacent edges and side bus-exits pool per gutter; lane order follows
+  // port order so sibling lines leaving one box never cross each other.
+  const laneX = {}, exitX = {};
+  {
+    const pools = {};
+    for(const [g, list] of Object.entries(gutterEdges)){
+      // Sort by the RIGHT-column endpoint's center so sibling edges leaving
+      // one box never cross each other.
+      const rightEnd = e => { const n = colOf[e.from] > colOf[e.to] ? e.from : e.to; return pos[n].y + pos[n].h/2; };
+      for(const {e,i} of list) (pools[g] = pools[g] || []).push({key: rightEnd(e), set: x => laneX[i] = x});
+    }
+    for(const [k, ex] of Object.entries(busExit)){
+      if(ex.mode !== "side") continue;
+      const idx = +k.split("|")[0], id = MAP.edges[idx][k.split("|")[1]];
+      const c = pos[id].y + pos[id].h/2;
+      // shallower bus lane ↔ farther gutter lane: exits from one card never cross
+      (pools[ex.g] = pools[ex.g] || []).push({key: ex.side==="right" ? c - busYof[idx]*0.01 : c + busYof[idx]*0.01, set: x => exitX[k] = x});
+    }
+    for(const [g, list] of Object.entries(pools)){
+      list.sort((a,b)=>a.key-b.key);
+      const base = colX(+g) + COLW + GUT/2, n = list.length;
+      list.forEach((it,k)=>it.set(base + (k-(n-1)/2)*16));
+    }
+  }
+
+  // ── PASS 2: PORTS — attachments SPREAD along each card side (never all at
+  // the center), ordered by where the other end sits, so how many connections
+  // a card has and where each comes from is visible at a glance.
+  const att = {};
+  const addAtt = (node, side, ei, end, sort) => ((att[node+"|"+side] = att[node+"|"+side] || []).push({ei, end, sort}));
+  MAP.edges.forEach((e,i)=>{
+    const c1 = colOf[e.from], c2 = colOf[e.to];
+    if(c1 === c2){
+      const down = pos[e.to].y > pos[e.from].y;
+      addAtt(e.from, down?"bottom":"top", i, "from", pos[e.to].x + pos[e.to].w/2);
+      addAtt(e.to, down?"top":"bottom", i, "to", pos[e.from].x + pos[e.from].w/2);
+    } else if(Math.abs(c1-c2) === 1){
+      const ltr = c1 < c2;
+      addAtt(e.from, ltr?"right":"left", i, "from", pos[e.to].y + pos[e.to].h/2);
+      addAtt(e.to, ltr?"left":"right", i, "to", pos[e.from].y + pos[e.from].h/2);
+    } else {
+      // Long-haul (bus) edges attach via their exit style: bottom-most cards
+      // through the BOTTOM straight into the lane, blocked cards through the
+      // side (lowest ports — the line heads down).
+      for(const end of ["from","to"]){
+        const id = e[end], ex = busExit[i+"|"+end], other = e[end==="from"?"to":"from"];
+        if(ex.mode === "bottom") addAtt(id, "bottom", i, end, pos[other].x + pos[other].w/2);
+        else addAtt(id, ex.side, i, end, maxBottom + busYof[i]);
+      }
+    }
+  });
+  const portOf = {};
+  for(const [key, list] of Object.entries(att)){
+    const [id, side] = key.split("|"); const p = pos[id];
+    list.sort((a,b)=>a.sort-b.sort);
+    const n = list.length;
+    list.forEach((a,k)=>{
+      if(side==="left" || side==="right")
+        portOf[a.ei+"|"+a.end] = {x: side==="left" ? p.x : p.x+p.w, y: p.y + p.h*(k+1)/(n+1)};
+      else
+        portOf[a.ei+"|"+a.end] = {x: p.x + p.w*(k+1)/(n+1), y: side==="top" ? p.y : p.y+p.h};
+    });
+  }
+
+  // ── PASS 3: vertex lists on private lanes between spread ports. Chips are
+  // anchored mid-run and freed by the collision pass below.
+  const chips = [], geom = [];
+  for(const list of Object.values(gutterEdges)){
+    for(const {e,i} of list){
+      const P1 = portOf[i+"|from"], P2 = portOf[i+"|to"], gx = laneX[i];
+      geom.push({i, e, verts:[[P1.x,P1.y],[gx,P1.y],[gx,P2.y],[P2.x,P2.y]]});
+      chips.push({x:gx, y:(P1.y+P2.y)/2, e, i, color:MAP.protocols[e.protocol].color});
+    }
+  }
+  busEdges.forEach(({e,i})=>{
+    const P1 = portOf[i+"|from"], P2 = portOf[i+"|to"];
+    if(colOf[e.from] === colOf[e.to]){
+      const my = (P1.y + P2.y)/2;
+      geom.push({i, e, verts: P1.x===P2.x ? [[P1.x,P1.y],[P2.x,P2.y]] : [[P1.x,P1.y],[P1.x,my],[P2.x,my],[P2.x,P2.y]]});
+      chips.push({x:(P1.x+P2.x)/2, y:my, e, i, color:MAP.protocols[e.protocol].color});
+      return;
+    }
+    const busY = busYof[i], ex1 = busExit[i+"|from"], ex2 = busExit[i+"|to"];
+    const verts = [[P1.x,P1.y]];
+    let bx1, bx2;
+    if(ex1.mode==="side"){ const x = exitX[i+"|from"]; verts.push([x,P1.y],[x,busY]); bx1 = x; }
+    else { verts.push([P1.x,busY]); bx1 = P1.x; }
+    if(ex2.mode==="side"){ const x = exitX[i+"|to"]; verts.push([x,busY],[x,P2.y],[P2.x,P2.y]); bx2 = x; }
+    else { verts.push([P2.x,busY],[P2.x,P2.y]); bx2 = P2.x; }
+    geom.push({i, e, verts});
+    chips.push({x:(bx1+bx2)/2, y:busY, e, i, color:MAP.protocols[e.protocol].color});
+  });
+  const allVerticals = collectVerticals(geom.map(g=>({verts:g.verts, id:g.i})));
+  // Direction is part of the drawing: one-way calls get ONE arrowhead at the
+  // callee; two-way links (dir:"bi") get arrowheads at BOTH ends, in the
+  // protocol's color — an ambiguous line is a bug, not a style.
+  let paths = "";
+  for(const g of geom){
+    const p = MAP.protocols[g.e.protocol];
+    const both = g.e.dir === "bi" ? ` marker-start="url(#arrS-${g.e.protocol})"` : "";
+    paths += `<path class="edge" data-ei="${g.i}" stroke="${p.color}" marker-end="url(#arrE-${g.e.protocol})"${both} d="${orthoPath(g.verts, allVerticals.filter(v=>v.id!==g.i))}"/>`;
+  }
+  const H = busTop + Math.max(busLanes,0)*34 + 20;
+  const W = colX(MAP.layers.length-1) + COLW + 20;
+
+  let svg = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;min-width:1100px"><defs>`;
+  for(const [k,p] of Object.entries(MAP.protocols)){
+    svg += `<marker id="arrE-${k}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L8,4L0,8z" fill="${p.color}"/></marker>`;
+    svg += `<marker id="arrS-${k}" viewBox="0 0 8 8" refX="1" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L8,4L0,8z" fill="${p.color}"/></marker>`;
+  }
+  svg += `</defs>`;
+  MAP.layers.forEach((L,i)=>{ svg += `<text class="ltitle" x="${colX(i)}" y="26">${esc(L.title)}</text><text class="lsub" x="${colX(i)}" y="42">${esc(L.sub||"")}</text>`; });
+  svg += paths;
+  // Chip collision pass: labels may never sit on a node OR on each other.
+  // Nudge along the y axis (clamped inside the map) until the rect is free.
+  const placedRects = [];
+  for(const L of MAP.layers) for(const n of L.nodes){ const p = pos[n.id]; placedRects.push({x:p.x-4, y:p.y-4, w:p.w+8, h:p.h+8}); }
+  const hitsAny = r => placedRects.some(q => r.x < q.x+q.w && r.x+r.w > q.x && r.y < q.y+q.h && r.y+r.h > q.y);
+  for(const c of chips){
+    const glyph = c.e.dir === "bi" ? "↔ " : "→ ";
+    c.text = glyph + c.e.label;
+    c.w = c.text.length*5.6+18;
+    let rect = {x:c.x-c.w/2, y:c.y-11, w:c.w, h:22};
+    if(hitsAny(rect)){
+      let found = false;
+      for(let step=1; step<=14 && !found; step++){
+        for(const dy of [step*13, -step*13]){
+          const r2 = {x:rect.x, y:c.y-11+dy, w:rect.w, h:22};
+          if(r2.y > 14 && !hitsAny(r2)){ c.y += dy; rect = r2; found = true; break; }
+        }
+      }
+    }
+    placedRects.push(rect);
+  }
+  for(const c of chips){
+    svg += `<g class="pchip" data-e="${c.i}"><rect x="${c.x-c.w/2}" y="${c.y-11}" width="${c.w}" height="22" stroke="${c.color}"/><text x="${c.x}" y="${c.y+3.5}" text-anchor="middle">${esc(c.text)}</text></g>`;
+  }
+  for(const L of MAP.layers){
+    for(const n of L.nodes){
+      const p = pos[n.id];
+      svg += `<g class="node" data-id="${n.id}" transform="translate(${p.x},${p.y})"><rect class="body" width="${p.w}" height="${p.h}"/>`;
+      svg += `<text class="ntitle" x="${PAD}" y="${PAD+12}">${esc(n.title)}</text>`;
+      let y = PAD+12;
+      (n.desc||[]).forEach(d=>{ y+=LINE; svg += `<text class="ndesc" x="${PAD}" y="${y}">${esc(d)}</text>`; });
+      if(n.tech?.length){
+        y += BADGE; let bx = PAD;
+        for(const k of n.tech){ const t = MAP.tech[k]; if(!t) continue;
+          const iconW = t.icon!=="none" ? 13 : 0;
+          const bw = badgeW(t);
+          if(bx>PAD && bx+bw > COLW-PAD){ y += BADGE; bx = PAD; } // wrap — never clip
+          svg += `<g class="tbadge"><rect x="${bx}" y="${y-12}" width="${bw}" height="16" rx="4" fill="${t.bg}"/>`;
+          if(iconW) svg += `<g transform="translate(${bx+4},${y-9.5})">${iconSvg(t.icon,0,0)}</g>`;
+          svg += `<text x="${bx+iconW+5}" y="${y}">${esc(t.label)}</text></g>`;
+          bx += bw+5; }
+      }
+      if(n.db){ y += DBC; const dt = "🗄 "+n.db.kind, dw = dt.length*6+16;
+        svg += `<g class="dchip"><rect x="${PAD}" y="${y-11}" width="${dw}" height="15"/><text x="${PAD+7}" y="${y}">${esc(dt)}</text></g>`; }
+      svg += `</g>`;
+    }
+  }
+  svg += "</svg>";
+  const userFlows = MAP.actions.filter(a=>a.trigger!=="event");
+  const eventFlows = MAP.actions.filter(a=>a.trigger==="event");
+  const actionsBar = '<div class="actions"><span class="alabel">You do:</span>'
+    + userFlows.map(a=>`<button data-a="${a.id}">${esc(a.name)}</button>`).join("")
+    + (eventFlows.length ? '<span class="alabel" style="margin-left:10px">On its own:</span>'
+    + eventFlows.map(a=>`<button data-a="${a.id}">${esc(a.name)}</button>`).join("") : "")
+    + '<span style="color:var(--tx2);font-size:11px">· click a flow to watch it travel through the system</span></div>';
+  const legend = '<div class="legend"><b>How to read:</b> <span>columns = layers, left to right = who acts → the windows → the engine → local storage → the outside world</span>'
+    + Object.entries(MAP.protocols).map(([k,p])=>`<span class="lrow" data-p="${k}"><span class="lline" style="background:${p.color}"></span>${esc(p.name)}</span>`).join("")
+    + '<span><b>→</b> one-way call &nbsp;<b>↔</b> two-way link</span>'
+    + '<span style="color:var(--tx2)">· click any arrow label for the exact calls/endpoints it carries</span></div>';
+  view.innerHTML = actionsBar + legend + svg;
+  const svgEl = view.querySelector("svg");
+  const edgeKey = e => e.from+"→"+e.to;
+
+  function clearAction(){
+    svgEl.classList.remove("action");
+    svgEl.querySelectorAll(".hl").forEach(x=>x.classList.remove("hl"));
+    svgEl.querySelectorAll(".stepbadge").forEach(x=>x.remove());
+    view.querySelectorAll(".actions button").forEach(x=>x.classList.remove("on"));
+  }
+  function showAction(id){
+    const a = MAP.actions.find(x=>x.id===id);
+    if(!a) return;
+    clearAction();
+    view.querySelector(`.actions button[data-a="${id}"]`)?.classList.add("on");
+    svgEl.classList.add("action");
+    const counts = {};
+    a.steps.forEach((s, si)=>{
+      const node = svgEl.querySelector(`.node[data-id="${s.at}"]`);
+      if(node){
+        node.classList.add("hl");
+        const p = pos[s.at];
+        const k = (counts[s.at] = (counts[s.at]||0) + 1);
+        const bx = p.x + p.w - 12 - (k-1)*22, by = p.y - 2;
+        const badge = document.createElementNS("http://www.w3.org/2000/svg","g");
+        badge.setAttribute("class","stepbadge");
+        badge.innerHTML = `<circle cx="${bx}" cy="${by}" r="10"/><text x="${bx}" y="${by+3.5}" text-anchor="middle">${si+1}</text>`;
+        svgEl.appendChild(badge);
+      }
+      if(s.via){
+        const ei = MAP.edges.findIndex(e=>edgeKey(e)===s.via);
+        if(ei>=0){
+          svgEl.querySelector(`.edge[data-ei="${ei}"]`)?.classList.add("hl");
+          svgEl.querySelectorAll(`.pchip[data-e="${ei}"]`).forEach(x=>x.classList.add("hl"));
+        }
+      }
+    });
+    setPanel(a.name,
+      `<h3>${a.trigger==="event"?"Why it matters":"Why you'd do it"}</h3><div style="color:var(--warn);font-size:12px;margin-bottom:4px">${esc(a.purpose)}</div>`
+      + "<h3>What happens, step by step</h3><ol style='margin-left:16px'>"
+      + a.steps.map(s=>`<li style="font-size:12px;color:var(--tx1);margin-bottom:6px"><b style="color:var(--tx)">${esc(nodeById(s.at)?.n.title ?? s.at)}</b> — ${esc(s.text)}</li>`).join("")
+      + "</ol><div class='hint'>Numbered badges on the map = these steps. Click the action again to clear.</div>");
+    actionShown = true;
+  }
+  view.querySelectorAll(".actions button").forEach(b => b.onclick = () => {
+    const active = b.classList.contains("on");
+    clearAction();
+    if(!active) showAction(b.dataset.a);
+  });
+  if(pendingAction){ showAction(pendingAction); pendingAction = null; }
+  view.querySelectorAll(".node").forEach(el => el.onclick = () => {
+    view.querySelectorAll(".node").forEach(x=>x.classList.remove("sel")); el.classList.add("sel");
+    const {n} = nodeById(el.dataset.id);
+    const conns = MAP.edges.filter(e=>e.from===n.id||e.to===n.id).map(e=>{
+      const other = e.from===n.id ? nodeById(e.to).n.title : nodeById(e.from).n.title;
+      const dir = e.from===n.id ? "→" : "←";
+      return `<li>${dir} <b>${esc(other)}</b> · ${esc(e.label)} <span style="color:var(--tx2)">(${esc(MAP.protocols[e.protocol].name)})</span></li>`;
+    }).join("");
+    setPanel(n.title,
+      "<div>"+badgeHtml(n.tech)+"</div>"
+      + (n.purpose ? `<h3>Why it exists</h3><div style="color:var(--warn);font-size:12px;margin-bottom:4px">${esc(n.purpose)}</div>` : "")
+      + factsHtml(n.facts)
+      + (n.internals?.length ? "<h3>Inside it</h3>"+n.internals.map(c=>`<div class="comp"><b>${esc(c.n)}</b><div>${esc(c.what)}</div></div>`).join("") : "")
+      + (conns ? "<h3>Connections</h3><ul>"+conns+"</ul>" : "")
+      + (n.db ? `<h3>Storage</h3><ul><li>${esc(n.db.kind)} — ${esc(n.db.note)} (full detail: Database tab)</li></ul>` : ""));
+  });
+  view.querySelectorAll(".pchip").forEach(el => el.onclick = () => {
+    const e = MAP.edges[+el.dataset.e], p = MAP.protocols[e.protocol];
+    const dirText = e.dir === "bi" ? "two-way link — both sides talk (↔ arrowheads at both ends)"
+      : e.dir === "push" ? "one-way stream — " + nodeById(e.from).n.title + " writes, " + nodeById(e.to).n.title + " consumes"
+      : "one-way call — " + nodeById(e.from).n.title + " calls, " + nodeById(e.to).n.title + " answers";
+    setPanel(nodeById(e.from).n.title + (e.dir==="bi" ? " ↔ " : " → ") + nodeById(e.to).n.title,
+      factsHtml([e.label + " — " + (e.why||""), "How: " + p.name + " · " + dirText])
+      + (e.via?.length ? "<h3>Exactly what travels on this arrow</h3>" + factsHtml(e.via) : ""));
+  });
+  view.querySelectorAll(".legend [data-p]").forEach(el => el.onclick = () => {
+    const p = MAP.protocols[el.dataset.p];
+    setPanel(p.name, factsHtml([p.desc, "All arrows of this color use this technology."]));
+  });
+}
+
+function renderDatabase(){
+  const EW=214, FH=16, TH=26, CGAP=90, RTOP=70, RGAP=130;
+  const colX = c => 20 + c*(EW+CGAP);
+  const pos = {};
+  const extra = en => (en.purpose?14:0) + (en.sub?13:0);
+  const rowH = [0,0];
+  for(const en of MAP.dbmap.entities){ const h = TH + extra(en) + en.fields.length*FH + 8; rowH[en.row] = Math.max(rowH[en.row], h); }
+  const rowY = [RTOP, RTOP + rowH[0] + RGAP];
+  for(const en of MAP.dbmap.entities){
+    pos[en.id] = {x:colX(en.col), y:rowY[en.row], w:EW, h:TH + extra(en) + en.fields.length*FH + 8};
+  }
+  const W = colX(4) + EW + 20;
+  const busTop = rowY[1] + rowH[1] + 50;
+  // Pass 1: geometry (vertex lists) so horizontals can hop over verticals.
+  const geom = [], chipDefs = [];
+  let lanes = 0;
+  const bandY = rowY[1] - RGAP/2;
+  const bandSlots = {};
+  MAP.dbmap.relations.forEach((r, ri)=>{
+    const a = pos[r.from], b = pos[r.to];
+    const ca = MAP.dbmap.entities.find(e=>e.id===r.from), cb = MAP.dbmap.entities.find(e=>e.id===r.to);
+    const label = r.label + (r.card ? " · "+r.card : "");
+    if(ca.row===cb.row && Math.abs(ca.col-cb.col)===1){
+      const ltr = ca.col < cb.col;
+      const x1 = ltr ? a.x+a.w : a.x, x2 = ltr ? b.x : b.x+b.w;
+      const y = a.y + 40;
+      geom.push({ri, r, verts:[[x1,y],[x2,y]]});
+      chipDefs.push({x:(x1+x2)/2, y:y-16, label, ri});
+    } else if(Math.abs(ca.col-cb.col)<=1){
+      const x1 = a.x+a.w/2, x2 = b.x+b.w/2;
+      const up = ca.row > cb.row;
+      const y1 = up ? a.y : a.y+a.h, y2 = up ? b.y+b.h : b.y;
+      const slotKey = Math.round((x1+x2)/2/60);
+      bandSlots[slotKey] = (bandSlots[slotKey]||0)+1;
+      const by = bandY + (bandSlots[slotKey]-1)*26 - 6;
+      geom.push({ri, r, verts:[[x1,y1],[x1,by],[x2,by],[x2,y2]]});
+      chipDefs.push({x:(x1+x2)/2, y:by, label, ri});
+    } else {
+      const busY = busTop + lanes*32; lanes++;
+      const x1 = a.x+a.w/2, x2 = b.x+b.w/2;
+      geom.push({ri, r, verts:[[x1,a.y+a.h],[x1,busY],[x2,busY],[x2,b.y+b.h+6]]});
+      chipDefs.push({x:(x1+x2)/2, y:busY, label, ri});
+    }
+  });
+  const verticals = collectVerticals(geom.map(g=>({verts:g.verts, id:g.ri})));
+  let svg = "";
+  for(const g of geom){
+    svg += `<path class="rel" ${g.r.dash?'stroke-dasharray="4 3"':""} d="${orthoPath(g.verts, verticals.filter(v=>v.id!==g.ri))}"/>`;
+  }
+  let chips = "";
+  for(const c of chipDefs){
+    const w = c.label.length*5.4+16;
+    chips += `<g class="rlabel"><rect x="${c.x-w/2}" y="${c.y-10}" width="${w}" height="20"/><text x="${c.x}" y="${c.y+3.5}" text-anchor="middle">${esc(c.label)}</text></g>`;
+  }
+  let ents = "";
+  for(const en of MAP.dbmap.entities){
+    const p = pos[en.id];
+    let g = `<g class="ent" data-id="${en.id}" transform="translate(${p.x},${p.y})"><rect class="body" width="${p.w}" height="${p.h}"/>`;
+    g += `<g stroke="#9aa3b0">${iconSvg(en.icon||"doc", 9, 7)}</g>`;
+    g += `<text class="et" x="26" y="17">${esc(en.name)}</text>`;
+    let y = TH-3;
+    if(en.sub){ g += `<text x="26" y="${y+10}" fill="#d9a13c" font-size="9" font-style="italic">${esc(en.sub)}</text>`; y += 13; }
+    if(en.purpose){ g += `<text x="10" y="${y+11}" fill="#5c6572" font-size="9.5" font-style="italic">${esc(en.purpose)}</text>`; y += 14; }
+    g += `<line x1="0" y1="${y}" x2="${p.w}" y2="${y}"/>`;
+    en.fields.forEach((f,i)=>{ g += `<text class="ef ${f[2]==="k"?"ek":""}" x="10" y="${y+14+i*FH}" ${f[2]==="fk"?'fill="#d9a13c"':""}>${esc(f[0])}${f[1]?' <tspan fill="#5c6572">'+esc(f[1])+"</tspan>":""}</text>`; });
+    ents += g + "</g>";
+  }
+  const H = busTop + Math.max(lanes,1)*32 + 16;
+  let head = "";
+  for(const s of MAP.dbmap.stores){ head += `<text class="store" x="${colX(s.cols[0])}" y="30">${esc(s.name)}</text>`; }
+  view.innerHTML = '<div class="legend"><b>Database map:</b> boxes = entities (icon + purpose + fields) · <span style="color:var(--ac)">blue = primary key</span> · <span style="color:var(--warn)">orange = reference to another entity</span> · arrows say HOW they relate + cardinality (1:N…) · dashed = automatic sync · little bridges = lines crossing, not connecting · click an entity</div>'
+    + `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;min-width:1100px"><defs><marker id="arr2" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0L8,4L0,8z" fill="#d9a13c"/></marker></defs>${head}${svg}${ents}${chips}</svg>`;
+  view.querySelectorAll(".ent").forEach(el => el.onclick = () => {
+    view.querySelectorAll(".ent").forEach(x=>x.classList.remove("sel")); el.classList.add("sel");
+    const en = MAP.dbmap.entities.find(e=>e.id===el.dataset.id);
+    const rels = MAP.dbmap.relations.filter(r=>r.from===en.id||r.to===en.id)
+      .map(r=>`<li>${r.from===en.id?"→":"←"} <b>${esc(MAP.dbmap.entities.find(e=>e.id===(r.from===en.id?r.to:r.from)).name)}</b> — ${esc(r.label)}${r.card?" ("+r.card+")":""}</li>`).join("");
+    setPanel(en.name,
+      (en.purpose ? `<h3>Why it exists</h3><div style="color:var(--warn);font-size:12px;margin-bottom:4px">${esc(en.purpose)}</div>` : "")
+      + (en.sub ? `<div style="color:var(--tx2);font-size:11px">${esc(en.sub)}</div>` : "")
+      + "<h3>Fields</h3><ul>"+en.fields.map(f=>`<li><b>${esc(f[0])}</b>${f[1]?" — "+esc(f[1]):""}${f[2]==="k"?" (key)":f[2]==="fk"?" (reference)":""}</li>`).join("")+"</ul>"
+      + (rels?"<h3>Relations</h3><ul>"+rels+"</ul>":""));
+  });
+}
+
+function renderFeatures(){
+  view.innerHTML = '<div class="feat">'+MAP.features.map((f,i)=>
+    `<div class="fcard ${f.date==="planned"?"planned":""}" data-i="${i}"><div class="t">${esc(f.name)}</div><div class="w">${esc(f.what)}</div><div class="d">${f.date==="planned"?"⏳ planned":"✓ "+f.date} · lives in: ${f.nodes.map(n=>{const x=nodeById(n);return '<span class="tag">'+esc(x?x.n.title:n)+"</span>"}).join("")}</div></div>`).join("")+"</div>";
+  view.querySelectorAll(".fcard").forEach(el => el.onclick = () => {
+    view.querySelectorAll(".fcard").forEach(x=>x.classList.remove("sel")); el.classList.add("sel");
+    const f = MAP.features[+el.dataset.i];
+    setPanel(f.name, factsHtml([f.what, f.date==="planned"?"Status: planned":"Shipped: "+f.date])
+      + '<button id="showmap" style="margin-top:10px;background:var(--bg2);border:1px solid var(--ac);color:var(--ac);border-radius:7px;padding:5px 12px;font-size:12px;cursor:pointer">Show on map</button>');
+    document.getElementById("showmap").onclick = () => {
+      goTab("map");
+      f.nodes.forEach(id => view.querySelector(`.node[data-id="${id}"]`)?.classList.add("sel"));
+      setPanel(f.name, factsHtml(["Highlighted boxes = where this feature lives.", f.what]));
+    };
+  });
+}
+
+function renderScreens(){
+  const wire = s => `<div class="art" style="height:auto;min-height:96px">` +
+    s.layout.map(row => `<div class="row" style="min-height:24px;flex:0 0 auto">` +
+      row.map(cell => `<div class="blk" style="display:flex;align-items:center;justify-content:center;padding:3px 6px;font-size:8.5px;color:var(--tx2);text-align:center;min-height:22px">${esc(cell)}</div>`).join("") +
+    `</div>`).join("") + `</div>`;
+  view.innerHTML = '<div class="legend"><b>Screens:</b> every window and surface, drawn with its real regions labeled · the line under each name says why the screen exists · click one for its elements</div>'
+    + '<div class="wires">'+MAP.screens.map(s=>
+    `<div class="wire" data-id="${s.id}"><h4><svg width="11" height="11" viewBox="0 0 10 10" style="margin-right:5px"><g stroke="#9aa3b0">${iconSvg(s.icon||"doc",0,0)}</g></svg>${esc(s.name)}</h4><div style="font-size:10px;color:var(--warn);margin:-4px 0 7px">${esc(s.purpose)}</div>${wire(s)}</div>`).join("")+"</div>";
+  view.querySelectorAll(".wire").forEach(w => w.onclick = () => {
+    view.querySelectorAll(".wire").forEach(x=>x.classList.remove("sel")); w.classList.add("sel");
+    const s = MAP.screens.find(x=>x.id===w.dataset.id);
+    setPanel(s.name,
+      `<h3>Why it exists</h3><div style="color:var(--warn);font-size:12px;margin-bottom:4px">${esc(s.purpose)}</div>`
+      + "<h3>What's in it</h3>"+s.elements.map(c=>`<div class="comp"><b>${esc(c.n)}</b><div>${esc(c.what)}</div></div>`).join(""));
+  });
+}
+function renderPhases(){
+  view.innerHTML = '<div class="steps">'+MAP.phases.map((p,i)=>
+    `${i?'<div class="vline"></div>':""}<div class="step" data-i="${i}"><div class="dot ${p.s}"></div><div><div class="t">${esc(p.n)} — ${esc(p.t)} ${p.d?'<span class="w">'+p.d+"</span>":""}</div><div class="s">${esc(p.w)}</div></div></div>`).join("")+"</div>";
+  view.querySelectorAll(".step").forEach(el => el.onclick = () => {
+    const p = MAP.phases[+el.dataset.i]; setPanel(p.n+" — "+p.t, factsHtml([p.w + (p.d? " (completed "+p.d+")" : "")]));
+  });
+}
+function renderBacklog(){
+  view.innerHTML = '<div class="snap">snapshot '+MAP.updated+' — live truth lives in .projecthub/backlog/</div><div class="list">'
+    + MAP.backlog.map((b,i)=>`<div class="item" data-i="${i}"><div class="t"><span class="pill ${b.p}">${b.p}</span>${esc(b.t)}</div><div class="m">${esc(b.m)}</div></div>`).join("")+"</div>";
+  view.querySelectorAll(".item").forEach(el => el.onclick = () => {
+    const b = MAP.backlog[+el.dataset.i]; setPanel(b.t, factsHtml([b.m, "Priority: "+b.p]));
+  });
+}
+function renderHistory(){
+  view.innerHTML = '<div class="list">'+MAP.history.map(h=>
+    `<div class="item"><div class="t"><span class="pill ${h.k}">${h.k}</span>${esc(h.t)}</div><div class="m">${h.d}</div></div>`).join("")+"</div>";
+}
+
+const RENDER = {map:renderMap, database:renderDatabase, features:renderFeatures, screens:renderScreens, phases:renderPhases, backlog:renderBacklog, history:renderHistory};
+const INTRO = {
+  map:["Columns are layers: who acts → the windows → the engine → local storage → the outside world (Discord, devices, the phone).","Colored badges = the tech stack. Colored arrows = how parts talk; the label says WHAT the connection does — → is a one-way call, ↔ a two-way link.","Click anything - every click explains the what and the WHY, down to the exact calls, files and HTTP routes an arrow carries."],
+  database:["Every store, its entities, their fields, the relations - and where the bytes physically live.","Click an entity for its fields and relations."],
+  features:["Every feature: what it does, when it shipped, where it lives on the map."],
+  screens:["Every window and surface. Click one."],
+  phases:["The build, step by step, dated."],
+  backlog:["Open work, snapshot of "+MAP.updated+"."],
+  history:["Everything that changed: dated and typed (added / changed / fixed)."],
+};
+let pendingAction = null, actionShown = false;
+function goTab(t){
+  if(t && t.startsWith("map@")){ pendingAction = t.slice(4); t = "map"; }
+  if(!RENDER[t]) t = "map";
+  document.querySelectorAll("#tabs button").forEach(x=>x.classList.toggle("on",x.dataset.t===t));
+  actionShown = false;
+  RENDER[t]();
+  if(!actionShown) setPanel({map:"System map",database:"Database map",features:"Features",screens:"Screens",phases:"Phases",backlog:"Backlog",history:"History"}[t], factsHtml(INTRO[t]));
+  if(location.hash !== "#"+t) history.replaceState(null,"","#"+t);
+}
+document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => goTab(b.dataset.t));
+window.addEventListener("hashchange", () => goTab(location.hash.slice(1)));
+goTab(location.hash ? location.hash.slice(1) : "map");
+</script>
+</body>
+</html>

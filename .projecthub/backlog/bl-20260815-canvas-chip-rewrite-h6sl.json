@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "bl-20260815-canvas-chip-rewrite-h6sl",
+  "title": "People canvas-chip rewrite (behind a flag)",
+  "description": "Replace each chip's CTkFrame + 2 CTkButton + CTkProgressBar (~10 Tk widgets, ~9 ms) with ONE tk.Canvas modeled on SlotWidget (~0.5 ms). Labels are already pre-rendered PIL images; drag/shift-wheel/_slot_ref tagging port directly. Kills the remaining per-widget floor (first panel <200 ms cold, prewarm ~2 s).",
+  "priority": "medium",
+  "status": "backlog",
+  "tags": ["perf", "people"],
+  "source": "agent:claude-code",
+  "createdAt": "2026-08-15T13:10:00Z",
+  "updatedAt": "2026-08-15T13:10:00Z"
+}

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "bl-20260815-single-instance-guard-t7fr",
+  "title": "Single-instance guard: relaunch focuses the existing window",
+  "description": "A slow startup once led to 6 stacked instances. Add a mutex/port guard so a second launch focuses the running app instead of starting another.",
+  "priority": "medium",
+  "status": "backlog",
+  "tags": ["desktop", "robustness"],
+  "source": "agent:claude-code",
+  "createdAt": "2026-08-15T13:10:00Z",
+  "updatedAt": "2026-08-15T13:10:00Z"
+}

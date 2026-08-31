@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "bl-20260815-clean-dead-groups-r7cp",
+  "title": "Clean dead shared groups from the config",
+  "description": "The shared-group list carries dead groups (E2E_NEWGROUP, duplicate מפתח/מפתחות, חיובי/חיוב, שלילה/שלילי). Deleting them cuts every person panel's card count by roughly a third — a free People-hub speedup. Needs the user's confirmation of which are truly dead.",
+  "priority": "low",
+  "status": "backlog",
+  "tags": ["data-hygiene", "people"],
+  "source": "agent:claude-code",
+  "createdAt": "2026-08-15T13:10:00Z",
+  "updatedAt": "2026-08-15T13:10:00Z"
+}

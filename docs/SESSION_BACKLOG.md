@@ -1,6 +1,515 @@
 # Session Backlog & Open Items
 
-> **Date:** 2026-06-09 (updated 2026-07-17)
+> **Date:** 2026-06-09 (updated 2026-08-31)
+
+---
+
+## 2026-08-31 (evening) — UI polish (preview/search/popup/dialogs) + DJ Looper reimagined
+
+**Preview parity (bug).** Local preview ignored a slot's speed/pitch — you auditioned a
+different sound than Discord heard. New module-level `audio.apply_speed(...)` is the ONE
+transform used by both the Discord path and preview; `_render_preview_audio` /
+`_start_preview_render` (gui.py) render at slot speed × master volume + soft-clip, a slow
+librosa stretch runs off-thread with a generation counter so a superseding preview/stop
+drops it. Covers main-board AND People previews. Returns the rate-adjusted duration so the
+progress strip is right.
+
+**Search overlay (bugs).** (1) Results showed the file basename, not the slot NAME — a slot
+named "Trexon Key" read as `yt_KWvtoxjrBPw_0fa…`. `_paint_search_slot` now uses `slot.name`
+(falls back to the file stem only when unnamed). (2) A preview started from the search
+overlay had no way to stop — the overlay slot now shows the ⏹ button + a green progress bar
+while previewing, not only while playing.
+
+**Quick-edit popup restyle.** The slot ⋯ → quick popup (the "amateur"-looking one) was a
+ragged 380 px, 3 button rows, 120 px sliders. Rebuilt at 424×262 on a grid: header + ✕,
+Volume/Speed sliders with live value read-outs (`65%`, `1.00×`) + reset buttons, Preserve
+pitch / Loop checkboxes, a divider, an even action row (✓ Apply green / Edit / Clone / 🗑),
+and a quiet outlined file-utility row (Show file / Copy file / Copy path / Suno). Uses the
+app's `UI`/`CHECKBOX_KW`/font tokens; geometric glyphs that didn't render (⧉) dropped.
+
+**Dialogs opened in ~5 s (perf, root cause).** CustomTkinter's `_windows_set_titlebar_color`
+does `withdraw(); update()` inside EVERY CTkToplevel constructor — that `update()` is a full
+nested event pump that ran the entire pending backlog (e.g. the People pre-warm building
+~1,800 widgets) *inside* the popup's `__init__` (measured 5.0 s popup, 6.4 s configure
+dialog). `ctk_patches.py` now shadows `update`→`update_idletasks` for the duration of that
+call, and repaints each toplevel once mapped after CTk's withdraw/deiconify cycle
+(`redraw_window` moved into ctk_patches, shared with person_board). Popup/dialog opens are
+now fast; blank-label renders under a concurrent prewarm storm were proven a harness
+artifact (crisp with prewarm off; the user's own screenshots render fine).
+
+**DJ Looper — reimagined (design) + 2 live bugs fixed.** A 4-concept / 3-judge / 36-agent
+workflow reviewed the panel and picked (unanimous, 147/180) **"Air Deck"**: an always-on-top
+canvas deck for the ONE long/looping sound, global ctrl+alt hotkeys as the real interface,
+short memes get no UI; engine gains fades / seek-scrub / A-B loop / bed-duck / a clean event
+stream; the 1,500-line `NowPlayingPanel` is deleted. Full implementable spec (engine API,
+mockups, hotkey table, 4 parallel work packages, test plan, risks) in
+[docs/DJ_AIR_DECK_PLAN.md](DJ_AIR_DECK_PLAN.md); pitch artifact:
+https://claude.ai/code/artifact/6b2dcc7a-a10f-4497-9e32-94eabbd8a63d . **Awaiting the user's
+A/B call (full floating deck vs docked strip) before the big build.**
+Two HIGH bugs the diagnosis found are ALREADY FIXED at the engine (so every surface benefits):
+- **Pause→Resume went silent to Discord**: the PTT release countdown ignores paused sounds,
+  so pausing released the F9 key ~300 ms later; `resume_sound`/`restart_sound` flipped the
+  flag but never re-pressed → the resumed sound hit the cable with Discord not transmitting.
+  Both now `_press_ptt()` + reset the countdown (no-op when there's no PTT key / it's held).
+- **DJ cards labelled with the file hash, not the slot name** (518/518 mismatch). `play_sound`
+  now threads `display_name` + `emoji` → stored in the sound entry → returned by
+  `get_playing_sounds`; every play site passes `slot.name`/`slot.emoji`; the card shows
+  `emoji + name` (RTL-safe).
+- 🧪 `test_dj_engine.py` (5 tests): resume/restart re-press PTT, unknown id is safe,
+  get_playing_sounds exposes name+emoji, signature guard.
+- ✅ **WP-A step 1 (engine) DONE + tested.** `AudioMixer` gained clickless fade
+  stop/pause/resume (`fade_out_sound` / `pause_sound(fade_ms)` / `resume_sound(fade_ms)` /
+  `stop_sound(fade_ms)` / `stop_all_sounds(fade_ms)` — `fade_ms=0` = today's exact behaviour),
+  `seek_sound` (works while paused), `handle_retrigger` (layer/restart/toggle) + instance cap,
+  `set_effective_rate` (honours a slot's baked speed), a `pop_events()` stream
+  (started/ended/loop/paused emitted by the callback), and `on_air_state()` / `get_sound_peaks()`.
+  Render-path math untouched behind a fast-path guard (a steady 1.0 sound runs byte-identical —
+  asserted). `test_deck_engine.py` = 13 tests driving `_output_callback` directly.
+  NEXT: WP-A step 2 (A-B loop + bed-duck), then WP-B deck UI (float + dock), WP-C wiring/deletion.
+
+## 2026-08-31 (later) — People window "smudge" root-caused + UI consistency pass
+
+User: "check, test and fix the smudginess when opening People and using it; make the
+font/border of people look better, it's hard to read; and make all the buttons / ticks /
+bars coherent — some places got messy."
+
+Method: a visual harness (`scratchpad ui_harness.py`: launches the app from source in an
+ISOLATED CWD — copied config with auto-start/PTT/hotkeys off, junctions to sounds/images —
+opens People and screenshots it over time), a main-thread stall profiler with 50 ms stack
+sampling, and a 5-reader review workflow with pixel-level probes. NOTE: the harness windows
+land on the user's saved geometry, i.e. exactly on top of the running PROD windows — park
+them elsewhere (`window_geometry` / `person_windows` in the copy) or the grabs blend both.
+
+What was actually wrong (all measured, none of it was "blur"):
+- ✅ **Stale pixels after deiconify.** Widgets created/recoloured while the hub was WITHDRAWN
+  (the startup prebuild, pre-warmed panels) came up on screen with the pixels they had at
+  creation — chips as bare colour slabs with dark boxes where the label sits, EMPTY sidebar
+  rows, the selected row as dark squares — although every widget's Tk state was correct
+  (probed: label fg/bg/image all right). One Win32 `RedrawWindow(RDW_INVALIDATE |
+  RDW_ALLCHILDREN)` repaints everything from that state (~200 ms). `reopen()` now
+  reconciles BEFORE `deiconify()`, maps with `-alpha 0`, reveals on the first `<Map>` /
+  `<Expose>` (700 ms timer as safety net) after a synchronous repaint, then `-alpha 1` — no
+  white frame, no stale frame. `select()` repaints synchronously the first time a panel is
+  exposed. (`person_board._redraw_window`, `_after_reopen`, `_reveal`.)
+- ✅ **Every first open rebuilt the whole board.** `_win_width()` for a withdrawn window fell
+  through to `winfo_width()` (Tk reports the 200-px placeholder for a never-mapped
+  CTkToplevel) → the prebuilt panel was laid out for ~133 logical px (1 column,
+  `_last_cols=1`), and the real `<Configure>` on map triggered `_reflow_when_settled` → full
+  teardown + rebuild (~1 s of destroys + seconds of streaming) on EVERY open. Now the
+  unmapped branch uses CTk's `_current_width` (set by its geometry() setter) →
+  `_lsb_req_w` → 900. Measured: open 349 → **~30 ms**, first person switch 1128 → **~70 ms**,
+  no COLS DRIFT.
+- ✅ **CustomTkinter's own nested idle pumps.** `CTkScrollbar._draw` and
+  `CTkOptionMenu._draw` end with `update_idletasks()`; `CTkScrollableFrame` binds every
+  inner `<Configure>` to `configure(scrollregion=bbox("all"))` → `scrollbar.set()` →
+  `_draw()` → `update_idletasks()`. Profiled: `CTkScrollbar.set` cost 170–670 ms PER CALL
+  (2.6–3.0 s per panel build), one `CTkOptionMenu._draw` 2.06 s. New
+  `soundboard/ctk_patches.py` (gui "perf patch #5"): no idle pump inside those draws,
+  change-only scrollbar redraw, 40 ms-debounced scrollregion refresh. The remaining
+  1–3 s stalls are intrinsic CTk widget construction (~4 CTk widgets per chip); the pump
+  streams them, and **prewarm now pauses while the hub is visible** so background panel
+  builds can no longer freeze the hub while it is being used.
+- ✅ **Readability.** Person names and group headers were PIL bitmaps with black+white
+  hairline rings, downscaled ~2:1 by CTkImage — a grey fuzzy aura, 2 px of true colour per
+  stem; chip titles had a 3-device-px black stroke that filled every letter counter
+  ("bubble letters"); every emoji/avatar was rasterised at LOGICAL px and bicubic-UPSCALED
+  1.5x. Now: names/headers are native ClearType (white, `size_md`), identity colour is a
+  4 px pill (+ avatar), the panel title is always white; chip labels are rendered at exact
+  DEVICE pixels (13 logical → 20 px, 2 px edge, no white ring) and wrapped in a CTkImage
+  whose logical size is `raster/scaling` so CTk never resamples; `emoji_image(…, scaling)`
+  / `circle_avatar(…, scaling)` build at device px (AA rim). `constants.is_light_color`
+  now uses WCAG relative luminance (blurple/red/purple/pink → white glyphs, was dark) and
+  `_paint_chip` recolours the ⋮ + progress for the playing/preview colours.
+- ✅ **Sidebar rows overflowed**: avatar 28 + name button (CTk min width 140) + ⋮ 26 > 176
+  → the ⋮ rendered 10 px wide or unmapped. Name button `width=40`, ⋮ 28 px, row 36 px.
+- ✅ **Consistency pass** (agents, per the converged style spec): tokens
+  `UI[control_height=28 / toolbar_height=32 / compact_height=24 / footer_button_height=36
+  / icon_button=28]` (even device px at 150 % — 26/30/34 left 1 px strips), font tokens,
+  `DROPDOWN_KW/ENTRY_KW/CHECKBOX_KW`, green = confirm/create, blurple = selection, icon
+  buttons 28x28, checkbox labels de-emoji'd (hints → tooltips), single-spaced card titles,
+  status bar right cluster packed first + truncated device names with tooltips, tab emoji
+  and slot thumbnails/emoji at device px (thumbnails decoded off-thread, aspect kept),
+  colour picker / splash / emoji picker / editor / QR at device px, footer buttons 36 px.
+  `UI["slot_scale_geometry"]` (default False) keeps the main-board tile height/text the
+  user is used to; True = DPI-correct taller tiles.
+- 🧪 `test_people_ui.py` (12 tests, real withdrawn CTk windows, after()-stepped): prebuilt
+  layout width, reopen reveals (state/alpha/via/latency), incremental `refresh_people`,
+  row shape, device-exact rasters, WCAG contrast rule. All other suites still pass.
+- ⏳ Not smoke-tested by the user yet (they were live on a call during the session; the
+  deploy could only stage). Follow-ups: masonry re-grid on resize without destroy
+  (resize still rebuilds), canvas-per-panel chips (the remaining per-widget floor), the
+  board grid overflowing narrow windows (pre-existing).
+
+---
+
+### Adversarial review of the pass (same day) — 14 confirmed findings → 8 fixes
+
+36-agent review (6 lenses × finder → 2 independent refuters each, Tk probes on this
+machine). 15 raw findings, 14 confirmed, 1 refuted (DPI factor sampled once — cosmetic
+only, and slots don't scale by default). All fixed; `test_people_ui.py` is now 12 tests.
+
+- ✅ **`reopen()` on an already-visible hub / pop-out / Favorites window blanked it for
+  ~0.7 s** — a regression from the reveal state machine: `deiconify()` on a MAPPED window
+  emits no `<Map>`/`<Expose>`, so alpha stayed 0 until the 700 ms safety timer (invisible
+  window holding focus). Both `reopen()`s now short-circuit when `winfo_viewable()`
+  (lift/focus only; pop-outs re-assert topmost) and return while a reveal is in flight.
+- ✅ **Zero-people hint was `pack()`ed where the panels are `grid()`ed** → the first
+  `select()` after it raised TclError ("cannot use geometry manager grid inside … pack"):
+  the Add-person dialog stayed open and the panel never appeared; with the persistent hub
+  the same hit `reopen()` after adding someone from the recording flow. Hint is now
+  `grid()`ed and `_clear_empty_hint()` runs before the first panel is built;
+  `reopen()`'s `_select_initial()` branch also flips `_showing=True` like the cached one.
+- ✅ **`RedrawWindow(RDW_UPDATENOW)` is NOT a synchronous Tk paint**: Tk turns each
+  WM_PAINT into a queued `<Expose>` and repaints Frames/Canvases in idle callbacks, so
+  alpha was flipped before any repaint ran. `_after_reopen`/`_reveal` now flip alpha from
+  a nested `after_idle` (outer runs before the display procs, inner in the next idle
+  pass); the 700 ms timer still reveals regardless (`_lsb_reveal_armed`). Reveal: 60 ms.
+- ✅ **Slot thumbnail poll was armed on a transient SlotWidget**: tkinter deletes a
+  widget's pending `after` commands on destroy, so a Columns ± / tab delete / search
+  re-render inside the 40 ms window left `_poll_scheduled` stuck True for the session (no
+  thumbnail ever delivered again, queues growing). The poll now lives on the Tk root and
+  self-heals if the host dies; the old "a destroyed one raises" comment was backwards.
+- ✅ **Slot ⋯ menu: `self._fix_rtl_text` doesn't exist** (it's a module function) → once
+  a Favorites folder existed the loop raised AttributeError, the bare `except` swallowed
+  it, and every item after "Add to Queue" silently vanished. Fixed; AttributeError logged.
+- ✅ `root.update()` / `top.update()` in the two Copy-path handlers removed (banned
+  re-entrant pump; Tk owns the clipboard as soon as `clipboard_append` returns).
+- ✅ `_build_person_row` records `row._lsb_sel`, so the post-rebuild reconcile really
+  skips unchanged rows (every row was reconfigured + redrawn after each rebuild).
+- ✅ Edit person/group dialog icon + avatar previews rasterised at device px too.
+- ✅ **PIL BiDi depends on a fribidi DLL Pillow doesn't ship** — on this PC raqm only
+  works because Meld/Tesseract put `libfribidi-0.dll` on PATH; anywhere else Hebrew chip
+  labels would render MIRRORED (BASIC layout: no BiDi, no error). `_RAQM_OK` probe at
+  import; RTL names fall back to native Tk text (which BiDis correctly) without raqm.
+- 🧪 New tests: reopen-while-visible keeps alpha 1 / no pending state; first person after
+  the empty hint (grid manager, select OK); thumb poll survives its widget's destroy;
+  static guard against `self._fix_rtl_text`.
+
+---
+
+## 2026-08-31 — Mic noise suppression: works in the EXE again, strength bug fixed, 5 engines
+
+User: "look again at the sound filter (background sounds removal for mic) — make it work,
+improve it, add alternatives."
+
+- ✅ **ROOT CAUSE #1 — RNNoise never worked in the EXE.** `from pyrnnoise.rnnoise import …`
+  executes `pyrnnoise/__init__.py` first, which imports `audiolab → av` (libav). `audiolab`
+  was never in the bundle, so in prod `RNNOISE_AVAILABLE` was False: with the saved config
+  (`backend: rnnoise`, strength 100, enabled) the mic passed through **RAW**, and the lazy
+  loader retried + wrote a warning to debug.log on EVERY audio block — 36,351 lines across
+  the four rotating logs, i.e. disk I/O inside the PortAudio callback. Dev worked (the venv
+  has audiolab), which is why it was never caught. Fix: `audio.py` binds `rnnoise.dll`
+  directly via ctypes (`_load_rnnoise`; candidates `_MEIPASS/pyrnnoise/` and the package dir
+  found with `find_spec` WITHOUT executing it) — `pyrnnoise` is never imported. The spec now
+  excludes `pyrnnoise/audiolab/av` (−65 MB of `av.libs`) and bundles only the DLL. A test
+  simulates the frozen layout (package unfindable, DLL only under `_MEIPASS`).
+- ✅ **ROOT CAUSE #2 — DeepFilterNet at the GUI default strength (85) sounded doubled /
+  robotic.** The June mapping drove the ONNX `atten_lim_db = (1−s)·40`. Measured on real voice
+  clips, this export blends the raw input back **misaligned with its 30 ms lookahead** for any
+  finite limit (output delay jumps 1440 → 1920 samples): clean-speech SI-SDR **21.8 dB at
+  limit 0 vs 0.3 dB at limit 6 (= strength 85)**, 6.3 at 10, 17.3 at 20. Fix: the model always
+  runs unlimited; strength is a **delay-compensated wet/dry mix** in `NoiseSuppressor` (dry
+  path delayed by the engine's measured latency — DFN/Max 1440, RNNoise 960, Classic 480,
+  Gate 0 samples; RNNoise's old mix was misaligned too), residual dB-linear (−40 dB·s). At
+  0.85 clean speech now measures 21 dB (was 0.3).
+- ✅ **Engine builds moved off the audio thread + one-shot fallback.** Before: the ONNX
+  session (~150 ms) + warm-up was built lazily INSIDE the input callback, and a failed engine
+  was rebuilt on every block. Now: background builder thread with a generation counter (stale
+  builds discarded), failures remembered with a human note, fallback routes
+  (`_NS_FALLBACKS`: best → classic → rnnoise → gate), explicit dropdown pick = retry.
+  `process()` never builds; it passes through until an engine lands.
+- ✅ **Denoising runs on a dedicated mic-processing thread** (`AudioMixer._ns_worker`, Pro
+  Audio MMCSS / highest priority): the input callback hands raw blocks to a queue and returns;
+  blocks keep routing through the worker until it has drained after NS is switched off, so no
+  block can overtake another (tested). The NS-off path is byte-identical to before.
+- ✅ **New engines** (`NS_BACKEND_LABELS`, labels shared with the GUI):
+  **Max** = DeepFilterNet + residual gate keyed on the model's own `lsnr` output (open > −7 dB,
+  close < −12 dB, ~160 ms release, floor −10…−25 dB) → pauses ~25 dB quieter than plain DFN for
+  ≤ 0.2 dB speech cost. **Classic** = MCRA noise tracking + decision-directed Wiener gain,
+  960/480 sqrt-Hann OLA, gain floor −8…−32 dB, 3-bin smoothing, 1 s warm start — no AI,
+  0.2 ms/block, 20 ms total latency, the most transparent voice (clean-speech SI-SDR 15–48 dB
+  on the People clips). **Gate only** (the expander, now exposed; its detector "high-pass" was
+  an 8-sample box = ~3 kHz cutoff, so broadband hiss closed it ON speech — now 128 samples ≈
+  165 Hz; floor −6…−36 dB; floor seeds from the first frame and rises faster while closed).
+  Plus **Low-cut 80 Hz** (2nd-order Butterworth, `noise_suppression_lowcut`) ahead of any engine.
+- ✅ **GUI**: 5-engine dropdown built from the audio catalogue (only engines that load on this
+  machine), low-cut checkbox, a **live status line** ("✓ Best (DeepFilterNet) active ·
+  7.8 ms/block · 40 ms delay", fallback notes in yellow, ⚠ heavy-CPU hint) polled once a
+  second while Audio Options is open; the card subtitle no longer claims NS is "bypassed when
+  using a virtual cable" (it never was).
+- 📊 **Objective A/B** — real Discord voice clip (`sounds/discord_20260531_093144…`), 4 s
+  noise adaptation, strength 1.0; SI-SDR gain vs the noisy input at 5 dB SNR / steady-noise
+  attenuation: DFN white **+9.0** / −47 dB, keyboard **+14.6** / −58, other voice **+4.6** /
+  −48, fan +8.7 / −23; Max: same speech, pauses −72 / −83 / −52 dB; Classic white +3.8 / −27,
+  fan +3.0 / −20, keyboard +1.3 (not its job); RNNoise white +3.4 / −35, fan +6.2 / −46,
+  keyboard +9.3 / −20. Cost per 21 ms block: DFN/Max ≈ 7.5 ms, RNNoise 2.5 ms, Classic 0.2 ms.
+  Evaluation gotcha: the `recording_…` call-recording clips are NOT clean speech (DFN's own
+  lsnr median −3.8 dB) — they made every DNN look broken until a real voice clip was used.
+- 🧪 `test_noise_suppression.py` — 17 headless tests: DLL loader never imports pyrnnoise,
+  frozen-EXE simulation, ring = exact 480-sample delay, one-shot fallback + no log spam, async
+  build, worker order/drain, declared-vs-measured latency, partial-strength fidelity on real
+  speech, residual law, low-cut, catalogue consistency. `test_soundboard.py` +
+  `test_mobile_sync.py` still pass.
+- ⏳ **Not smoke-tested live** (the EXE was running during the session, so the deploy could
+  only stage). Next launch: open ▶ Audio Options → the status line should read
+  "✓ Light (RNNoise) active · … ms/block" with the saved config; then try Best / Max at the
+  default 85 and Classic for fan/PC noise.
+
+---
+
+## 2026-08-25 (later) — right-click: Copy full path + Prep for Suno upload
+
+- **📄 Copy full path** on the slot ⋯/right-click menu AND the People/Favorites chip menu.
+  Stored paths are relative (`sounds\x.wav`), so it resolves to an ABSOLUTE path — what's
+  actually useful in Explorer/terminal/chat. Copies even when the file is missing (that's
+  when you most want it) and says so in the status bar. Person boards can reference files
+  outside `sounds/` ("Add from file…"), hence resolve rather than assume.
+- **🎼 Prep for Suno upload**: re-encodes the sound to a bare PCM_16 WAV in
+  `Desktop\Suno upload\`, named Suno-safe. Rationale (user-supplied): Suno's copyright
+  false-positives are triggered by embedded cover art / ID3 tags, and WAV avoids them.
+  **Verified at chunk level** — the export contains ONLY `fmt ` + `data`, no LIST/ID3/iXML;
+  re-decoding through soundfile makes surviving metadata structurally impossible. (A naive
+  byte scan "finds" JPEG markers in raw PCM — coincidental sample bytes, not art.)
+  Naming keeps letters/digits in ANY script so Hebrew titles stay readable, strips
+  brackets/quotes/punctuation, collapses to dashes, caps at 60 chars, falls back to
+  `suno-upload`; collisions get `-2`, `-3`. Desktop is resolved via the shell known-folder
+  API (OneDrive-redirect safe; verified → `C:\Users\User\Desktop`). Runs on a worker
+  thread; refuses >12 min with a "trim it first" message (float32 @48k is ~23 MB/min, and
+  Suno only takes short uploads anyway). Reveals the folder in Explorer once per session.
+- Both actions exposed on the People boards via a new `PersonContext.export_suno` hook.
+
+---
+
+## 2026-08-25 — YouTube downloads fixed + 3-action Hub commands
+
+User hit two ⬇ Web errors: "Could not copy Chrome cookie database (yt-dlp #7271)" on probe,
+then "[youtube] v4KDY5iIK2c: This video is not available".
+
+- ✅ **Root cause of "not available" = STALE yt-dlp** (2026.3.17, five months old). Updated to
+  2026.8.19 and the user's exact failing video ID now resolves **with no cookies at all**
+  (verified: title + 62s duration extracted). YouTube routinely breaks old releases and
+  reports it as an availability error — misleading but not a bug in our code.
+- ✅ **Cookie errors are no longer fatal:** new `_ydl_run()` helper wraps probe AND download —
+  if reading BROWSER cookies fails it retries once without them (most videos need none), and
+  the status line says so. `_is_browser_cookie_error()` classifies by message; unit-checked
+  against 7 real strings incl. both of the user's errors (True) vs. genuine failures like
+  "video is not available" / bot-check / 403 (False, so they still surface). Chrome/Edge
+  v127+ app-bound encryption means those cookies can NEVER be read — cookies.txt or Firefox
+  stay the path for age-restricted content; the dialog's warning now says exactly that.
+- ✅ `requirements.txt` pins `yt-dlp>=2026.8.19` with a keep-it-fresh comment. **The EXE
+  BUNDLES yt-dlp**, so a pip upgrade only reaches the user after a re-deploy — hence:
+- ✅ **New `scripts\deploy_new_version.bat`** (dev → prod): refresh yt-dlp → PyInstaller into
+  `dist_new\` → promote into `dist\`; exit 2 = staged because the app is still running.
+  `.projecthub/project.json` now proposes the three contract actions (§16 keys
+  `launch`/`dev`/`build`) relabelled as RUN PROD / RUN DEV / DEPLOY NEW VERSION.
+  **Hub commands are proposals — the user must adopt/approve them in the Hub UI.**
+- ⚠️ **FIRST DEPLOY DIDN'T ACTUALLY FIX IT — PyInstaller shipped the OLD yt-dlp.** The user
+  re-ran ⬇ Web and got the same "video is not available" on a fresh EXE (process start
+  13:20:45 vs EXE build 13:20:28 — definitely the new binary). Diagnosis: `build_new\` was
+  dated **Aug 8** after an Aug 25 build → PyInstaller reused cached analysis keyed on module
+  PATHS, and `pip install -U yt-dlp` replaces files at the SAME paths, so the bundle kept
+  2026.3.17. Meanwhile the venv resolved both failing IDs fine. **Fix: deploy now does
+  `rmdir /s /q build_new` + `--clean` every time** (recorded in .projecthub/NOTES.md — never
+  remove). General rule: after upgrading any bundled dependency, a cached PyInstaller build
+  is not proof of anything.
+- ✅ **Version indicator (user request):** status-bar badge, leftmost so device names can't
+  push it off — `v1.2.9` muted in PROD, `v1.2.9 DEV` on a yellow chip when running from
+  source (`sys.frozen` decides). Tooltip explains prod-vs-dev and that deploy bumps it.
+  Deploy now auto-runs `scripts/bump_version.py`, so the number always tracks the build.
+- ✅ **REAL ROOT CAUSE, found via the new debug.log instrumentation** (three wrong theories
+  preceded it — stale yt-dlp bundle, stale cookies.txt, throttling; all disproved by
+  reproducing outside the app, incl. a full 3.87 MB download with the user's own cookies):
+  1. **Doubled URL.** The log showed
+     `url=…start_radio=1https://www.youtube.com/watch?v=…start_radio=1` — the dialog
+     auto-prefills the URL box from the clipboard, and pasting again appends instead of
+     replacing (prefill selects the text, but clicking into the box clears the selection).
+  2. **Radio/mix playlist.** The pasted link carried `&list=RD…&start_radio=1`, so with
+     `noplaylist: False` yt-dlp walked an auto-generated infinite MIX
+     (traceback: `__process_playlist` → `__process_iterable_entry`).
+  3. **YouTube bot-check → no formats.** The failure line is
+     `common.py raise_no_formats` — YouTube returned a playability status with ZERO formats
+     and yt-dlp renders that as the misleading "This video is not available". **Verified
+     live: player_client `['tv','ios']` FAILS on this video while
+     `['android','ios','tv','web']` returns 4 formats** — client acceptance is independent,
+     which is why the same video worked in every isolated test.
+  Fixes: `_sanitize_media_url()` (de-duplicates a doubled paste; strips `list=RD…/UL…` +
+  `start_radio` for watch URLs while leaving REAL `PL…` playlists intact — unit-checked over
+  6 cases) and a retry ladder in `_ydl_run()`: as-configured → cookie-free → explicit
+  player clients, keeping the FIRST error if all rungs fail. The box is rewritten in place
+  so the user sees the cleaned URL rather than a silent change.
+- ✅ **yt-dlp version is now visible in the ⬇ Web dialog header** ("engine: yt-dlp X · if
+  downloads start failing, Deploy new version") — this exact class of failure is invisible
+  otherwise, and it's the fastest way to tell a stale bundle from a genuinely dead video.
+
+---
+
+## 2026-08-08 (later) — Phase 3: build the library ON the phone (BUILT, APK v3/0.3.0)
+
+- ✅ **Phone tab CRUD:** ＋ chip in the 📱 section; chip long-press → rename/delete (delete
+  refcounts files via shared `ConfigRefs` §5.1 walker; PC chips → "managed on the PC").
+- ✅ **Add sounds on phone:** tap an empty slot in a phone tab → SAF picker; "Share to LSB
+  Mobile" from any app (SEND/SEND_MULTIPLE, singleTask + pendingShare flow) → first phone
+  tab (auto-creates "Shared"). `MediaImporter` copies with the DESKTOP naming convention
+  `{stem}_{md5-8}{ext}` (content-dedupe, two-way-sync-ready).
+- ✅ **Slot action sheet** (long-press): Edit / ✂ Trim / 🗑 Delete (phone tabs only).
+- ✅ **Trim editor:** MediaExtractor+MediaCodec → PCM16 (float fallback), ≤10 min +
+  `largeHeap`; Canvas waveform + drag handles (green start/red end), preview via temp WAV
+  through the pool, save-as-new `{stem}_{ts8}.wav` + `source_file_path` (re-trim opens the
+  ORIGINAL — desktop Clone semantics). Cuts from PC sounds land in a phone tab ("Cuts").
+- ✅ **Web/YouTube download:** youtubedl-android (Seal fork, arm64-only), board ⋮ → 🌐;
+  `bestaudio[ext=m4a]/bestaudio`, NO ffmpeg (m4a/webm kept, §7.7); into current phone tab
+  or auto-created "Web". First run unpacks the engine (~15s).
+- ✅ Repo `mutateConfig` publishes synchronously + single-lane saves (create-tab→add-slot
+  can't race); slice A+B compiled clean on first checkpoint.
+- ⏭ On-device: install v3 via 📷 update flow → checklist: create tab, add from Files,
+  share from WhatsApp, trim a cut (Hebrew name), delete slot/tab, yt-dlp first-run, then
+  📷 re-sync to confirm phone content survives (§5.4).
+
+---
+
+## 2026-08-08 — section-wipe incident: root cause + hardening (FIXED)
+
+User's 4 phone-section tabs (Kids/TV Shows/Memes/Fart) reverted to PC and the Phone view
+showed a stale PC grid. Backup forensics (config_backups timestamps): a **17:14 launch of the
+OLD EXE** (dist\ predates sections; `launch.bat` runs the EXE, not source!) saved the config
+and dropped every `section` key — models' to_dict/from_dict silently discarded unknown fields.
+
+- ✅ **models.py hardened:** SoundSlot/SoundTab/Person/PersonGroup now carry `extra`
+  (unknown-key round-trip, mirrors the phone's raw-JsonObject rule; legacy slot `group`
+  deliberately excluded so migration can't resurrect it). Old/new build mixes can no longer
+  wipe post-hoc fields. Round-trip + both test suites pass.
+- ✅ **Stale-grid bug:** switching to (or starting in) an EMPTY section now shows a hint
+  placeholder in the board area instead of the other section's grid
+  (`_show_section_placeholder`, `_reconcile_section_view` after(1500) post-load).
+- ✅ **soundboard.spec:** added `soundboard.gui/audio/editor/models/mobile_sync/perf_probe`
+  hiddenimports — the PEP-562 lazy `__init__` had hidden them from PyInstaller's static
+  analysis (frozen EXE would have crashed on import).
+- ✅ **EXE rebuilt** into `dist_new\` staging (safe while app runs); mirror into `dist\` after
+  the app closes. **STANDING RULE: after desktop code changes, rebuild + mirror the EXE —
+  `launch.bat` users otherwise run stale code.**
+- ✅ Section restore script prepared (from backup 17:13, by index+name) — run with app closed.
+
+---
+
+## 2026-08-07 (latest) — in-app updater + 📷 quick sync + long-press edit (BUILT, APK v2)
+
+User: "only missing sounds or changes; also update the app; don't re-download everything" +
+"long press on a sound can edit basic stuff". Delta-sound sync already existed (md5 diff);
+net-new:
+
+- ✅ **In-app APK self-update:** manifest gains an `app` block (desktop `read_apk_info` /
+  `attach_app_info` — versionCode/Name from Gradle's output-metadata.json + apk md5/size;
+  tested). Phone compares `BuildConfig.VERSION_CODE`; when the PC is newer, the sync SKIPS
+  `/v1/complete` (server session stays alive), shows "⬆ Update now" → md5-verified APK
+  download → FileProvider + `REQUEST_INSTALL_PACKAGES` → OS installer (data survives).
+  **RELEASE RULE: bump `versionCode` in app/build.gradle.kts every phone release** (now 2 /
+  0.2.0; `buildFeatures.buildConfig = true` enabled).
+- ✅ **📷 board button** → `sync_scan` route → scanner auto-opens (shared `startQrScan`).
+- ✅ **Long-press tile → basic edit** (name RTL/volume 0-200%/speed/pitch/loop count+gap):
+  `LibraryRepository.updateSlot` overlays onto the slot's raw JsonObject (unknown fields
+  round-trip); §5.4 warning row when the tab is desktop-owned. Works from search results too.
+- Desktop suite: 7 groups ALL PASS (new `test_app_info`). Real library now 591 audio refs —
+  the user is actively adding sounds through the pipeline.
+- ⏭ To get v2 on the phone: ONE last browser install (scan with camera → download app);
+  from then on updates ride the 📷 sync. On-device checks: update card appears only when
+  PC has newer versionCode; long-press edit persists after app restart; edited desktop-tab
+  slot reverts on next sync (expected §5.4).
+
+---
+
+## 2026-08-07 (later) — 💻/📱 master sections + Phase 2 Wi-Fi QR sync (BUILT)
+
+User confirmed the browser bootstrap works on the S24U, then asked for: (1) PC/Phone master
+sections managed on the PC, phone shows phone-section first; (2) scan-QR → auto-update.
+
+- ✅ **Schema:** `SoundTab.section` ("pc" default | "phone") in `models.py` (tolerant,
+  round-trips; contract updated in mobile/README.md §5.1). Orthogonal to phone-side `origin`.
+- ✅ **Desktop:** CTkSegmentedButton section switcher in the tabs sidebar; rows are
+  pack_forget-hidden (NEVER destroyed — `tab_buttons` must stay 1:1 with `tabs`; reorder mode
+  force-shows all rows since drag math assumes every row packed); tab edit dialog gained a
+  "📱 Phone section" switch; new tabs land in the active section; `_switch_tab` auto-flips
+  section for cross-section jumps (search); `active_section` persisted in config.
+  **NOT yet smoke-tested live** — next launch: flip sections, drag-reorder in/out of filter,
+  edit-dialog toggle, search-jump across sections.
+- ✅ **Phone:** section switcher above the tab chips (defaults to 📱 Phone; empty-state hint
+  points at the PC toggle); Wi-Fi sync card: 📷 scan (play-services-code-scanner + ML Kit
+  module pre-download meta-data, manual URL fallback), `WifiPuller` (manifest pull → md5+
+  on-disk diff → by-index downloads with 3× retry → shared SyncApplier → /complete),
+  keep-screen-on while syncing (FGS hardening deferred), INTERNET permission added.
+- 📌 Together with the earlier landing-page change, one QR now serves both flows: camera scan
+  → browser (install/first pack), in-app scan → delta sync.
+
+---
+
+## 2026-08-07 — 📱 Mobile companion app: full plan written (PLANNED, no code yet)
+
+- ✅ **`mobile/README.md`** — complete project plan for an Android sibling app (user's Galaxy
+  S24 Ultra): playback-only soundboard (tabs/grid/search/per-sound settings/trim editor/web
+  download), **no mic features by design**. Decisions locked with the user: Kotlin + Jetpack
+  Compose · Wi-Fi + QR transfer now, Supabase cloud sync later · trim editor + yt-dlp download
+  in v1 (People/Favorites + Queue/DJ deferred to Phase 4) · one-way desktop→phone sync,
+  two-way-ready format.
+- ✅ Library audited for transfer: 611 files/773 MB (~583 referenced ≈ 630 MB), all
+  wav(PCM16-48k)/mp3/ogg = Android-native; 301 Hebrew filenames verified NFC + byte-exact;
+  2 dangling file_paths + 1 dangling source_file_path (importer must tolerate); 2 person
+  avatars use absolute out-of-tree paths (exporter must rewrite); 77 paths multi-referenced
+  (refcount on delete); `audio_cache/` (2.6 GB) must never transfer. **No export/sync code
+  exists anywhere today — Phase 0 builds it.**
+- ✅ **Phase 0 SHIPPED (same session):** `soundboard/mobile_sync.py` — reference-set walker
+  (tabs+persons+favorites, all 3 path fields), manifest builder with md5 hash cache
+  (660 MB: 2.6s cold / 0.33s warm), absolute-path rewrite (avatars → `images/avatars/`,
+  external audio → `sounds/external/`), `.zip` export (UTF-8 names), token-protected LAN
+  server serving files **by manifest index** (Hebrew/bracket safety), idle self-stop, and the
+  📱 action-bar button + QR dialog (`qrcode` in requirements + spec; `_flush_save_config`
+  before build; dead-dialog auto-recreate). `soundboard/__init__.py` made lazy (PEP 562) so
+  headless tests don't drag in the GUI. **Adversarially reviewed (3-agent workflow, 22
+  findings applied)** — notable: per-occurrence rewrite bug (dual rel+abs ref), Windows
+  SO_REUSEADDR silent double-bind, LoudnessEnhancer-style mB token issues, keep-alive
+  Content-Length hangs. `test_mobile_sync.py`: 5 suites ALL PASS incl. real-library walk
+  (583 audio + 137 image refs, 2 external avatars, 3 dangling tolerated; real export =
+  720 files / 689 MB, zero audio_cache). Real full-manifest build verified.
+- ⏭ **Smoke-test checklist for next real app launch** (code not yet exercised inside the
+  running GUI): click 📱 → dialog opens without UI freeze → QR shows the right LAN IP
+  (dropdown if VPN/Hyper-V adapters present) → allow the Windows Firewall prompt (Private) →
+  "Open in browser" self-test returns the manifest JSON → Export .zip writes ~689 MB →
+  close/reopen recreates cleanly after idle timeout. Known cosmetic: action bar can clip at
+  narrow window widths (pre-existing debt, 📱 adds ~40 px; overflow-menu refactor parked).
+- ✅ **Phase 1 BUILT (same session):** `mobile/android/` — complete Kotlin/Compose app,
+  **compiles to a working debug APK** (35 MB, `app/build/outputs/apk/debug/app-debug.apk`).
+  Data layer keeps the desktop JSON schema verbatim (raw-JsonObject round-trip, §5.2
+  tolerance), ConfigStore ports the §7.5 safety pattern + a `saveAuthoritative` sync path,
+  zip importer is staged + md5-verified + kill-safe (deletes run after config persist),
+  ExoPlayer pool (12 voices, LoudnessEnhancer mB gain, loop sentinel 0→−1 **verified against
+  desktop audio.py replay loop**), Discord-dark theme, board (tab chips + sparse grid +
+  RTL tiles + search) / now-playing / sync screens. Logic-reviewed by agent (6 findings
+  fixed: authoritative-save vs clobber guards, corrupt-config recovery, current_tab
+  read-modify-write + debounce, delete-after-persist ordering, tab clamp). Build toolchain
+  found ON this machine: Android Studio + SDK; build with
+  `JAVA_HOME="C:/Program Files/Android/openjdk/jdk-21.0.8" gradlew.bat :app:assembleDebug`.
+- ✅ **USB-free bootstrap added (user request, same session):** the 📱 LAN server now also
+  serves a token-protected **browser landing page** (`GET /?token=`) with two buttons —
+  `GET /v1/apk` (the built debug APK, `application/vnd.android.package-archive` content type
+  so Android offers install) and `GET /v1/zip` (SoundPack baked once per session into %TEMP%,
+  deleted on server stop; bake starts on first landing hit). QR now encodes the LANDING URL —
+  scan with the phone's **camera app**, no in-app scanner needed; Phase 2's scanner will
+  accept the same URL. Dialog shows download/bake events. Tests extended
+  (`test_browser_bootstrap`) — ALL PASS.
+- ⏭ **Phase 1 acceptance on-device (needs the user + phone, NO USB now):** desktop 📱 →
+  camera-scan QR → install APK from page → download pack → import → then verify: 19 tabs/485
+  slots render (Hebrew/colors/emoji/images), 104-slot tab at 120 Hz, 8-sound overlap, mono
+  WAV, 150% louder than 100% (LoudnessEnhancer!), loop 3×/1.5s vs desktop side-by-side,
+  dangling refs shown, kill-mid-import safe. Then Phase 2 (Wi-Fi QR sync client).
+- 📌 New standing rule (recorded in copilot-instructions § Mobile Companion App): schema or
+  file-naming changes must update `mobile/README.md` §6 + bump pack `format_version`.
+
+---
+
+## 2026-07-18 — ⭐ Favorites + 🔍 Pick-from-title (DONE, uncommitted)
+
+- ✅ **⭐ Favorites board**: folders of favorite sounds — a persistent `FavoritesWindow` reusing the WHOLE PersonPanel feature set via a solo `PersonContext` (groups = personal folders, "folder" wording, no shared-group semantics, ✎ hidden). Add via slot ⋯ menu cascade / People chip ⋮ menu / drag onto the window (always copies). Move between folders = existing drag + "Move to folder". Persisted `favorites_board`; warmed at startup; `fav_*` namespaced geometry/UI prefs. 19/19 smoke checks.
+- ✅ **🔍 Pick from title**: slot ⋯ menu + chip ⋮ menus → popup with the title in a selectable entry; select a part → right-click or buttons → Search this app / Google / custom engine (`custom_search_url` config key, `%s` placeholder, hidden when unset). 8/8 smoke checks.
+- ⏭ **qBittorrent search** was requested "if not problematic" — it is: qBittorrent has no external trigger for its in-app search (WebUI API needs the user to enable WebUI + auth; desktop app has no search IPC/URI). Skipped; `custom_search_url` lets the user wire any search site themselves. Revisit only if the user runs qBittorrent WebUI and wants a real integration.
+- ❓ **User screenshot "I keep getting this"** (black video pane + 5×4 grid of time-labeled blank tiles, ~34min span): does NOT match any soundboard surface (checked LongAudioPicker, editor, YouTube dialog — nothing draws a timestamp tile grid). Looks like another program's video preview/storyboard grid with failed thumbnails. Awaiting user context: what were they doing / which window is it?
 
 ---
 

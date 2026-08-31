@@ -1,9 +1,22 @@
 """
 Data models for the Discord Soundboard.
+
+UNKNOWN-KEY ROUND-TRIP (added 2026-08-08, after a real data-loss): every
+model keeps fields it doesn't know in `extra` and writes them back in
+to_dict(). Before this, running an OLDER build silently DROPPED any field a
+newer build (or the phone app) had added — that is exactly how every tab's
+`section` assignment got wiped when the old EXE saved the config. The
+mobile contract (mobile/README.md §5.1, copilot-instructions § Mobile
+Companion App) requires this tolerance — never remove it.
 """
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+
+
+def _split_extra(data: Dict[str, Any], known: set) -> Dict[str, Any]:
+    """Everything the model doesn't understand, preserved verbatim."""
+    return {k: v for k, v in data.items() if k not in known}
 
 
 @dataclass
@@ -31,10 +44,21 @@ class SoundSlot:
     # This lets the user "Clone (re-trim)" the slot and pick a different cut
     # from the same original source. None means file_path is itself the source.
     source_file_path: Optional[str] = None
+    # Fields from newer builds / the phone app — round-tripped untouched.
+    extra: Dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+
+    # "group" excluded: legacy field consumed by _migrate_groups, must not
+    # resurface on save.
+    _KNOWN = {
+        "name", "file_path", "hotkey", "volume", "emoji", "image_path",
+        "color", "speed", "preserve_pitch", "loop", "loop_count",
+        "loop_delay", "groups", "source_file_path", "group",
+    }
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
-        return {
+        out = dict(self.extra)
+        out.update({
             "name": self.name,
             "file_path": self.file_path,
             "hotkey": self.hotkey,
@@ -49,7 +73,8 @@ class SoundSlot:
             "loop_delay": self.loop_delay,
             "groups": self.groups,
             "source_file_path": self.source_file_path,
-        }
+        })
+        return out
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SoundSlot":
@@ -69,6 +94,7 @@ class SoundSlot:
             loop_delay=data.get("loop_delay", 0.0),
             groups=_migrate_groups(data),
             source_file_path=data.get("source_file_path"),
+            extra=_split_extra(data, cls._KNOWN),
         )
 
 
@@ -105,16 +131,21 @@ class PersonGroup:
     emoji: Optional[str] = None  # Optional icon glyph for the group header
     collapsed: bool = False      # Collapsed (header only) to save space
     sounds: List[SoundSlot] = field(default_factory=list)
+    extra: Dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+
+    _KNOWN = {"id", "name", "color", "emoji", "collapsed", "sounds"}
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        out = dict(self.extra)
+        out.update({
             "id": self.id,
             "name": self.name,
             "color": self.color,
             "emoji": self.emoji,
             "collapsed": self.collapsed,
             "sounds": [s.to_dict() for s in self.sounds],
-        }
+        })
+        return out
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "PersonGroup":
@@ -125,6 +156,7 @@ class PersonGroup:
             emoji=data.get("emoji"),
             collapsed=bool(data.get("collapsed", False)),
             sounds=[SoundSlot.from_dict(s) for s in data.get("sounds", [])],
+            extra=_split_extra(data, cls._KNOWN),
         )
 
 
@@ -139,15 +171,20 @@ class Person:
     emoji: Optional[str] = None  # Optional avatar glyph
     image_path: Optional[str] = None  # Optional avatar picture (shown as a circle)
     groups: List[PersonGroup] = field(default_factory=list)
+    extra: Dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+
+    _KNOWN = {"name", "color", "emoji", "image_path", "groups"}
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        out = dict(self.extra)
+        out.update({
             "name": self.name,
             "color": self.color,
             "emoji": self.emoji,
             "image_path": self.image_path,
             "groups": [g.to_dict() for g in self.groups],
-        }
+        })
+        return out
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Person":
@@ -157,6 +194,7 @@ class Person:
             emoji=data.get("emoji"),
             image_path=data.get("image_path"),
             groups=[PersonGroup.from_dict(g) for g in data.get("groups", [])],
+            extra=_split_extra(data, cls._KNOWN),
         )
 
 
@@ -168,15 +206,26 @@ class SoundTab:
     emoji: Optional[str] = None
     slots: Dict[int, SoundSlot] = field(default_factory=dict)
     color: Optional[str] = None  # Custom tab accent color (hex), None = default
+    # Display section: "pc" (default) or "phone". The PC is the manager — tabs
+    # assigned to "phone" are what the mobile companion shows by default (it
+    # can still switch to see the PC section). Orthogonal to the phone-side
+    # "origin" sync-ownership key. Contract: mobile/README.md §5.1/§5.4.
+    section: str = "pc"
+    extra: Dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+
+    _KNOWN = {"name", "emoji", "color", "section", "slots"}
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
-        return {
+        out = dict(self.extra)
+        out.update({
             "name": self.name,
             "emoji": self.emoji,
             "color": self.color,
+            "section": self.section,
             "slots": {str(i): s.to_dict() for i, s in self.slots.items()},
-        }
+        })
+        return out
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SoundTab":
@@ -188,5 +237,7 @@ class SoundTab:
             name=data["name"],
             emoji=data.get("emoji"),
             color=data.get("color"),
+            section=data.get("section") or "pc",
             slots=slots,
+            extra=_split_extra(data, cls._KNOWN),
         )

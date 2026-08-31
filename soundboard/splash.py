@@ -13,6 +13,7 @@ construction the caller can pump frames manually via :meth:`pump`.
 
 from __future__ import annotations
 
+import sys
 import tkinter as tk
 from typing import Optional
 
@@ -37,11 +38,23 @@ class SplashScreen:
         self._after: Optional[str] = None
         self._closed = False
 
-        # DPI scale so the splash is crisp/comfortable on HiDPI displays.
-        try:
-            scale = max(1.0, root.winfo_fpixels("1i") / 96.0)
-        except Exception:
-            scale = 1.0
+        # DPI scale so the splash is crisp/comfortable on HiDPI displays. The
+        # root is normally a CTk window: use CTk's factor so the splash is
+        # sized exactly like the app. (A per-monitor-DPI-aware Tk reports
+        # 96 dpi through winfo_fpixels, so that alone reads 1.0 at 150 %.)
+        scale = 0.0
+        if "customtkinter" in sys.modules:
+            try:
+                from customtkinter import ScalingTracker  # type: ignore
+
+                scale = float(ScalingTracker.get_window_scaling(root.winfo_toplevel()))
+            except Exception:
+                scale = 0.0
+        if not (0.4 <= scale <= 8.0):
+            try:
+                scale = max(1.0, root.winfo_fpixels("1i") / 96.0)
+            except Exception:
+                scale = 1.0
         self._s = scale
         W, H = int(440 * scale), int(240 * scale)
 
@@ -72,10 +85,16 @@ class SplashScreen:
         card = tk.Frame(self.win, bg=_CARD, highlightthickness=1, highlightbackground=_TRACK)
         card.pack(fill=tk.BOTH, expand=True, padx=int(2 * scale), pady=int(2 * scale))
 
-        def _f(px: int, bold: bool = False) -> tuple:
-            return ("Segoe UI", int(px * scale), "bold" if bold else "normal")
+        # Raw-Tk fonts: a NEGATIVE size is device pixels (a positive one is
+        # points that Tk scales by its own factor, not CTk's) — so these match
+        # CTk text of the same logical size.
+        def _px(px: float) -> int:
+            return -max(1, round(px * scale))
 
-        tk.Label(card, text="🎵", bg=_CARD, fg=_BLURPLE, font=("Segoe UI Emoji", int(34 * scale))).pack(
+        def _f(px: int, bold: bool = False) -> tuple:
+            return ("Segoe UI", _px(px), "bold" if bold else "normal")
+
+        tk.Label(card, text="🎵", bg=_CARD, fg=_BLURPLE, font=("Segoe UI Emoji", _px(34))).pack(
             pady=(int(26 * scale), int(4 * scale))
         )
         tk.Label(card, text=title, bg=_CARD, fg=_TEXT, font=_f(17, True)).pack()

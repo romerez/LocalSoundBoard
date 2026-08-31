@@ -9,12 +9,37 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Callable, Optional, Tuple
 
+import customtkinter as ctk
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
 
 from .audio import read_audio_file, _resample_audio, decode_audio_range
-from .constants import AUDIO, COLORS
+from .constants import AUDIO, COLORS, FONTS, UI
+
+
+def _window_scaling(widget) -> float:
+    """CTk's DPI factor for *widget*'s window (1.0 fallback).
+
+    The editor dialogs are RAW Tk, so their fonts must be given in DEVICE
+    pixels (a NEGATIVE Tk font size); a positive size is points that Tk scales
+    by its own factor, not CTk's, which is why editor text never quite matched
+    the rest of the app.
+    """
+    try:
+        return float(ctk.ScalingTracker.get_window_scaling(widget.winfo_toplevel()))
+    except Exception:
+        pass
+    try:
+        return max(1.0, float(widget.winfo_fpixels("1i")) / 96.0)
+    except Exception:
+        return 1.0
+
+
+def _tk_font(scale: float, px: int, bold: bool = False) -> tuple:
+    """Raw-Tk font tuple: FONTS family at ``-round(px * scale)`` device px."""
+    size = -max(1, round(px * scale))
+    return (FONTS["family"], size, "bold") if bold else (FONTS["family"], size)
 
 
 class SoundEditor:
@@ -31,6 +56,10 @@ class SoundEditor:
 
     MAX_DURATION_WARNING = 5.0  # Warn if sound is longer than 5 seconds
 
+    def _font(self, px: int, bold: bool = False) -> tuple:
+        """Raw-Tk font in DEVICE px (see _tk_font)."""
+        return _tk_font(self._s, px, bold)
+
     def __init__(
         self,
         parent: tk.Tk,
@@ -41,6 +70,10 @@ class SoundEditor:
         person_names: Optional[list] = None,
     ):
         self.parent = parent
+        # DPI factor (CTk's) — raw-Tk fonts below are sized in device px.
+        self._s = _window_scaling(parent)
+        if not (0.4 <= self._s <= 8.0):
+            self._s = 1.0
         self.file_path = file_path
         self.on_save = on_save
         self.output_device = output_device
@@ -202,7 +235,7 @@ class SoundEditor:
                 text=f"⚠️ This sound is {self.duration:.1f}s long. Consider trimming to ≤{self.MAX_DURATION_WARNING}s for best results.",
                 bg="#DA373C",
                 fg="white",
-                font=("Segoe UI", 10, "bold"),
+                font=self._font(FONTS["size_xs"], True),
             ).pack()
 
         # Info bar
@@ -248,7 +281,7 @@ class SoundEditor:
             text=f"📊 Total: {self.duration:.2f}s | Selected: {self.duration:.2f}s",
             bg=COLORS["bg_dark"],
             fg=COLORS["text_primary"],
-            font=("Segoe UI", 11, "bold"),
+            font=self._font(FONTS["size_sm"], True),
         )
         self.info_label.pack(side=tk.LEFT)
 
@@ -257,7 +290,7 @@ class SoundEditor:
             text="💡 Drag the green (start) and red (end) markers to trim",
             bg=COLORS["bg_dark"],
             fg=COLORS["text_muted"],
-            font=("Segoe UI", 9),
+            font=self._font(9),
         )
         self.trim_info_label.pack(side=tk.RIGHT)
 
@@ -307,7 +340,7 @@ class SoundEditor:
             text="🔍 Zoom:",
             bg=COLORS["bg_dark"],
             fg=COLORS["text_primary"],
-            font=("Segoe UI", 10),
+            font=self._font(FONTS["size_xs"]),
         ).pack(side=tk.LEFT, padx=(0, 8))
 
         tk.Button(
@@ -319,7 +352,7 @@ class SoundEditor:
             activebackground=COLORS["bg_light"],
             activeforeground="white",
             width=3,
-            font=("Segoe UI", 12, "bold"),
+            font=self._font(12, True),
             relief="flat",
             cursor="hand2",
         ).pack(side=tk.LEFT, padx=2)
@@ -329,7 +362,7 @@ class SoundEditor:
             text="1.0x",
             bg=COLORS["bg_dark"],
             fg=COLORS["text_primary"],
-            font=("Segoe UI", 10, "bold"),
+            font=self._font(FONTS["size_xs"], True),
             width=6,
         )
         self.zoom_label.pack(side=tk.LEFT, padx=5)
@@ -343,7 +376,7 @@ class SoundEditor:
             activebackground=COLORS["bg_light"],
             activeforeground="white",
             width=3,
-            font=("Segoe UI", 12, "bold"),
+            font=self._font(12, True),
             relief="flat",
             cursor="hand2",
         ).pack(side=tk.LEFT, padx=2)
@@ -356,7 +389,7 @@ class SoundEditor:
             fg="white",
             activebackground=COLORS["bg_light"],
             activeforeground="white",
-            font=("Segoe UI", 9),
+            font=self._font(9),
             width=9,
             relief="flat",
             cursor="hand2",
@@ -368,7 +401,7 @@ class SoundEditor:
             text="📍 Navigate:",
             bg=COLORS["bg_dark"],
             fg=COLORS["text_primary"],
-            font=("Segoe UI", 10),
+            font=self._font(FONTS["size_xs"]),
         ).pack(side=tk.LEFT, padx=(10, 5))
 
         # Horizontal scrollbar for navigation when zoomed
@@ -396,7 +429,7 @@ class SoundEditor:
             fg="white",
             activebackground="#1E8E4D",
             activeforeground="white",
-            font=("Segoe UI", 10, "bold"),
+            font=self._font(FONTS["size_xs"], True),
             width=15,
             relief="flat",
             cursor="hand2",
@@ -424,7 +457,7 @@ class SoundEditor:
             text="📍 0.00s - 0.00s",
             bg=COLORS["bg_dark"],
             fg=COLORS["text_primary"],
-            font=("Segoe UI", 10),
+            font=self._font(FONTS["size_xs"]),
         )
         self.selection_label.pack(side=tk.LEFT, padx=15)
 
@@ -443,7 +476,7 @@ class SoundEditor:
             text="",
             bg="#5865F2",
             fg="white",
-            font=("Segoe UI", 10, "bold"),
+            font=self._font(FONTS["size_xs"], True),
         )
         self._multi_banner_label.pack(side=tk.LEFT)
         # Banner is NOT packed yet — shown only in multi-cut mode.
@@ -451,105 +484,60 @@ class SoundEditor:
         btn_frame = tk.Frame(parent, bg=COLORS["bg_dark"])
         btn_frame.pack(fill=tk.X)
 
+        # Footer buttons follow the app's style spec: CTkButtons 36 px tall,
+        # 6 px radius; PRIMARY (green, bold sm) is the committing action, the
+        # rest are SECONDARY (bg_light). CTk scales these itself, so they
+        # match every other dialog footer at any DPI.
+        fh, fr = UI["footer_button_height"], UI["button_corner_radius"]
+        f_sm = ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"])
+        f_sm_b = ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"], weight="bold")
+        secondary = dict(
+            fg_color=COLORS["bg_light"], hover_color=COLORS["bg_lighter"],
+            text_color="white", font=f_sm, height=fh, corner_radius=fr,
+        )
+        primary = dict(
+            fg_color=COLORS["green"], hover_color=COLORS["green_hover"],
+            text_color="white", font=f_sm_b, height=fh, corner_radius=fr,
+        )
+
         # Reset button on left
-        tk.Button(
-            btn_frame,
-            text="🔄 Reset Selection",
-            command=self._reset_selection,
-            bg=COLORS["bg_medium"],
-            fg="white",
-            activebackground=COLORS["bg_light"],
-            activeforeground="white",
-            font=("Segoe UI", 10),
-            width=16,
-            relief="flat",
-            cursor="hand2",
-            pady=5,
+        ctk.CTkButton(
+            btn_frame, text="🔄 Reset Selection", command=self._reset_selection,
+            width=150, **secondary,
         ).pack(side=tk.LEFT)
 
         # Multi-cut entry button — opens the "how many?" prompt.
-        self._multi_btn = tk.Button(
-            btn_frame,
-            text="📑 Multi-Cut",
-            command=self._start_multi_cut,
-            bg=COLORS["bg_medium"],
-            fg="white",
-            activebackground=COLORS["bg_light"],
-            activeforeground="white",
-            font=("Segoe UI", 10),
-            width=12,
-            relief="flat",
-            cursor="hand2",
-            pady=5,
+        self._multi_btn = ctk.CTkButton(
+            btn_frame, text="📑 Multi-Cut", command=self._start_multi_cut,
+            width=120, **secondary,
         )
         self._multi_btn.pack(side=tk.LEFT, padx=(8, 0))
 
         # Action buttons on right
-        self._cancel_btn = tk.Button(
-            btn_frame,
-            text="Cancel",
-            command=self._on_cancel,
-            bg=COLORS["bg_medium"],
-            fg="white",
-            activebackground=COLORS["bg_light"],
-            activeforeground="white",
-            font=("Segoe UI", 10),
-            width=10,
-            relief="flat",
-            cursor="hand2",
-            pady=5,
+        self._cancel_btn = ctk.CTkButton(
+            btn_frame, text="Cancel", command=self._on_cancel, width=100, **secondary,
         )
         self._cancel_btn.pack(side=tk.RIGHT, padx=(8, 0))
 
-        self._save_btn = tk.Button(
-            btn_frame,
-            text="✅ Save & Use",
-            command=self._on_save,
-            bg=COLORS["blurple"],
-            fg="white",
-            activebackground=COLORS.get("blurple_hover", "#4752C4"),
-            activeforeground="white",
-            font=("Segoe UI", 10, "bold"),
-            width=14,
-            relief="flat",
-            cursor="hand2",
-            pady=5,
+        self._save_btn = ctk.CTkButton(
+            btn_frame, text="✓ Save & Use", command=self._on_save, width=140, **primary,
         )
         self._save_btn.pack(side=tk.RIGHT)
 
         # Capture button — only visible during multi-cut mode. Grabs the current
         # selection as one segment; you can capture as many as you like.
-        self._capture_btn = tk.Button(
-            btn_frame,
-            text="",
-            command=self._capture_multi_segment,
-            bg=COLORS["green"],
-            fg="white",
-            activebackground="#1E8E4D",
-            activeforeground="white",
-            font=("Segoe UI", 10, "bold"),
-            width=18,
-            relief="flat",
-            cursor="hand2",
-            pady=5,
+        # Blurple accent: the frequent action, distinct from the green Done.
+        self._capture_btn = ctk.CTkButton(
+            btn_frame, text="", command=self._capture_multi_segment, width=170,
+            fg_color=COLORS["blurple"], hover_color=COLORS["blurple_hover"],
+            text_color="white", font=f_sm_b, height=fh, corner_radius=fr,
         )
 
         # Done button — only visible during multi-cut mode. Finishes capturing
         # and turns every captured segment into a sound. The user decides when
         # they're done instead of committing to a count up front.
-        self._done_btn = tk.Button(
-            btn_frame,
-            text="✅ Done",
-            command=self._finish_multi_cut,
-            bg=COLORS["blurple"],
-            fg="white",
-            activebackground=COLORS.get("blurple_hover", "#4752C4"),
-            activeforeground="white",
-            font=("Segoe UI", 10, "bold"),
-            width=10,
-            relief="flat",
-            cursor="hand2",
-            pady=5,
+        self._done_btn = ctk.CTkButton(
+            btn_frame, text="✓ Done", command=self._finish_multi_cut, width=110, **primary,
         )
         # Not packed — shown only in multi-cut mode.
 
@@ -656,7 +644,7 @@ class SoundEditor:
                 self.canvas_height - 5,
                 text="◀ START (L)",
                 fill=COLORS["green"],
-                font=("Segoe UI", 8, "bold"),
+                font=self._font(8, True),
                 anchor="s",
             )
 
@@ -675,7 +663,7 @@ class SoundEditor:
                 self.canvas_height - 5,
                 text="END (R) ▶",
                 fill=COLORS["red"],
-                font=("Segoe UI", 8, "bold"),
+                font=self._font(8, True),
                 anchor="s",
             )
 
@@ -717,7 +705,7 @@ class SoundEditor:
             x = int((t - start_time) / view_duration * width)
             self.timeline_canvas.create_line(x, 0, x, 8, fill=COLORS["text_muted"], width=1)
             self.timeline_canvas.create_text(
-                x, 15, text=f"{t:.1f}s", fill=COLORS["text_muted"], font=("Segoe UI", 8)
+                x, 15, text=f"{t:.1f}s", fill=COLORS["text_muted"], font=self._font(8)
             )
             t += interval
 
@@ -1201,10 +1189,10 @@ class SoundEditor:
                 f"SPACE previews, ✓ Capture grabs it. Click Done when finished."
             )
         )
-        self._capture_btn.config(text=f"✓ Capture (#{captured + 1})")
+        self._capture_btn.configure(text=f"✓ Capture (#{captured + 1})")
         try:
-            self._done_btn.config(
-                text=("✅ Done" if captured == 0 else f"✅ Done ({captured})")
+            self._done_btn.configure(
+                text=("✓ Done" if captured == 0 else f"✓ Done ({captured})")
             )
         except (AttributeError, tk.TclError):
             pass
@@ -1234,7 +1222,7 @@ class SoundEditor:
             text=f"Title for cut {cut_no}:",
             bg=COLORS["bg_dark"],
             fg=COLORS["text_primary"],
-            font=("Segoe UI", 11, "bold"),
+            font=self._font(FONTS["size_sm"], True),
             padx=20,
             pady=10,
         ).pack(anchor="w")
@@ -1243,7 +1231,7 @@ class SoundEditor:
             prompt,
             textvariable=title_var,
             width=34,
-            font=("Segoe UI", 12),
+            font=self._font(12),
             bg=COLORS["bg_medium"],
             fg="white",
             insertbackground="white",
@@ -1256,14 +1244,14 @@ class SoundEditor:
         if self.person_names:
             tk.Label(
                 prompt, text="Assign to person:", bg=COLORS["bg_dark"],
-                fg=COLORS["text_primary"], font=("Segoe UI", 11, "bold"),
+                fg=COLORS["text_primary"], font=self._font(FONTS["size_sm"], True),
                 padx=20,
             ).pack(anchor="w")
             options = [self._NO_PERSON] + list(self.person_names)
             om = tk.OptionMenu(prompt, person_var, *options)
             om.configure(bg=COLORS["bg_medium"], fg="white", activebackground=COLORS["bg_light"],
                          activeforeground="white", relief="flat", highlightthickness=0,
-                         font=("Segoe UI", 11))
+                         font=self._font(FONTS["size_sm"]))
             om["menu"].configure(bg=COLORS["bg_medium"], fg="white")
             om.pack(fill=tk.X, padx=20, pady=(0, 12))
 
@@ -1294,7 +1282,7 @@ class SoundEditor:
             command=close,
             bg=COLORS["bg_medium"],
             fg="white",
-            font=("Segoe UI", 10),
+            font=self._font(FONTS["size_xs"]),
             width=10,
             relief="flat",
             cursor="hand2",
@@ -1306,7 +1294,7 @@ class SoundEditor:
             command=ok,
             bg=COLORS["blurple"],
             fg="white",
-            font=("Segoe UI", 10, "bold"),
+            font=self._font(FONTS["size_xs"], True),
             width=10,
             relief="flat",
             cursor="hand2",
@@ -1449,6 +1437,10 @@ class LongAudioPicker:
     QUICK_LENGTHS = (30, 60, 5 * 60, 15 * 60, 30 * 60, 45 * 60)
     PREVIEW_CAP_SECONDS = 20.0  # preview only the first chunk so it stays snappy
 
+    def _font(self, px: int, bold: bool = False) -> tuple:
+        """Raw-Tk font in DEVICE px (see _tk_font)."""
+        return _tk_font(self._s, px, bold)
+
     def __init__(
         self,
         parent: tk.Tk,
@@ -1460,6 +1452,10 @@ class LongAudioPicker:
         output_device: Optional[int] = None,
     ):
         self.parent = parent
+        # DPI factor (CTk's) — raw-Tk fonts below are sized in device px.
+        self._s = _window_scaling(parent)
+        if not (0.4 <= self._s <= 8.0):
+            self._s = 1.0
         self.file_path = file_path
         self.duration = max(0.01, float(duration))
         self.peaks = peaks if peaks is not None else np.zeros(1, dtype=np.float32)
@@ -1526,14 +1522,14 @@ class LongAudioPicker:
             text=f"🎬 This recording is {self._fmt(self.duration)} long.",
             bg=COLORS["bg_dark"],
             fg=COLORS["text_primary"],
-            font=("Segoe UI", 13, "bold"),
+            font=self._font(FONTS["size_md"], True),
         ).pack(anchor="w")
         tk.Label(
             main,
             text="Drag across the overview to pick the part you want, then load it for fine trimming.",
             bg=COLORS["bg_dark"],
             fg=COLORS["text_muted"],
-            font=("Segoe UI", 9),
+            font=self._font(9),
         ).pack(anchor="w", pady=(0, 10))
 
         canvas_box = tk.Frame(main, bg=COLORS["bg_light"], padx=2, pady=2)
@@ -1556,7 +1552,7 @@ class LongAudioPicker:
         ql.pack(fill=tk.X, pady=(10, 4))
         tk.Label(
             ql, text="Length:", bg=COLORS["bg_dark"], fg=COLORS["text_primary"],
-            font=("Segoe UI", 10),
+            font=self._font(FONTS["size_xs"]),
         ).pack(side=tk.LEFT, padx=(0, 6))
         for secs in self.QUICK_LENGTHS:
             if secs > self.duration:
@@ -1565,21 +1561,21 @@ class LongAudioPicker:
             tk.Button(
                 ql, text=label, command=lambda s=secs: self._set_length(s),
                 bg=COLORS["bg_medium"], fg="white", activebackground=COLORS["bg_light"],
-                activeforeground="white", font=("Segoe UI", 9), width=5,
+                activeforeground="white", font=self._font(9), width=5,
                 relief="flat", cursor="hand2",
             ).pack(side=tk.LEFT, padx=3)
 
         self.play_btn = tk.Button(
             ql, text="▶ Preview", command=self._toggle_preview,
             bg=COLORS["green"], fg="white", activebackground="#1E8E4D",
-            activeforeground="white", font=("Segoe UI", 9, "bold"), width=10,
+            activeforeground="white", font=self._font(9, True), width=10,
             relief="flat", cursor="hand2",
         )
         self.play_btn.pack(side=tk.RIGHT)
 
         self.sel_label = tk.Label(
             main, text="", bg=COLORS["bg_dark"], fg=COLORS["text_primary"],
-            font=("Segoe UI", 11, "bold"),
+            font=self._font(FONTS["size_sm"], True),
         )
         self.sel_label.pack(anchor="w", pady=(6, 0))
 
@@ -1588,18 +1584,19 @@ class LongAudioPicker:
         sep.pack(fill=tk.X, pady=(12, 10))
         footer = tk.Frame(main, bg=COLORS["bg_dark"])
         footer.pack(fill=tk.X)
-        tk.Button(
-            footer, text="Cancel", command=self._on_cancel,
-            bg=COLORS["bg_medium"], fg="white", activebackground=COLORS["bg_light"],
-            activeforeground="white", font=("Segoe UI", 10), width=10,
-            relief="flat", cursor="hand2", pady=5,
+        # Style-spec footer: secondary Cancel, primary (green) Load section.
+        fh, fr = UI["footer_button_height"], UI["button_corner_radius"]
+        ctk.CTkButton(
+            footer, text="Cancel", command=self._on_cancel, width=100,
+            fg_color=COLORS["bg_light"], hover_color=COLORS["bg_lighter"],
+            text_color="white", height=fh, corner_radius=fr,
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"]),
         ).pack(side=tk.RIGHT, padx=(8, 0))
-        tk.Button(
-            footer, text="Load section →", command=self._on_load,
-            bg=COLORS["blurple"], fg="white",
-            activebackground=COLORS.get("blurple_hover", "#4752C4"),
-            activeforeground="white", font=("Segoe UI", 10, "bold"), width=16,
-            relief="flat", cursor="hand2", pady=5,
+        ctk.CTkButton(
+            footer, text="✓ Load section", command=self._on_load, width=150,
+            fg_color=COLORS["green"], hover_color=COLORS["green_hover"],
+            text_color="white", height=fh, corner_radius=fr,
+            font=ctk.CTkFont(family=FONTS["family"], size=FONTS["size_sm"], weight="bold"),
         ).pack(side=tk.RIGHT)
 
         self._update_labels()
@@ -1659,7 +1656,7 @@ class LongAudioPicker:
             x = self._t2x(t)
             c.create_line(x, h - 14, x, h, fill="#2a2d31", width=1)
             c.create_text(x, h - 7, text=self._fmt(t), fill=COLORS["text_muted"],
-                          font=("Segoe UI", 7), anchor="s")
+                          font=self._font(7), anchor="s")
 
     def _on_canvas_resize(self, event):
         # Debounced like the main editor canvas: _build_columns slices numpy

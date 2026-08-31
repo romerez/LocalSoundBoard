@@ -55,3 +55,12 @@ debug.log
 debug.log.*
 perf.log
 importtime.txt
+
+# Mobile companion sync (soundboard/mobile_sync.py) — md5 cache, rebuildable
+mobile_sync_hashcache.json
+# Android project build output (mobile/android/, created in Phase 1)
+mobile/android/.gradle/
+mobile/android/build/
+mobile/android/app/build/
+mobile/android/local.properties
+*.keystore

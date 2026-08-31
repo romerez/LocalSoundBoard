@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "bl-20260815-repo-housekeeping-y6nb",
+  "title": "Repo housekeeping: logs, _recovery/, temp perf tools",
+  "description": "Untrack/remove leftovers: debug.log rotation files, perf.log, importtime.txt; decide _recovery/'s fate once re-filing is done (keep GOOD_config_8people.json); remove stop_soundboard.bat/perf_probe.py if no longer needed.",
+  "priority": "low",
+  "status": "backlog",
+  "tags": ["housekeeping"],
+  "source": "agent:claude-code",
+  "createdAt": "2026-08-15T13:10:00Z",
+  "updatedAt": "2026-08-15T13:10:00Z"
+}

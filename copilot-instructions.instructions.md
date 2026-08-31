@@ -1,6 +1,6 @@
 # Copilot Instructions - Discord Soundboard Project
 
-> **Last Updated:** 2026-07-17 (People window: persistent hub + hidden startup prebuild + empty-group stubs + measured pump/flush policy — open/reopen is now near-instant)
+> **Last Updated:** 2026-08-07 (📱 Mobile companion app planned — Android sibling project in `mobile/`, SoundPack transfer contract; see the "Mobile Companion App" section at the end of this file)
 > **Status:** Active Development
 > **Language:** Python 3.x
 ALWAYS EDIT THIS FILE FIRST when adding features or making changes. This is the source of truth for the project and helps maintain consistency.
@@ -45,7 +45,7 @@ Replace Discord's built-in soundboard with a standalone, local solution that:
 | Pitch-Preserving Speed | `librosa` |
 | Emoji Data | `emoji-data-python` |
 | Color Utilities | `colour` |
-| Noise Suppression | **DeepFilterNet3** via `onnxruntime` (default, Krisp-class DNN, 48 kHz) + `pyrnnoise` (RNNoise, light fallback); mic-only, pluggable backend, replaces Krisp |
+| Noise Suppression | 5 engines behind `NoiseSuppressor` (`audio.py`): **DeepFilterNet3** via `onnxruntime` (default, Krisp-class DNN, 48 kHz), **Max** (DFN + lsnr residual gate), **Classic** (MCRA/Wiener spectral, no AI), **RNNoise** (`rnnoise.dll` bound DIRECTLY via ctypes — never `import pyrnnoise`: its init needs audiolab/av, which the EXE lacks), **Gate**; + 80 Hz low-cut. Mic-only, runs on a dedicated worker thread; strength = delay-compensated wet/dry (never DFN's `atten_lim_db` — any finite limit comb-filters the voice) |
 | Voice Effects | pure-numpy DSP + `scipy.signal` (real-time mic voice changer) |
 
 ### Dependencies
@@ -315,6 +315,8 @@ Persistent (NOT reset per-click):
 - [x] **Prewarm gating + last-person memory** — background panel warm starts only once the active panel's pump drains (`_maybe_start_prewarm`); the hub opens on the last-selected person (`last_person` via the ctx geometry store) and the chip size (L/M/S) + group-columns choices persist across launches (`chip_size`/`gcols`).
 - [x] **Avatar master-decode cache** — `circle_avatar` decodes each picture ONCE per `(path, mtime)` into a ≤256px square master (JPEG `draft()` fast-path) and derives every requested size from it; sidebar 26px / title 28px / dialog 36px no longer each pay a full photo decode.
 - [x] **CTk perf patch #4** — `CTkToplevel._update_dimensions_event` early-returns for child-widget `<Configure>` events (it only tracks the toplevel's own size), removing hundreds of pointless Tcl round-trips per panel build.
+- [x] **⭐ Favorites board (folders of favorite sounds)** — header "⭐ Favorites" button opens `FavoritesWindow` (person_board.py): a persistent window (close = hide) rendering ONE pseudo-person whose groups are the user's favorite FOLDERS, via the full PersonPanel machinery (＋ Folder, add from file / main board, drag chips between folders, right-click "Move to folder", rename/recolour/collapse folders, shift+wheel volume, previews). Driven by a **solo `PersonContext`** (`solo=True` → "folder" wording, ✎ person-edit hidden, groups NOT shared with People). Add favorites from: any filled main-board slot's ⋯ menu → "⭐ Add to Favorites ▸ [folder / ＋ New folder…]"; any People chip's ⋮ menu (ctx hooks `list_favorite_folders`/`add_favorite`); or drag a main-board slot onto the Favorites window (always a COPY — no "remove original?" prompt). Persisted under `config["favorites_board"]` (Person-shaped dict; attribute-missing-only data-safety guard); favorites sounds included in the startup audio warm; window size/UI prefs saved under namespaced `fav_*` keys.
+- [x] **🔍 Pick from title (select-and-search)** — "🔍 Pick from title…" on the main-board slot ⋯ menu and on People/Favorites chip ⋮ menus (ctx hook `search_title`) opens a small popup with the sound's title in a selectable read-only entry. Select any part (e.g. the artist in a YouTube title) and right-click it — or use the buttons — to: **Search this app** (fills the main cross-tab search), **Search Google**, or a **user-configured custom engine** (config key `custom_search_url`, e.g. `https://example.com/search?q=%s`; `%s` = URL-encoded query, button hidden when unset). No selection = whole title. (A qBittorrent action was considered and skipped: qBittorrent exposes no way to trigger its in-app search externally without WebUI+auth; the custom-engine hook covers any search site the user prefers.)
 
 ---
 
@@ -498,6 +500,11 @@ python main.py
 ---
 
 ## Change Log
+
+### Version 1.3.x (⭐ Favorites + 🔍 Pick-from-title — 2026-07-18)
+
+- **⭐ Favorites**: folders of favorite sounds in a persistent window, built as a SOLO pseudo-person on the existing PersonPanel machinery (new `PersonContext.solo` + `FavoritesWindow(PersonPopout)` in person_board.py; `_favorites_context`/`_open_favorites_window`/`_add_favorite_copy` in gui.py). Entry points: header ⭐ button, slot ⋯ menu cascade, People chip ⋮ menu (ctx hooks), drag-drop onto the window (copy semantics). Config: `favorites_board`. Verified: 19-check live smoke (open/seed folder, add copy, second folder, move between folders via the real `_move_sound`, drop-target resolution, People-hook add, persist round-trip, hide/reopen) + 21/21 unit tests.
+- **🔍 Pick from title**: select part of a title → search in-app / Google / custom engine (`custom_search_url`, `%s` placeholder). Popup `_pick_from_title` + `search_title` ctx hook. Verified: 8-check smoke (popup/selection defaults, URL building incl. %s and append modes, in-app search var).
 
 ### Version 1.3.x (People-Window Launch Performance — 2026-07-17)
 
@@ -730,6 +737,10 @@ When asked to add a feature:
 
 ### CustomTkinter-Specific Issues
 
+---
+
+This project is connected to the Local Project Hub — read .projecthub/AGENT.md before substantial work.
+
 | Issue | Cause | Fix |
 |-------|-------|-----|
 | Sounds don't play when clicking slot | CTkButton's `_draw()` method re-binds `<Button-1>` on its internal canvas WITHOUT `add`, wiping any custom canvas bindings. `_draw()` runs on EVERY `btn.configure()` call. | **CURRENT FIX:** Use `command=` for click-to-play (stored as `_command` property, immune to `_draw()`). Use `CTkButton.bind()` for drag detection (CTkButton stores and re-applies these). NEVER bind directly to internal canvas children. See "Slot Button Click & Drag Architecture" section. |
@@ -828,3 +839,46 @@ if slot_idx in self.slot_stop_buttons:  # This is tab 1's widgets!
 12. **Lazy-load expensive resources** - Emoji categories, large data structures should be built on first access, not at import time
 13. **NEVER bind directly to CTkButton internal children** - `canvas.bind()` on a CTkButton's internal canvas WILL be wiped by `_draw()`. This applies to both `add` and non-`add` variants. Use `command=` for clicks, `CTkButton.bind()` for motion/release. Read the "Slot Button Click & Drag Architecture" section before touching any slot event handling code.
 14. **Per-tab widget updates** - When updating widgets for a sound/slot that may be on ANY tab (not just current), use per-tab storage directly (`tab_slot_*[tab_idx][slot_idx]`). NEVER use legacy aliases (`slot_buttons`, `slot_frames`) for cross-tab updates. See "Per-Tab Widget Architecture" section.
+
+---
+
+## 📱 Mobile Companion App (`mobile/`)
+
+**Planned 2026-08-07.** An Android sibling project lives in `mobile/` — a **playback-only**
+soundboard for the user's Samsung Galaxy S24 Ultra (Kotlin + Jetpack Compose, sideloaded APK).
+It ports ONLY the library half of this app (tabs, slot grid, per-sound volume/speed/pitch/loop,
+search, groups, trim editor, web download) — **none** of the mic/PTT/voice-changer/VB-Cable
+features. Full plan, data contract, transfer protocol, roadmap: **`mobile/README.md`**
+(that file is the source of truth for everything phone-side).
+
+### The connection: SoundPack transfer (desktop → phone)
+
+- The phone imports the desktop library as a **SoundPack**: `soundboard_config.json` (verbatim
+  schema) + all **referenced** files from `sounds/` + `images/`. Never `audio_cache/`
+  (rebuildable decoded PCM), never orphan/unreferenced files, never recordings.
+- **Planned desktop work (Phase 0, this codebase):** `soundboard/mobile_sync.py` — pack
+  builder (manifest with per-file md5, hash cache by path+mtime, absolute-path avatar rewrite,
+  skip-and-record dangling refs) + `.zip` export + LAN HTTP server (token-protected, serves
+  files **by manifest index** so Hebrew/`[]`/`()` filenames never appear in URLs) + a
+  "📱 Send to Phone" action-bar button showing a QR code (`qrcode` pip dep, render via PIL).
+  Sync is one-way desktop → phone in v1; the pack format is two-way-ready.
+- Cloud path later: the phone's Phase 5 reuses the Supabase design in
+  `docs/AUTH_AND_SUBSCRIPTION.md` (content-addressed storage, `cloud_sync` feature string).
+
+### Rules for desktop changes (to not break the phone)
+
+0. **REBUILD THE EXE after any desktop change** — `launch.bat`/`update_soundboard.bat` run
+   `dist\SoundBoard.exe`, NOT source (`run.bat` is source). A stale EXE running old code
+   once WIPED every tab's `section` field on save. Stage safely while the app runs:
+   `pyinstaller soundboard.spec --noconfirm --distpath dist_new --workpath build_new`,
+   then mirror `dist_new\SoundBoard` → `dist\SoundBoard` once the app is closed.
+   Relatedly: models.py dataclasses round-trip unknown keys via `extra` — NEVER remove that.
+
+1. **Schema/naming changes ripple:** any change to `soundboard/models.py` (SoundSlot / SoundTab /
+   Person / PersonGroup fields), to `sounds/` file naming (`{stem}_{md5-8}{ext}`,
+   `{stem}_{timestamp8}.wav`), or to `images/` naming MUST update `mobile/README.md` §5.1
+   (schema + reference-set) and §6 (SoundPack format) and bump the pack `format_version`.
+2. **Unknown-key tolerance is load-bearing:** the phone injects an `"origin"` key on tabs and
+   may (Phase 5) hand configs back. Desktop config loads must STAY tolerant `.get()` reads that
+   preserve/ignore unknown keys — never switch to strict parsing.
+3. Exports must never include `audio_cache/`, `config_backups/`, `debug.log*`, or `.bak` files.

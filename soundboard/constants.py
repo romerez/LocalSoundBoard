@@ -376,15 +376,65 @@ def generate_color_gradient(start_hex: str, end_hex: str, steps: int = 5) -> Lis
     return [c.hex_l for c in start.range_to(end, steps)]
 
 
+def _srgb_to_linear(c: float) -> float:
+    c = c / 255.0
+    return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+
+def _hex_to_rgb(hex_color: str) -> tuple:
+    h = (hex_color or "").strip().lstrip("#")
+    if len(h) == 3:
+        h = "".join(ch * 2 for ch in h)
+    try:
+        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except Exception:
+        return (88, 101, 242)  # blurple
+
+
+def relative_luminance(hex_color: str) -> float:
+    """WCAG relative luminance (0 = black, 1 = white) of an #rrggbb colour."""
+    r, g, b = _hex_to_rgb(hex_color)
+    return 0.2126 * _srgb_to_linear(r) + 0.7152 * _srgb_to_linear(g) + 0.0722 * _srgb_to_linear(b)
+
+
+def contrast_ratio(hex_a: str, hex_b: str) -> float:
+    """WCAG contrast ratio between two colours (1 .. 21)."""
+    la, lb = relative_luminance(hex_a), relative_luminance(hex_b)
+    hi, lo = max(la, lb), min(la, lb)
+    return (hi + 0.05) / (lo + 0.05)
+
+
 def is_light_color(hex_color: str) -> bool:
-    """Check if a color is light (for text contrast decisions)."""
-    c = Color(hex_color)
-    return c.luminance > 0.5
+    """True when DARK text reads better on this background than light text.
+
+    Uses WCAG relative luminance, NOT HSL lightness: the old ``Color.luminance``
+    (= HSL L) called saturated mid-tones such as blurple #5865F2, red #DA373C,
+    purple #9B59B6 and pink #E91E63 "light" and put near-black text on them,
+    which is why a blurple chip had a dark ⋮ next to a white title.
+    """
+    text_light = DiscordColors.TEXT_PRIMARY
+    text_dark = "#1E1F22"
+    return contrast_ratio(hex_color, text_dark) > contrast_ratio(hex_color, text_light)
 
 
 def get_text_color_for_bg(hex_color: str) -> str:
-    """Get appropriate text color (light or dark) for a background."""
-    return DiscordColors.TEXT_PRIMARY if not is_light_color(hex_color) else "#1E1F22"
+    """The text colour (light or dark) with the higher WCAG contrast on ``hex_color``."""
+    return "#1E1F22" if is_light_color(hex_color) else DiscordColors.TEXT_PRIMARY
+
+
+def tint_for_dark_bg(hex_color: str, min_ratio: float = 4.5, against: str = None) -> str:
+    """Lighten ``hex_color`` (mix toward white) until it reaches ``min_ratio``
+    contrast on a dark background — for coloured TEXT on the dark UI, where a
+    user-picked navy/black would otherwise vanish. Unchanged if already legible."""
+    against = against or DiscordColors.BG_LIGHT
+    r, g, b = _hex_to_rgb(hex_color)
+    for step in range(0, 21):
+        t = step / 20.0
+        rr, gg, bb = (round(r + (255 - r) * t), round(g + (255 - g) * t), round(b + (255 - b) * t))
+        cand = f"#{rr:02X}{gg:02X}{bb:02X}"
+        if contrast_ratio(cand, against) >= min_ratio:
+            return cand
+    return DiscordColors.TEXT_PRIMARY
 
 
 # =============================================================================
@@ -449,6 +499,21 @@ UI = {
     "button_corner_radius": 6,
     "padding": 12,
     "slot_padding": 4,
+    # Control-size tokens (logical px). Chosen so 1.5x (the user's 150 % DPI)
+    # lands on an EVEN device size — CTk floors scaled canvases to even px, so
+    # 26/30/34-tall controls leave a 1 px strip of parent colour along one edge.
+    "control_height": 28,        # inline buttons / entries / option menus
+    "toolbar_height": 32,        # top action bar buttons
+    "compact_height": 24,        # dense rows (DJ list, status bar, in-card ＋/⋮)
+    "footer_button_height": 36,  # dialog footer buttons
+    "icon_button": 28,           # square single-glyph buttons (✎ ⋮ ✕ ⚙ ＋)
+    "pill_width": 4,             # identity colour pill next to a name
+    # Main-board slot tiles: False keeps the on-screen tile height / text size
+    # the user is used to (the canvas ignores DPI for its geometry, as it has
+    # since the single-canvas refactor); True makes the tile DPI-correct
+    # (152 logical → 228 device px at 150 %, text -22 px) — bigger, fewer rows.
+    # Thumbnails and emoji are decoded at device pixels (crisp) either way.
+    "slot_scale_geometry": False,
     "slot_width": 180,
     "slot_height": 152,  # 120 main + 32 bottom bar
     # Now Playing / DJ Looper panel settings
